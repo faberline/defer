@@ -1,4 +1,4 @@
-// SPEC-MANAGED: projects/defer/tech-design/logic/core-scheduler-priority-rate-dispatch.md#unit-test
+// SPEC-MANAGED: apps/defer/tech-design/logic/core-scheduler-priority-rate-dispatch.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:defer-rate-limits" tracker="#766" reason="Focused tests for queue dispatch budget, max-in-flight, and lease expiry reclaim."
 use chrono::{Duration, Utc};
 use defer::{

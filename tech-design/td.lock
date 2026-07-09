@@ -1,7 +1,7 @@
 version = 2
 project = "defer"
 ir_kind = "td"
-td_path = "projects/defer/tech-design"
+td_path = "apps/defer/tech-design"
 generated_at = "2026-07-06T11:51:27.366681+00:00"
 digest = "sha256:f4446910af1adaac8c7693899d048dbd96e29e85955aaa44ad9b14871d8c62e9"
 source_digest = "sha256:f4446910af1adaac8c7693899d048dbd96e29e85955aaa44ad9b14871d8c62e9"

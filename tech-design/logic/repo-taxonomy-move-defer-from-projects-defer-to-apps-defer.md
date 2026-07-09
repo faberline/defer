@@ -1,7 +1,7 @@
 ---
 id: defer-app-source-root-taxonomy
 summary: >
-  Defer moves its app-facing source root from projects/defer to apps/defer while
+  Defer moves its app-facing source root from apps/defer to apps/defer while
   preserving project identity, GitHub labels, persistent branch conventions, and
   the existing TD bucket identity.
 capability_refs:
@@ -26,7 +26,7 @@ entry: inventory
 nodes:
   inventory:
     kind: start
-    label: "Inventory every projects/defer reference"
+    label: "Inventory every apps/defer reference"
   classify:
     kind: decision
     label: "Is this reference the live source root contract?"
@@ -47,7 +47,7 @@ nodes:
     label: "Run AW project resolution and targeted Defer verification"
   stale:
     kind: decision
-    label: "Does a live command still emit projects/defer as source root?"
+    label: "Does a live command still emit apps/defer as source root?"
   fix:
     kind: process
     label: "Fix the stale runtime source-root reference"
@@ -90,14 +90,14 @@ edges:
     label: "no"
 ---
 flowchart TD
-    inventory([Inventory every projects/defer reference]) --> classify{Live source root contract?}
+    inventory([Inventory every apps/defer reference]) --> classify{Live source root contract?}
     classify -- no --> preserve[Preserve TD bucket and historical/project identity references]
     classify -- yes --> migrate[Rewrite live source-root references to apps/defer]
     migrate --> move_tree[Move source tree to apps/defer]
     move_tree --> route[Update Cargo, AW config, README inventory, scripts, tests, and evidence paths]
     preserve --> smoke[Run AW project resolution and targeted Defer verification]
     route --> smoke
-    smoke --> stale{Live command still emits projects/defer as source root?}
+    smoke --> stale{Live command still emits apps/defer as source root?}
     stale -- yes --> fix[Fix stale runtime source-root reference]
     fix --> smoke
     stale -- no --> done([Defer resolves through apps/defer while identity remains app:defer])
@@ -109,12 +109,12 @@ flowchart TD
 repo_taxonomy_migration:
   project: defer
   canonical_source_root: apps/defer
-  legacy_source_root: projects/defer
+  legacy_source_root: apps/defer
   preserved_identity:
     aw_project: defer
     github_label: app:defer
     persistent_branch: project-defer
-    td_bucket: projects/defer/tech-design
+    td_bucket: apps/defer/tech-design
   rewrite_classes:
     - root_readme_inventory_link
     - cargo_workspace_member
@@ -137,11 +137,11 @@ repo_taxonomy_migration:
       - aw capability check --project defer
     local_checks:
       - cargo test -p defer
-      - aw td check projects/defer/tech-design
+      - aw td check apps/defer/tech-design
     stale_source_root_scan:
-      command: rg -n "projects/defer" README.md CONTRIBUTING.md aw.toml .aw/config.toml Cargo.toml apps projects .github
+      command: rg -n "apps/defer" README.md CONTRIBUTING.md aw.toml .aw/config.toml Cargo.toml apps projects .github
       allowed_contexts:
-        - projects/defer/tech-design
+        - apps/defer/tech-design
         - historical text that explicitly names the retired source root
 ```
 ## Unit Test
@@ -159,27 +159,27 @@ requirements:
     verify: cargo test -p defer
   project_identity_is_preserved:
     id: R2
-    text: "The migration preserves AW project name defer, GitHub label app:defer, persistent branch project-defer, and the projects/defer/tech-design TD bucket."
+    text: "The migration preserves AW project name defer, GitHub label app:defer, persistent branch project-defer, and the apps/defer/tech-design TD bucket."
     kind: regression
     risk: medium
     verify: aw wi list --project defer --state open
   source_root_routes_to_apps_defer:
     id: R1
-    text: "Repository routing resolves Defer's live app source root through apps/defer rather than projects/defer."
+    text: "Repository routing resolves Defer's live app source root through apps/defer rather than apps/defer."
     kind: functional
     risk: high
     verify: aw capability check --project defer
   stale_source_root_references_are_bounded:
     id: R3
-    text: "No live source-root command or routing artifact emits projects/defer except intentionally preserved TD or historical references."
+    text: "No live source-root command or routing artifact emits apps/defer except intentionally preserved TD or historical references."
     kind: regression
     risk: medium
-    verify: rg stale projects/defer source-root scan
+    verify: rg stale apps/defer source-root scan
 ---
 flowchart TD
     r1[R1 source root routes to apps defer] --> aw_capability_check_project_defer[aw capability check --project defer]
     r2[R2 project identity is preserved] --> aw_wi_list_project_defer_state_open[aw wi list --project defer --state open]
-    r3[R3 stale source root references are bounded] --> rg_stale_projects_defer_source_root_scan[rg stale projects/defer source-root scan]
+    r3[R3 stale source root references are bounded] --> rg_stale_projects_defer_source_root_scan[rg stale apps/defer source-root scan]
     r4[R4 defer local checks still run] --> cargo_test_p_defer[cargo test -p defer]
 ```
 ## Changes
@@ -187,7 +187,7 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: projects/defer
+  - path: apps/defer
     action: move
     target: apps/defer
     section: logic
@@ -227,10 +227,10 @@ changes:
     action: update
     section: unit-test
     impl_mode: hand-written
-    reason: "Any project-local tests or manifests that hard-code projects/defer as source root should use apps/defer or relative paths."
-  - path: projects/defer/tech-design
+    reason: "Any project-local tests or manifests that hard-code apps/defer as source root should use apps/defer or relative paths."
+  - path: apps/defer/tech-design
     action: preserve
     section: config
     impl_mode: hand-written
-    reason: "The issue explicitly keeps the TD project bucket under projects/defer/tech-design until a separate TD-platform migration exists."
+    reason: "The issue explicitly keeps the TD project bucket under apps/defer/tech-design until a separate TD-platform migration exists."
 ```

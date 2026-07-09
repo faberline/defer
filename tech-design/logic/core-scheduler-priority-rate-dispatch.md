@@ -238,28 +238,28 @@ changes:
     action: modify
     section: config
     impl_mode: hand-written
-    reason: "Add projects/defer as a workspace member so the core scheduler can be tested independently."
-  - path: projects/defer/Cargo.toml
+    reason: "Add apps/defer as a workspace member so the core scheduler can be tested independently."
+  - path: apps/defer/Cargo.toml
     action: create
     section: config
     impl_mode: hand-written
     reason: "Define the standalone Defer crate for main push-queue logic."
-  - path: projects/defer/src/types.rs
+  - path: apps/defer/src/types.rs
     action: create
     section: schema
     impl_mode: hand-written
     reason: "Task, target, queue policy, queue control/snapshot, dispatch lease, status, and error types."
-  - path: projects/defer/src/scheduler.rs
+  - path: apps/defer/src/scheduler.rs
     action: create
     section: logic
     impl_mode: hand-written
     reason: "In-memory ETA/priority/rate scheduler core with per-queue Cloud Tasks-style controls, ack/nack/retry/DLQ/cancel."
-  - path: projects/defer/tests/task_lifecycle.rs
+  - path: apps/defer/tests/task_lifecycle.rs
     action: create
     section: unit-test
     impl_mode: hand-written
     reason: "Lifecycle, ETA, priority, retry, DLQ, and cancel conformance tests."
-  - path: projects/defer/tests/rate_limits.rs
+  - path: apps/defer/tests/rate_limits.rs
     action: create
     section: unit-test
     impl_mode: hand-written
