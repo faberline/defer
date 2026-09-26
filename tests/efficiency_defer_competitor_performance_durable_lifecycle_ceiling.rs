@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2217.md#defer-competitor-performance-durable-lifecycle-ceiling
+// SPEC-MANAGED: external-contracts/behavior/2217.md#defer-competitor-performance-durable-lifecycle-ceiling
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-competitor-performance-durable-lifecycle-ceiling

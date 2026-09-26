@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2219.md#defer-http2-offline-spec-and-three-client-codegen
+// SPEC-MANAGED: external-contracts/behavior/2219.md#defer-http2-offline-spec-and-three-client-codegen
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-http2-offline-spec-and-three-client-codegen

@@ -108,13 +108,13 @@ flowchart TD
 ```yaml
 repo_taxonomy_migration:
   project: defer
-  canonical_source_root: apps/defer
-  legacy_source_root: apps/defer
+  canonical_source_root: .
+  legacy_source_root: .
   preserved_identity:
     aw_project: defer
     github_label: app:defer
     persistent_branch: project-defer
-    td_bucket: apps/defer/tech-design
+    td_bucket: tech-design
   rewrite_classes:
     - root_readme_inventory_link
     - cargo_workspace_member
@@ -137,11 +137,11 @@ repo_taxonomy_migration:
       - aw capability check --project defer
     local_checks:
       - cargo test -p defer
-      - aw td check apps/defer/tech-design
+      - aw td check tech-design
     stale_source_root_scan:
-      command: rg -n "apps/defer" README.md CONTRIBUTING.md aw.toml .aw/config.toml Cargo.toml apps projects .github
+      command: rg -n "." README.md CONTRIBUTING.md aw.toml .aw/config.toml Cargo.toml apps projects .github
       allowed_contexts:
-        - apps/defer/tech-design
+        - tech-design
         - historical text that explicitly names the retired source root
 ```
 ## Unit Test
@@ -159,7 +159,7 @@ requirements:
     verify: cargo test -p defer
   project_identity_is_preserved:
     id: R2
-    text: "The migration preserves AW project name defer, GitHub label app:defer, persistent branch project-defer, and the apps/defer/tech-design TD bucket."
+    text: "The migration preserves AW project name defer, GitHub label app:defer, persistent branch project-defer, and the tech-design TD bucket."
     kind: regression
     risk: medium
     verify: aw wi list --project defer --state open
@@ -187,9 +187,9 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/defer
+  - path: .
     action: move
-    target: apps/defer
+    target: .
     section: logic
     impl_mode: hand-written
     reason: "Defer's live app source root moves to the apps/ taxonomy."
@@ -213,24 +213,24 @@ changes:
     section: config
     impl_mode: hand-written
     reason: "AW project path and cap_path for project defer must point at apps/defer while retaining name defer and label app:defer."
-  - path: apps/defer/README.md
+  - path: README.md
     action: update
     section: config
     impl_mode: hand-written
     reason: "Project-local capability docs and verification paths should use apps/defer or path-relative references for the live source root."
-  - path: apps/defer/aw.toml
+  - path: aw.toml
     action: update
     section: config
     impl_mode: hand-written
     reason: "Project-local AW metadata should describe the moved app path without changing project identity."
-  - path: apps/defer/tests
+  - path: tests
     action: update
     section: unit-test
     impl_mode: hand-written
     reason: "Any project-local tests or manifests that hard-code apps/defer as source root should use apps/defer or relative paths."
-  - path: apps/defer/tech-design
+  - path: tech-design
     action: preserve
     section: config
     impl_mode: hand-written
-    reason: "The issue explicitly keeps the TD project bucket under apps/defer/tech-design until a separate TD-platform migration exists."
+    reason: "The issue explicitly keeps the TD project bucket under tech-design until a separate TD-platform migration exists."
 ```

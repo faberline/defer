@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/766.md#defer-http-dispatch-retry-soak-stability
+// SPEC-MANAGED: external-contracts/behavior/766.md#defer-http-dispatch-retry-soak-stability
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-http-dispatch-retry-soak-stability
@@ -7,7 +7,7 @@
 // @contract bounded-retry-soak-fixed-state-plateau
 // @category stability
 // @required_for_production true
-// @command DEFER_SOAK_AUTOSTART=1 bash apps/defer/scripts/soak.sh
+// @command DEFER_SOAK_AUTOSTART=1 bash scripts/soak.sh
 // AW-EC-END
 
 // Contract: The fixed-keyspace soak must make non-zero progress, report errors = 0, keep the committed success task terminally Succeeded, and keep a second real HTTP-404 task retryable rather than silently dropping or dead-lettering it early.
@@ -17,7 +17,7 @@
 #[test]
 #[ignore = "AW EC gate: run via `aw health --verify-ec` or `cargo test -- --ignored`"]
 fn defer_http_dispatch_retry_soak_stability() {
-    let command = "DEFER_SOAK_AUTOSTART=1 bash apps/defer/scripts/soak.sh";
+    let command = "DEFER_SOAK_AUTOSTART=1 bash scripts/soak.sh";
     let id = "defer-http-dispatch-retry-soak-stability";
     let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !root.join(".aw").is_dir() {

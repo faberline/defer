@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2215.md#defer-security-auth-http-boundary
+// SPEC-MANAGED: external-contracts/behavior/2215.md#defer-security-auth-http-boundary
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-security-auth-http-boundary

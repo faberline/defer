@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2216.md#defer-competitor-matrix-scope
+// SPEC-MANAGED: external-contracts/behavior/2216.md#defer-competitor-matrix-scope
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-competitor-matrix-scope

@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2215.md#defer-security-kubernetes-boundaries
+// SPEC-MANAGED: external-contracts/behavior/2215.md#defer-security-kubernetes-boundaries
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-security-kubernetes-boundaries

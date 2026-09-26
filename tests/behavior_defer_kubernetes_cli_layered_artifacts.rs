@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2220.md#defer-kubernetes-cli-layered-artifacts
+// SPEC-MANAGED: external-contracts/behavior/2220.md#defer-kubernetes-cli-layered-artifacts
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-kubernetes-cli-layered-artifacts

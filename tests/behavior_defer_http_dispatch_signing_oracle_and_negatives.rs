@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/766.md#defer-http-dispatch-signing-oracle-and-negatives
+// SPEC-MANAGED: external-contracts/behavior/766.md#defer-http-dispatch-signing-oracle-and-negatives
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-http-dispatch-signing-oracle-and-negatives

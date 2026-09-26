@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2216.md#defer-competitor-public-task-access
+// SPEC-MANAGED: external-contracts/behavior/2216.md#defer-competitor-public-task-access
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-competitor-public-task-access

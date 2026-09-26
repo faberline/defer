@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2219.md#defer-http2-live-one-port-route-contract
+// SPEC-MANAGED: external-contracts/behavior/2219.md#defer-http2-live-one-port-route-contract
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-http2-live-one-port-route-contract

@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2216.md#defer-competitor-durable-ha
+// SPEC-MANAGED: external-contracts/behavior/2216.md#defer-competitor-durable-ha
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-competitor-durable-ha

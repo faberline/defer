@@ -65,25 +65,25 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/defer/tests/competitor_feature_matrix.rs
+  - path: tests/competitor_feature_matrix.rs
     action: modify
     section: unit-test
     impl_mode: hand-written
     anchor: cloud_tasks_shaped_contract_and_exclusions_are_explicit
     reason: "Own the parsed, duplicate-free 15-row Google Cloud Tasks-shaped comparison, explicit category exclusions, accurate retry-exhaustion semantics, and bounded performance-claim boundary."
-  - path: apps/defer/tests/raft_scheduler.rs
+  - path: tests/raft_scheduler.rs
     action: modify
     section: unit-test
     impl_mode: hand-written
     anchor: committed_queue_limits_survive_cross_replica_proposals_and_failover
     reason: "Own real three-node proofs that rate, burst, and in-flight limits are one committed aggregate and that DeadLettered converges and survives same-directory restart."
-  - path: apps/defer/tests/http_dispatch.rs
+  - path: tests/http_dispatch.rs
     action: modify
     section: unit-test
     impl_mode: hand-written
     anchor: dispatches_real_http_and_retries_with_stable_task_idempotency
     reason: "Own the real target oracle for exact per-task method, header, body, retry identity, stable idempotency, and terminal success."
-  - path: apps/defer/tests/http_api.rs
+  - path: tests/http_api.rs
     action: modify
     section: unit-test
     impl_mode: hand-written

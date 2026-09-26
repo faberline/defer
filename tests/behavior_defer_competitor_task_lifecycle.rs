@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2216.md#defer-competitor-task-lifecycle
+// SPEC-MANAGED: external-contracts/behavior/2216.md#defer-competitor-task-lifecycle
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-competitor-task-lifecycle

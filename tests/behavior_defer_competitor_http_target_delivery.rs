@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2216.md#defer-competitor-http-target-delivery
+// SPEC-MANAGED: external-contracts/behavior/2216.md#defer-competitor-http-target-delivery
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-competitor-http-target-delivery

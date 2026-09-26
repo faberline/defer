@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2215.md#defer-security-target-signing
+// SPEC-MANAGED: external-contracts/behavior/2215.md#defer-security-target-signing
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-security-target-signing

@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/tech-design/logic/core-scheduler-priority-rate-dispatch.md#logic
+// SPEC-MANAGED: tech-design/logic/core-scheduler-priority-rate-dispatch.md#logic
 // HANDWRITE-BEGIN gap="missing-generator:logic:defer-raft-scheduler" tracker="#766" reason="Raft-backed delayed-task state machine with durable snapshots and fenced dispatch ownership."
 //! Raft-backed authoritative state for Defer.
 //!

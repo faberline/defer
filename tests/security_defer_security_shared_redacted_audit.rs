@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2215.md#defer-security-shared-redacted-audit
+// SPEC-MANAGED: external-contracts/behavior/2215.md#defer-security-shared-redacted-audit
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-security-shared-redacted-audit

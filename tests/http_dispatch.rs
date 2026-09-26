@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/tech-design/logic/core-scheduler-priority-rate-dispatch.md#e2e-test
+// SPEC-MANAGED: tech-design/logic/core-scheduler-priority-rate-dispatch.md#e2e-test
 // HANDWRITE-BEGIN gap="missing-generator:e2e-test:defer-http-dispatch" tracker="#766" reason="Real HTTP target proof for signed delivery, retry, stable idempotency, and terminal committed ack."
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};

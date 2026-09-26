@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/766.md#defer-http-dispatch-and-retries
+// SPEC-MANAGED: external-contracts/behavior/766.md#defer-http-dispatch-and-retries
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-http-dispatch-and-retries

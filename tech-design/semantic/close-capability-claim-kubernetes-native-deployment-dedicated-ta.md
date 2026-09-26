@@ -71,19 +71,19 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/defer/tests/direct_k8s_assets.rs
+  - path: tests/direct_k8s_assets.rs
     action: modify
     section: unit-test
     impl_mode: hand-written
     anchor: prod_profile_renders_the_connected_security_boundary
     reason: "Own exact named Service and PDB invariants from both composed direct base and production Kustomize resource sets, so disconnected resources fail."
-  - path: apps/defer/tests/operator.rs
+  - path: tests/operator.rs
     action: modify
     section: unit-test
     impl_mode: hand-written
     anchor: production_render_composes_shared_stateful_primitives
     reason: "Own the exact six-object production graph, three-replica StatefulSet relationships, connected security secrets, and backup CronJob oracle."
-  - path: apps/defer/scripts/kind-e2e.sh
+  - path: scripts/kind-e2e.sh
     action: modify
     section: unit-test
     impl_mode: hand-written
@@ -114,7 +114,7 @@ requirements:
     text: "A disposable Kind cluster runs the current image and operator, verifies the reconciled topology and bound PVC, recovers queue and task state after a different pod UID takes over, accepts post-recovery mutations, and is deleted on success."
     kind: stability
     risk: high
-    verify: bash apps/defer/scripts/kind-e2e.sh
+    verify: bash scripts/kind-e2e.sh
   layered_cli_artifacts:
     id: R1
     text: "The Defer CLI independently renders version-bound source and release Dockerfiles, a structural CRD, a namespaced operator, and a production instance with three replicas per shard and backup policy."
@@ -138,7 +138,7 @@ flowchart TD
     r1[R1 layered cli artifacts] --> cargo_test_p_defer_test_cli_contract_deploy_artifacts_render_by_lifecycle_layer_nocapture[cargo test -p defer --test cli_contract deploy_artifacts_render_by_lifecycle_layer -- --nocapture]
     r2[R2 composed direct topology] --> cargo_test_p_defer_features_operator_test_direct_k8s_assets_test_operator_nocapture[cargo test -p defer --features operator --test direct_k8s_assets --test operator -- --nocapture]
     r3[R3 operator resource graph] --> cargo_test_p_defer_features_operator_test_direct_k8s_assets_test_operator_nocapture
-    r4[R4 kind pvc recovery] --> bash_apps_defer_scripts_kind_e2e_sh[bash apps/defer/scripts/kind-e2e.sh]
+    r4[R4 kind pvc recovery] --> bash_apps_defer_scripts_kind_e2e_sh[bash scripts/kind-e2e.sh]
     r5[R5 shared reconciliation boundary] --> cargo_test_p_defer_features_operator_test_operator_production_render_composes_shared_stateful_primitives_nocapture[cargo test -p defer --features operator --test operator production_render_composes_shared_stateful_primitives -- --nocapture]
     r6[R6 generated ec inventory] --> aw_ec_check_project_defer[aw ec check --project defer]
 ```

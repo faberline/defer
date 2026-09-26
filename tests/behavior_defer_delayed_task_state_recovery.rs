@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2214.md#defer-delayed-task-state-recovery
+// SPEC-MANAGED: external-contracts/behavior/2214.md#defer-delayed-task-state-recovery
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-delayed-task-state-recovery

@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2214.md#defer-delayed-task-scheduler-efficiency
+// SPEC-MANAGED: external-contracts/behavior/2214.md#defer-delayed-task-scheduler-efficiency
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-delayed-task-scheduler-efficiency

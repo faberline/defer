@@ -63,19 +63,19 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/defer/src/bin/defer.rs
+  - path: src/bin/defer.rs
     action: modify
     section: logic
     impl_mode: hand-written
     anchor: spec
     reason: "Own the offline OpenAPI/routes projection and exact nine-operation route twin emitted from the Defer CLI."
-  - path: apps/defer/tests/http_api.rs
+  - path: tests/http_api.rs
     action: modify
     section: unit-test
     impl_mode: hand-written
     anchor: h2c_routes_probes_openapi_metrics_dispatch_and_auth_are_live
     reason: "Own the one-listener HTTP/1.1 and h2c probes, canonical served OpenAPI equality, exact nine-operation inventory, stateful route journeys, and backup recovery oracle."
-  - path: apps/defer/tests/cli_contract.rs
+  - path: tests/cli_contract.rs
     action: modify
     section: unit-test
     impl_mode: hand-written

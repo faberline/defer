@@ -8,8 +8,8 @@
 # the future so this recovery gate does not depend on an external HTTP service.
 #
 # Usage:
-#   bash apps/defer/scripts/kind-e2e.sh
-#   DEFER_KEEP_CLUSTER=1 bash apps/defer/scripts/kind-e2e.sh
+#   bash scripts/kind-e2e.sh
+#   DEFER_KEEP_CLUSTER=1 bash scripts/kind-e2e.sh
 #
 # Requirements: docker, kind, kubectl, curl, jq.
 
@@ -17,7 +17,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-REPO_ROOT="$(cd "$DEFER_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$DEFER_DIR" && pwd)"
 
 CLUSTER_NAME="${DEFER_KIND_CLUSTER:-defer-e2e}"
 NAMESPACE="${DEFER_KIND_NAMESPACE:-defer}"

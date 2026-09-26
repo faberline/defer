@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2215.md#defer-security-dispatch-fencing
+// SPEC-MANAGED: external-contracts/behavior/2215.md#defer-security-dispatch-fencing
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-security-dispatch-fencing

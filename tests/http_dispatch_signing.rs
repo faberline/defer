@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/tech-design/logic/core-scheduler-priority-rate-dispatch.md#e2e-test
+// SPEC-MANAGED: tech-design/logic/core-scheduler-priority-rate-dispatch.md#e2e-test
 // HANDWRITE-BEGIN gap="missing-generator:e2e-test:defer-http-dispatch-signing-oracle" tracker="#766" reason="Independent target-side HMAC oracle and negative cases for signed HTTP retries."
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

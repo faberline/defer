@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2216.md#defer-competitor-queue-controls-and-dedupe
+// SPEC-MANAGED: external-contracts/behavior/2216.md#defer-competitor-queue-controls-and-dedupe
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-competitor-queue-controls-and-dedupe

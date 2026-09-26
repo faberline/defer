@@ -16,5 +16,5 @@
     "false_green_risk_checked": true
   },
   "findings": [],
-  "target_path": "apps/defer/external-contracts/behavior/2220.md"
+  "target_path": "external-contracts/behavior/2220.md"
 }

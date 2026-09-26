@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2214.md#defer-delayed-task-live-soak
+// SPEC-MANAGED: external-contracts/behavior/2214.md#defer-delayed-task-live-soak
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-delayed-task-live-soak
@@ -7,7 +7,7 @@
 // @contract fixed-keyspace-retry-soak-resource-and-latency-plateau
 // @category stability
 // @required_for_production true
-// @command DEFER_SOAK_AUTOSTART=1 bash apps/defer/scripts/soak.sh
+// @command DEFER_SOAK_AUTOSTART=1 bash scripts/soak.sh
 // AW-EC-END
 
 // Contract: The gate autostarts an isolated real Defer process, creates exactly one terminal success and one continuously retrying HTTP-404 task in a fixed queue, crosses the 1,024-entry proposal-cache and snapshot cadence during warmup, then reports a non-zero measured operation count with errors = 0.
@@ -16,7 +16,7 @@
 #[test]
 #[ignore = "AW EC gate: run via `aw health --verify-ec` or `cargo test -- --ignored`"]
 fn defer_delayed_task_live_soak() {
-    let command = "DEFER_SOAK_AUTOSTART=1 bash apps/defer/scripts/soak.sh";
+    let command = "DEFER_SOAK_AUTOSTART=1 bash scripts/soak.sh";
     let id = "defer-delayed-task-live-soak";
     let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !root.join(".aw").is_dir() {

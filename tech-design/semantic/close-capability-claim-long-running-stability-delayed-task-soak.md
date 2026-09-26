@@ -71,12 +71,12 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/defer/scripts/soak.sh
+  - path: scripts/soak.sh
     action: modify
     section: e2e-test
     impl_mode: hand-written
     reason: "Add a fail-closed non-zero measured-operation assertion to the existing fixed-keyspace retry soak while retaining shared process/resource sampling."
-  - path: apps/defer/scripts/kind-e2e.sh
+  - path: scripts/kind-e2e.sh
     action: modify
     section: e2e-test
     impl_mode: hand-written
@@ -101,13 +101,13 @@ e2e_tests:
       - "The same-host Defer throughput is at least 80% of the identically shaped Relay control workload."
   - id: defer-delayed-task-live-soak
     name: fixed-keyspace retry progress and resource plateau
-    command: "DEFER_SOAK_AUTOSTART=1 bash apps/defer/scripts/soak.sh"
+    command: "DEFER_SOAK_AUTOSTART=1 bash scripts/soak.sh"
     assertions:
       - "The fixed-keyspace warmup crosses the 1,024-entry proposal-cache and snapshot cadence before two 30-second measured windows."
       - "Measured operations are non-zero, errors are zero, retry counters advance in both windows, RSS drift is <= 10%, FD growth <= 8, thread/task growth <= 4, and task-read p99 is <= 250 ms with <= 100% growth."
   - id: defer-delayed-task-kind-pvc-recovery
     name: operator PVC pod replacement recovery and cleanup
-    command: "bash apps/defer/scripts/kind-e2e.sh"
+    command: "bash scripts/kind-e2e.sh"
     assertions:
       - "The source image and real CRD/operator reconcile a StatefulSet whose PVC is observed Bound with exact 1Gi request and capacity."
       - "A different replacement pod UID recovers the two committed task records, accepts queue pause and task cancellation, and the successful journey verifies that the disposable cluster is absent after cleanup."

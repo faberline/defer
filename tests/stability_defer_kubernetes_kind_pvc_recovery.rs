@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2220.md#defer-kubernetes-kind-pvc-recovery
+// SPEC-MANAGED: external-contracts/behavior/2220.md#defer-kubernetes-kind-pvc-recovery
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-kubernetes-kind-pvc-recovery
@@ -7,7 +7,7 @@
 // @contract operator-reconcile-pvc-replacement-and-domain-recovery
 // @category stability
 // @required_for_production true
-// @command bash apps/defer/scripts/kind-e2e.sh
+// @command bash scripts/kind-e2e.sh
 // AW-EC-END
 
 // Contract: The gate requires Docker, Kind, kubectl, curl, and jq; it creates a disposable cluster, builds and loads the real source image, installs the Defer CRD and operator, and observes the reconciled single-shard StatefulSet probes and /data mount, exact headless peer and client Service selectors/ports, maxUnavailable=1 PDB, and a Bound PVC with exact 1Gi requested and provisioned capacity before domain mutation.
@@ -16,7 +16,7 @@
 #[test]
 #[ignore = "AW EC gate: run via `aw health --verify-ec` or `cargo test -- --ignored`"]
 fn defer_kubernetes_kind_pvc_recovery() {
-    let command = "bash apps/defer/scripts/kind-e2e.sh";
+    let command = "bash scripts/kind-e2e.sh";
     let id = "defer-kubernetes-kind-pvc-recovery";
     let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !root.join(".aw").is_dir() {

@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2220.md#defer-kubernetes-rendered-stateful-topology
+// SPEC-MANAGED: external-contracts/behavior/2220.md#defer-kubernetes-rendered-stateful-topology
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-kubernetes-rendered-stateful-topology

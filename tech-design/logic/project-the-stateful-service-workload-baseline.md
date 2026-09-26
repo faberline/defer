@@ -46,7 +46,7 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/defer/README.md
+  - path: README.md
     action: modify
     section: logic
     impl_mode: hand-written

@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2215.md#defer-security-peer-mtls
+// SPEC-MANAGED: external-contracts/behavior/2215.md#defer-security-peer-mtls
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-security-peer-mtls

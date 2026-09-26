@@ -436,7 +436,7 @@ struct Remote {
 
 const TOOL: cli_std::ToolInfo = cli_std::ToolInfo {
     project: "defer",
-    repo: "chrischeng-c4/axiom",
+    repo: "faberline/defer",
     target: env!("DEFER_TARGET"),
     version: env!("CARGO_PKG_VERSION"),
     git_sha: env!("DEFER_GIT_SHA"),

@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/766.md#defer-http-dispatch-efficiency-ceiling
+// SPEC-MANAGED: external-contracts/behavior/766.md#defer-http-dispatch-efficiency-ceiling
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-http-dispatch-efficiency-ceiling

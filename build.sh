@@ -3,12 +3,12 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: apps/defer/build.sh <debug|release>
+Usage: ./build.sh <debug|release>
 
 debug    Build defer and install target/debug/defer to ~/.cargo/bin/defer.
 release  Prepare the local release candidate: read the version from
-         apps/defer/Cargo.toml, pin apps/defer/k8s/{base,operator} to
-         defer:<version> and apps/defer/Dockerfile.release to defer@<version>,
+         Cargo.toml, pin k8s/{base,operator} to
+         defer:<version> and Dockerfile.release to defer@<version>,
          build with --release --locked, and install locally. It neither bumps
          the version nor commits.
 
@@ -23,7 +23,7 @@ fail_hint() {
   local mode="$1"
   echo ""
   echo "Build failed."
-  echo "Retry with: apps/defer/build.sh ${mode}"
+  echo "Retry with: ./build.sh ${mode}"
   echo "Verify with: ~/.cargo/bin/defer --version"
 }
 
@@ -48,15 +48,15 @@ trap 'fail_hint "$MODE"' ERR
 # harness override the image by that name (`kustomize edit set image defer=…`),
 # and a registry-qualified pin would silently stop matching that override.
 DEFER_IMAGE_PINS=(
-  apps/defer/k8s/base/statefulset.yaml
-  apps/defer/k8s/operator/deployment.yaml
+  k8s/base/statefulset.yaml
+  k8s/operator/deployment.yaml
 )
 
 # `defer dockerfile render --variant release` substitutes CARGO_PKG_VERSION into
 # exactly these three lines of the committed Dockerfile.release and must
 # reproduce the file byte-for-byte (`cargo test -p defer --test deploy_cli`), so
 # a Cargo.toml bump without this sync turns that test red; this sync is the fix.
-DEFER_DOCKERFILE=apps/defer/Dockerfile.release
+DEFER_DOCKERFILE=Dockerfile.release
 
 install_defer() {
   local profile="$1"
@@ -90,11 +90,11 @@ sync_defer_release_dockerfile() {
   local version="$1" dockerfile="$2"
   DEFER_RELEASE_VERSION="$version" perl -pi -e '
     s#^ARG DEFER_VERSION=.*$#ARG DEFER_VERSION=defer\@$ENV{DEFER_RELEASE_VERSION}#;
-    s#^\#   docker build -f apps/defer/Dockerfile.release -t defer:.*$#\#   docker build -f apps/defer/Dockerfile.release -t defer:$ENV{DEFER_RELEASE_VERSION} \\#;
+    s#^\#   docker build -f Dockerfile.release -t defer:.*$#\#   docker build -f Dockerfile.release -t defer:$ENV{DEFER_RELEASE_VERSION} \\#;
     s#^\#     --build-arg DEFER_VERSION=.*$#\#     --build-arg DEFER_VERSION=defer\@$ENV{DEFER_RELEASE_VERSION} .#;
   ' "$dockerfile"
   if ! grep -Fxq "ARG DEFER_VERSION=defer@${version}" "$dockerfile" \
-    || ! grep -Fxq "#   docker build -f apps/defer/Dockerfile.release -t defer:${version} \\" "$dockerfile" \
+    || ! grep -Fxq "#   docker build -f Dockerfile.release -t defer:${version} \\" "$dockerfile" \
     || ! grep -Fxq "#     --build-arg DEFER_VERSION=defer@${version} ." "$dockerfile"; then
     echo "error: failed to pin ${dockerfile} to defer@${version}" >&2
     return 1
@@ -108,7 +108,7 @@ case "$MODE" in
     echo "next: done"
     ;;
   release)
-    CURRENT_VERSION="$(project_build_read_version apps/defer/Cargo.toml)"
+    CURRENT_VERSION="$(project_build_read_version Cargo.toml)"
     sync_defer_release_image_pins "$CURRENT_VERSION" "${DEFER_IMAGE_PINS[@]}"
     sync_defer_release_dockerfile "$CURRENT_VERSION" "$DEFER_DOCKERFILE"
     cargo build --release --locked -p defer --bin defer

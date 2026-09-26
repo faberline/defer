@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2215.md#defer-security-admission-boundary
+// SPEC-MANAGED: external-contracts/behavior/2215.md#defer-security-admission-boundary
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-security-admission-boundary

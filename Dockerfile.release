@@ -4,7 +4,7 @@
 # digest-pinned distroless runtime (no shell, apt, or curl in the final image).
 # The sibling `Dockerfile` is the from-source build for dev / CI.
 #
-#   docker build -f apps/defer/Dockerfile.release -t defer:0.4.13 \
+#   docker build -f Dockerfile.release -t defer:0.4.13 \
 #     --build-arg DEFER_VERSION=defer@0.4.13 .
 #
 # Two binary sources feed the one runtime stage:
@@ -27,7 +27,7 @@ ARG SOURCE=fetch
 # ---- stage 1a: fetch + verify the release binary (needs shell + curl) --------
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS binary-source-fetch
 ARG DEFER_VERSION=defer@0.4.13
-ARG DEFER_REPO=chrischeng-c4/axiom
+ARG DEFER_REPO=faberline/defer
 ARG TARGETARCH=amd64
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*

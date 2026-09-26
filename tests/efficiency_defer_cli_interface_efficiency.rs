@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2213.md#defer-cli-interface-efficiency
+// SPEC-MANAGED: external-contracts/behavior/2213.md#defer-cli-interface-efficiency
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-cli-interface-efficiency

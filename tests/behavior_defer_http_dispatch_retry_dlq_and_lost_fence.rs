@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/766.md#defer-http-dispatch-retry-dlq-and-lost-fence
+// SPEC-MANAGED: external-contracts/behavior/766.md#defer-http-dispatch-retry-dlq-and-lost-fence
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-http-dispatch-retry-dlq-and-lost-fence

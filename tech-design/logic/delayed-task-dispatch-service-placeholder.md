@@ -68,7 +68,7 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: apps/defer/tests/http_dispatch_signing.rs
+  - path: tests/http_dispatch_signing.rs
     action: modify
     section: unit-test
     impl_mode: hand-written

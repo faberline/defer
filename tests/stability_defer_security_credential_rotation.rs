@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/external-contracts/behavior/2215.md#defer-security-credential-rotation-stability
+// SPEC-MANAGED: external-contracts/behavior/2215.md#defer-security-credential-rotation-stability
 // CODEGEN-BEGIN
 // AW-EC-BEGIN
 // @ec defer-security-credential-rotation-stability

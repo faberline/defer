@@ -1,4 +1,4 @@
-// SPEC-MANAGED: apps/defer/tech-design/logic/core-scheduler-priority-rate-dispatch.md#unit-test
+// SPEC-MANAGED: tech-design/logic/core-scheduler-priority-rate-dispatch.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:defer-task-lifecycle" tracker="#766" reason="Conformance tests for Defer's ETA-first, priority-aware push queue scheduler core."
 use chrono::{Duration, Utc};
 use defer::{
