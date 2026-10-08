@@ -1,0 +1,72 @@
+[package]
+name = "defer"
+description = "Delayed push-queue scheduler core for Axiom"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+build = "build.rs"
+
+[lib]
+name = "defer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "defer"
+path = "src/bin/defer/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+cli-std.workspace = true
+defer-access.workspace = true
+defer-dispatch.workspace = true
+defer-queue.workspace = true
+defer-replication.workspace = true
+defer-shared-kernel.workspace = true
+openapi-codegen.workspace = true
+peer-tls.workspace = true
+raft-runtime.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+server-lifecycle.workspace = true
+service-auth.workspace = true
+service-backup = { workspace = true, features = ["http-client"] }
+service-http.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+# Behind `operator`, so the serving image never links kube-rs unless built
+# with `--features operator`.
+defer-operator = { workspace = true, optional = true }
+
+[dev-dependencies]
+axum.workspace = true
+base64.workspace = true
+hmac.workspace = true
+rcgen.workspace = true
+relay.workspace = true
+service-observability.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tower.workspace = true
+
+[build-dependencies]
+build-stamp.workspace = true
+
+[features]
+default = []
+self-update = ["cli-std/online"]
+issue = ["cli-std/online"]
+otel = ["service-http/otlp"]
+backup = ["service-backup/s3"]
+# operator — the Defer CRD + ManagedService render driven by
+# defer_operator::run; pulls kube-rs, so the serving image stays kube-free
+# unless built with this feature.
+operator = ["dep:defer-operator"]
+
+[lints]
+workspace = true

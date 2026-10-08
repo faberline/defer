@@ -73,25 +73,25 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: tests/http_api.rs
+  - path: crates/defer/tests/http_api.rs
     action: modify
     section: unit-test
     impl_mode: hand-written
     anchor: h2c_routes_probes_openapi_metrics_dispatch_and_auth_are_live
     reason: "Own the required-auth h2c oracle for tokenless operational routes, protected task/admin routes, queue-scoped RBAC, and cross-queue tenant denial."
-  - path: tests/service_auth.rs
+  - path: crates/defer/tests/service_auth.rs
     action: modify
     section: unit-test
     impl_mode: hand-written
     anchor: defer_serve_watches_registry_and_emits_redacted_audit_events
     reason: "Own a shipped-process oracle for the production registry watcher cadence, last-known-good rotation, structured audit emission, and bearer redaction."
-  - path: tests/raft_peer_mtls.rs
+  - path: crates/defer/tests/raft_peer_mtls.rs
     action: modify
     section: unit-test
     impl_mode: hand-written
     anchor: untrusted_defer_peer_certificate_is_rejected
     reason: "Own the negative peer-identity oracle that separates a trusted server CA from an attacker-signed client certificate and requires rejection before routing."
-  - path: tests/direct_k8s_assets.rs
+  - path: crates/defer/tests/direct_k8s_assets.rs
     action: modify
     section: unit-test
     impl_mode: hand-written

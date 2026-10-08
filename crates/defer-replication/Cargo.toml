@@ -1,0 +1,22 @@
+[package]
+name = "defer-replication"
+description = "defer replication: the Raft state machine and host over the scheduler, plus the DEFER_PEER peer-TLS adapter"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+defer-shared-kernel.workspace = true
+peer-tls.workspace = true
+raft-runtime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "defer-operator"
+description = "defer Kubernetes operator: the Defer CRD and its ManagedService render over service-k8s"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+k8s-openapi.workspace = true
+kube.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+service-backup.workspace = true
+service-k8s.workspace = true
+
+[lints]
+workspace = true

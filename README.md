@@ -77,8 +77,8 @@ and admin workflows while following the repository-wide CLI convention.
 - Gate — behavior: `cargo test -p defer --test cli_contract` - required
   standard verbs, task lifecycle ergonomics, exact spec/render output, and
   offline agent docs
-- Source: `tests/cli_contract.rs`
-- Evidence: tests/cli_contract.rs
+- Source: `crates/defer/tests/cli_contract.rs`
+- Evidence: crates/defer/tests/cli_contract.rs
 
 ### Long-Running Stability
 
@@ -97,9 +97,9 @@ RSS 41,584 -> 42,192 KiB (1%), FD 18 -> 18, threads 12 -> 12, and task-read p99
   `cargo test -p defer --test task_lifecycle --test rate_limits --test raft_scheduler`
 - Gate — dogfood: `DEFER_SOAK_AUTOSTART=1 bash scripts/soak.sh`
 - Gate: Kubernetes: `bash scripts/kind-e2e.sh`
-- Source: `tests/task_lifecycle.rs`,
-  `tests/rate_limits.rs`,
-  `tests/raft_scheduler.rs (same-directory node restart, snapshot recovery, and repeated failover)`,
+- Source: `crates/defer/tests/task_lifecycle.rs`,
+  `crates/defer/tests/rate_limits.rs`,
+  `crates/defer/tests/raft_scheduler.rs (same-directory node restart, snapshot recovery, and repeated failover)`,
   `scripts/soak.sh`, `scripts/kind-e2e.sh`,
   `core/service-observability/scripts/soak-metrics.sh`
 - Evidence: lifecycle/raft tests plus bounded soak and operator/PVC Kind
@@ -116,9 +116,9 @@ signed delivery, auditability, network policy, and managed secret rotation.
 - Gate — security: shared audited queue RBAC and credential rotation, HMAC
   target signing, real peer mTLS, bounded admission, restricted K8s security
   contexts, read-only secret projection, and NetworkPolicy
-- Source: `tests/http_api.rs`, `tests/service_auth.rs`,
-  `tests/http_dispatch.rs`, `tests/service_admission.rs`,
-  `tests/raft_peer_mtls.rs`, `tests/direct_k8s_assets.rs`
+- Source: `crates/defer/tests/http_api.rs`, `crates/defer/tests/service_auth.rs`,
+  `crates/defer/tests/http_dispatch.rs`, `crates/defer/tests/service_admission.rs`,
+  `crates/defer/tests/raft_peer_mtls.rs`, `crates/defer/tests/direct_k8s_assets.rs`
 - Evidence: auth rotation/audit, target signing, admission, peer mTLS, and K8s
   negative/static gates
 
@@ -154,7 +154,7 @@ real queue, public target, declared region, and equivalent network conditions.
   `cargo test --release -p defer --test relay_performance_ceiling -- --ignored --nocapture`
   requires Defer throughput to remain at least 80% of Relay under the declared
   workload
-- Source: `tests/relay_performance_ceiling.rs`,
+- Source: `crates/defer/tests/relay_performance_ceiling.rs`,
   `benchmarks/competitor-feature-matrix.md`,
   `benchmarks/relay-performance-ceiling.md`
 - Evidence: release-mode Defer/Relay ceiling gate (`minimum_ratio = 0.8`);
@@ -173,13 +173,13 @@ queue can dispatch more work.
 - Gate — behavior: lifecycle/rate-limit/Raft scheduler tests cover ordering,
   batch atomicity, cancellation, fenced leases, settlement, failover, and
   terminal states
-- Source: `tests/task_lifecycle.rs`,
-  `tests/rate_limits.rs`, `tests/raft_scheduler.rs`
+- Source: `crates/defer/tests/task_lifecycle.rs`,
+  `crates/defer/tests/rate_limits.rs`, `crates/defer/tests/raft_scheduler.rs`
 
 | Work Root | Kind | WI | Gate / Evidence |
 |---|---|---:|---|
-| delayed-task-state-machine | epic | #766 | tests/task_lifecycle.rs |
-| due-task-priority-ordering | epic | #766 | tests/task_lifecycle.rs |
+| delayed-task-state-machine | epic | #766 | crates/defer/tests/task_lifecycle.rs |
+| due-task-priority-ordering | epic | #766 | crates/defer/tests/task_lifecycle.rs |
 
 ### HTTP Dispatch And Retries
 
@@ -197,8 +197,8 @@ terminal outcome.
   `cargo test -p defer --test http_dispatch --test http_api --test rate_limits`
   - real delivery, signing, retry/DLQ, batch settlement, and lost-ownership
   fencing
-- Source: `tests/task_lifecycle.rs`,
-  `tests/http_dispatch.rs`, `tests/http_api.rs`
+- Source: `crates/defer/tests/task_lifecycle.rs`,
+  `crates/defer/tests/http_dispatch.rs`, `crates/defer/tests/http_api.rs`
 - Evidence: real HTTP delivery, signing, stable idempotency, retry/DLQ,
   committed batch settlement, and accepted-HTTP/lost-fence retry proof
 
@@ -216,9 +216,9 @@ concurrency limits before dispatching tasks to external targets.
   dispatch budget/concurrency/rate enforcement, pause/resume/disable controls,
   policy update isolation, and priority-preserving dispatch among eligible
   tasks
-- Source: `tests/rate_limits.rs`,
-  `tests/task_lifecycle.rs`
-- Evidence: tests/rate_limits.rs; tests/task_lifecycle.rs
+- Source: `crates/defer/tests/rate_limits.rs`,
+  `crates/defer/tests/task_lifecycle.rs`
+- Evidence: crates/defer/tests/rate_limits.rs; crates/defer/tests/task_lifecycle.rs
 
 ### HTTP/2 API List
 
@@ -243,8 +243,8 @@ response carries a `Server-Timing: app;dur=<ms>` baseline (#2490).
 - Gate — behavior: `cargo test -p defer --test http_api --test cli_contract` -
   live HTTP/1.1+h2c probes/metrics/OpenAPI, domain routes, offline spec twin,
   and client generation
-- Source: `tests/http_api.rs`, `tests/cli_contract.rs`
-- Evidence: tests/http_api.rs; tests/cli_contract.rs
+- Source: `crates/defer/tests/http_api.rs`, `crates/defer/tests/cli_contract.rs`
+- Evidence: crates/defer/tests/http_api.rs; crates/defer/tests/cli_contract.rs
 
 ### Kubernetes-Native Deployment
 
@@ -256,8 +256,8 @@ operator-managed queues, rate limits, storage, backup policy, and lifecycle.
   storage, probes, backups, and PDBs.
 - Gate — behavior: direct Kustomize and CRD/operator/instance render tests
 - Gate — stability: disposable Kind operator/PVC queue-task lifecycle recovery
-- Source: `k8s`, `tests/direct_k8s_assets.rs`,
-  `tests/operator.rs`, `scripts/kind-e2e.sh`
+- Source: `k8s`, `crates/defer/tests/direct_k8s_assets.rs`,
+  `crates/defer/tests/operator.rs`, `scripts/kind-e2e.sh`
 - Evidence: layered assets, operator conformance, and Kind PVC lifecycle
   recovery
 
@@ -276,8 +276,8 @@ lifecycle through the surviving quorum.
   `cargo test -p defer --test raft_scheduler --test raft_peer_mtls` - committed
   task recovery, same-directory recovered-node catch-up followed by a second
   leader loss, fencing, snapshots, and authenticated peers
-- Source: `tests/raft_scheduler.rs`,
-  `tests/raft_peer_mtls.rs`
+- Source: `crates/defer/tests/raft_scheduler.rs`,
+  `crates/defer/tests/raft_peer_mtls.rs`
 - Evidence: three-voter failover, durable replay/snapshot recovery, and real
   peer mTLS
 
@@ -300,10 +300,10 @@ contracts.
   roots and their executable gates
 - Gate: the `aw` capability gate, deleted with the binary
 - Source: `the rows below are what still runs`,
-  `tests/direct_k8s_assets.rs`,
-  `tests/raft_scheduler.rs`, `tests/service_auth.rs`,
-  `src/raft.rs`, `src/bin/defer.rs`,
-  `src/operator`
+  `crates/defer/tests/direct_k8s_assets.rs`,
+  `crates/defer/tests/raft_scheduler.rs`, `crates/defer/tests/service_auth.rs`,
+  `crates/defer-replication/src/raft.rs`, `crates/defer/src/bin/defer/`,
+  `crates/defer-operator`
 - Evidence: Composes Primary Replicas, Kubernetes-Native Deployment, Security
   Hardening, Backup & Restore, and Long-Running Stability from shared libraries
   without duplicating Defer domain behavior.

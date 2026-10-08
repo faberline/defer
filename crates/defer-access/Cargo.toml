@@ -1,0 +1,16 @@
+[package]
+name = "defer-access"
+description = "defer access policy: DEFER_AUTH resolution over the shared bearer registry and per-queue role checks"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+service-auth.workspace = true
+
+[lints]
+workspace = true

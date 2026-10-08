@@ -1,0 +1,180 @@
+# Architecture contract for defer, checked by the workspace repo's
+# scripts/meta/rust_arch_contract.py. docs/adr/0001-multi-crate-workspace.md
+# records the decisions behind it. defer is a virtual workspace: one crate per
+# context under crates/, the scheduler model as the shared kernel, and the
+# `defer` assembly crate. depends_on lists the other defer contexts a context
+# uses. Shared building blocks come from faberline/core.
+
+schema = 1
+
+# Not enforced yet: the docs tree (docs/README.md, architecture, glossary,
+# domain, operations) and the tests/it consolidation are still missing.
+[migration]
+enforce = false
+
+[policy]
+version = 1
+size_warn = 400
+size_error = 1000
+root_md = [
+  "README.md",
+  "CONTRIBUTING.md",
+  "LICENSE.md",
+  "CHANGELOG.md",
+  "SECURITY.md",
+  "CODE_OF_CONDUCT.md",
+  "CLAUDE.md",
+  "AGENTS.md",
+  # Temporary: the current project docs contract requires these at the root.
+  "STATUS.md",
+  "ROADMAP.md",
+]
+docs_required = [
+  "docs/README.md",
+  "docs/architecture.md",
+  "docs/glossary.md",
+  "docs/domain/",
+  "docs/adr/",
+  "docs/operations/",
+]
+layers = ["domain", "application", "infrastructure", "interfaces"]
+# The layer held to the [policy.domain] purity rules and kept free of other contexts.
+domain_layer = "domain"
+# Layers another context may use. A context without any of them exposes its whole public API.
+public_layers = ["application"]
+# <ctx>/domain/events(.rs|/) is the only domain module other contexts may use.
+domain_events = "events"
+# A tests/<name>.rs binary may stand alone only when it is the crate's single test
+# target, contains one of these markers, or its leading //! block carries
+# `//! isolation: <reason>`. Everything else lives in tests/it/.
+test_isolation_markers = ["set_var(", "remove_var(", "#[global_allocator]"]
+# tests/<dir>/ names holding .rs data (fixtures, trybuild cases), not test targets.
+test_data_dirs = ["fixtures", "compile_fail", "ui"]
+# false: one crate may hold several contexts (B3/B4 still guard each boundary).
+# true: B1 requires every crate to belong to exactly one context.
+one_context_per_crate = false
+
+# Layers each layer may use inside one context. The shared kernel is usable by
+# every layer; assembly code (the [assembly] crates) is unrestricted. A
+# multi-file binary is src/bin/<name>/main.rs plus sibling modules: B6 keeps
+# the entry file thin and does not apply to those modules.
+[policy.layer_deps]
+domain = []
+application = ["domain"]
+infrastructure = ["domain"]
+interfaces = ["application"]
+
+[policy.domain]
+# Applies to every domain layer, and to the shared kernel when shared_kernel_pure.
+allowed_crates = [
+  "std",
+  "core",
+  "alloc",
+  "thiserror",
+  "serde",
+  "serde_json",
+  "chrono",
+  "time",
+  "uuid",
+  "sha2",
+  "hex",
+  "regex",
+  "bytes",
+]
+denied_paths = [
+  "std::fs",
+  "std::net",
+  "std::process",
+  "std::env",
+  "std::os",
+  "std::io::stdin",
+  "std::io::stdout",
+  "std::io::stderr",
+  "std::thread::spawn",
+  "std::thread::sleep",
+  "std::time::SystemTime::now",
+  "std::time::Instant::now",
+  "chrono::Utc::now",
+  "chrono::Local::now",
+  "chrono::offset::Utc::now",
+  "chrono::offset::Local::now",
+  "time::OffsetDateTime::now_utc",
+  "time::OffsetDateTime::now_local",
+  "time::Instant::now",
+  "uuid::Uuid::now_v7",
+  "uuid::Uuid::new_v4",
+]
+denied_macros = ["println", "print", "eprintln", "eprint", "dbg"]
+shared_kernel_pure = true
+
+[policy.naming]
+crates_dir = "crates"
+domain_crate = "{repo}-{context}-domain"
+context_crate = "{repo}-{context}"
+shared_kernel_crate = "{repo}-shared-kernel"
+
+# Module layout (no mod.rs) is enforced by clippy, not by this checker.
+[policy.lints.clippy]
+mod_module_files = "deny"
+
+# The scheduler model -- DeferScheduler, tasks, queues, policies, leases and
+# settlements. Replication applies it, dispatch settles against it, and the
+# HTTP interface serves its types, so it is the shared kernel rather than one
+# context's domain.
+[shared_kernel]
+path = "crates/defer-shared-kernel/src"
+
+# Assembly: `defer` re-exports the contexts as the `defer` library and holds
+# the `defer` binary (serve, the remote client, offline renders) and the
+# integration tests. Unrestricted.
+[assembly]
+crates = ["defer"]
+
+[[contexts]]
+name = "replication"
+depends_on = []
+[contexts.layers]
+infrastructure = "crates/defer-replication/src"
+
+[[contexts]]
+name = "dispatch"
+depends_on = ["replication"]
+[contexts.layers]
+infrastructure = "crates/defer-dispatch/src"
+
+[[contexts]]
+name = "access"
+depends_on = []
+[contexts.layers]
+application = "crates/defer-access/src"
+
+[[contexts]]
+name = "queue"
+depends_on = ["access", "dispatch", "replication"]
+[contexts.layers]
+interfaces = "crates/defer-queue/src"
+
+[[contexts]]
+name = "operator"
+depends_on = []
+[contexts.layers]
+infrastructure = "crates/defer-operator/src"
+
+[[exceptions]]
+rule = "B2"
+subject = "utoipa"
+paths = [
+  "crates/defer-shared-kernel/Cargo.toml",
+  "crates/defer-shared-kernel/src/types.rs",
+]
+reason = "utoipa::ToSchema is a compile-time description of the same serde wire shape. CreateTask, Target, QueuePolicy, QueueSnapshot and the other kernel types are served as-is in defer's OpenAPI document, from which the generated clients are built, and a separate interfaces copy would duplicate the wire contract. The derive does no I/O. Long-term."
+
+[[exceptions]]
+rule = "B2"
+subject = "raft_runtime"
+paths = [
+  "crates/defer-shared-kernel/Cargo.toml",
+  "crates/defer-shared-kernel/src/scheduler.rs",
+  "crates/defer-shared-kernel/src/scheduler/lease.rs",
+]
+reason = "The scheduler fences dispatch ownership with raft_runtime's FenceToken and FencedAssignment value types, which are the committed fence the replication layer checks on ack and nack. They are plain data with no I/O; redefining them in the kernel would need a conversion at every committed command. Long-term."

@@ -1,0 +1,27 @@
+[package]
+name = "defer-queue"
+description = "defer queue HTTP API: the axum router, handlers, OpenAPI document, and Prometheus metric names"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+defer-access.workspace = true
+defer-dispatch.workspace = true
+defer-replication.workspace = true
+defer-shared-kernel.workspace = true
+metrics-prometheus.workspace = true
+serde.workspace = true
+server-lifecycle.workspace = true
+service-auth.workspace = true
+service-http.workspace = true
+utoipa.workspace = true
+
+[lints]
+workspace = true

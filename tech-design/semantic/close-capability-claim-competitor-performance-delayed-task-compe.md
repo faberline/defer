@@ -65,7 +65,7 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: tests/relay_performance_ceiling.rs
+  - path: crates/defer/tests/relay_performance_ceiling.rs
     action: modify
     section: unit-test
     impl_mode: hand-written

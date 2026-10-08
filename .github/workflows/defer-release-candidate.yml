@@ -175,7 +175,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo test --locked -p defer
+          cargo test --locked --workspace
           uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --app defer
 
   ghcr-image-and-attest:

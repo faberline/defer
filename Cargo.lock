@@ -1099,20 +1099,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
-name = "combine"
-version = "4.6.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba5a308b75df32fe02788e748662718f03fde005016435c444eea572398219fd"
-dependencies = [
- "bytes",
- "futures-core",
- "memchr",
- "pin-project-lite",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
 name = "compression-codecs"
 version = "0.4.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1356,35 +1342,116 @@ dependencies = [
  "chrono",
  "clap",
  "cli-std",
+ "defer-access",
+ "defer-dispatch",
+ "defer-operator",
+ "defer-queue",
+ "defer-replication",
+ "defer-shared-kernel",
  "hmac 0.12.1",
- "k8s-openapi",
- "kube",
- "metrics-prometheus",
  "openapi-codegen",
  "peer-tls",
  "raft-runtime",
  "rcgen",
- "redis",
  "relay",
  "reqwest",
+ "serde_json",
+ "serde_yaml",
+ "server-lifecycle",
+ "service-auth",
+ "service-backup",
+ "service-http",
+ "service-observability",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tower 0.5.3",
+ "tracing",
+]
+
+[[package]]
+name = "defer-access"
+version = "0.4.13"
+dependencies = [
+ "anyhow",
+ "service-auth",
+]
+
+[[package]]
+name = "defer-dispatch"
+version = "0.4.13"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "defer-replication",
+ "defer-shared-kernel",
+ "hmac 0.12.1",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "service-executor",
+ "sha2 0.10.9",
+ "utoipa",
+]
+
+[[package]]
+name = "defer-operator"
+version = "0.4.13"
+dependencies = [
+ "anyhow",
+ "k8s-openapi",
+ "kube",
  "schemars",
  "serde",
  "serde_json",
  "serde_yaml",
- "service-auth",
  "service-backup",
- "service-executor",
- "service-http",
  "service-k8s",
- "service-observability",
- "sha2 0.10.9",
- "storage-durable",
- "tempfile",
+]
+
+[[package]]
+name = "defer-queue"
+version = "0.4.13"
+dependencies = [
+ "anyhow",
+ "axum 0.8.9",
+ "chrono",
+ "defer-access",
+ "defer-dispatch",
+ "defer-replication",
+ "defer-shared-kernel",
+ "metrics-prometheus",
+ "serde",
+ "server-lifecycle",
+ "service-auth",
+ "service-http",
+ "utoipa",
+]
+
+[[package]]
+name = "defer-replication"
+version = "0.4.13"
+dependencies = [
+ "anyhow",
+ "axum 0.8.9",
+ "chrono",
+ "defer-shared-kernel",
+ "peer-tls",
+ "raft-runtime",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "defer-shared-kernel"
+version = "0.4.13"
+dependencies = [
+ "chrono",
+ "raft-runtime",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
- "tokio",
- "tower 0.5.3",
- "tracing",
- "tracing-subscriber",
  "utoipa",
 ]
 
@@ -2424,15 +2491,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3267,7 +3325,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5d2d8d10f3c6ded6da8b05b5fb3b8a5082514344d56c9f871412d29b4e075b4"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools",
  "proc-macro2",
  "quote",
  "syn 1.0.109",
@@ -3470,30 +3528,6 @@ dependencies = [
  "time",
  "x509-parser 0.16.0",
  "yasna",
-]
-
-[[package]]
-name = "redis"
-version = "0.27.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09d8f99a4090c89cc489a94833c901ead69bfbf3877b4867d5482e321ee875bc"
-dependencies = [
- "arc-swap",
- "async-trait",
- "bytes",
- "combine",
- "futures-util",
- "itertools 0.13.0",
- "itoa",
- "num-bigint",
- "percent-encoding",
- "pin-project-lite",
- "ryu",
- "sha1_smol",
- "socket2 0.5.10",
- "tokio",
- "tokio-util",
- "url",
 ]
 
 [[package]]
@@ -4219,12 +4253,6 @@ dependencies = [
  "cpufeatures 0.3.0",
  "digest 0.11.3",
 ]
-
-[[package]]
-name = "sha1_smol"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "sha2"

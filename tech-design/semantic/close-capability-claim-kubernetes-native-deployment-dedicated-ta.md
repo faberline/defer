@@ -71,13 +71,13 @@ flowchart TD
 
 ```yaml
 changes:
-  - path: tests/direct_k8s_assets.rs
+  - path: crates/defer/tests/direct_k8s_assets.rs
     action: modify
     section: unit-test
     impl_mode: hand-written
     anchor: prod_profile_renders_the_connected_security_boundary
     reason: "Own exact named Service and PDB invariants from both composed direct base and production Kustomize resource sets, so disconnected resources fail."
-  - path: tests/operator.rs
+  - path: crates/defer/tests/operator.rs
     action: modify
     section: unit-test
     impl_mode: hand-written

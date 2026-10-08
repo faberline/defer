@@ -1,0 +1,24 @@
+[package]
+name = "defer-shared-kernel"
+description = "defer scheduler model shared by every module: DeferScheduler, task/queue value objects, and SchedulerError"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+chrono.workspace = true
+# FenceToken/FencedAssignment only: the committed executor fence is part of
+# the scheduler model (ddd.toml exception).
+raft-runtime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# ToSchema on the wire value objects the OpenAPI document serves as-is
+# (ddd.toml exception).
+utoipa.workspace = true
+
+[lints]
+workspace = true
