@@ -19,6 +19,7 @@ use service_http::{ApiErr, MetricsProvider};
 
 use defer_access as auth;
 use defer_dispatch::DispatchDisposition;
+use defer_replication::ProposeError;
 use defer_shared_kernel::{CreateTask, QueuePolicy, SchedulerError};
 
 pub use dto::{CreateTasksRequest, CreateTasksResponse, QueueControlRequest, TaskStatusResponse};
@@ -134,6 +135,14 @@ fn scheduler_error(error: SchedulerError) -> Response {
     ApiErr::new(status, kind, error.to_string()).into_response()
 }
 
+/// A committed scheduler refusal keeps its typed status; anything else is internal.
+fn propose_error(error: ProposeError) -> Response {
+    match error {
+        ProposeError::Scheduler(error) => scheduler_error(error),
+        ProposeError::Infra(error) => internal(error),
+    }
+}
+
 fn internal(error: impl std::fmt::Display) -> Response {
     ApiErr::new(
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -189,7 +198,7 @@ pub async fn queue_put(
     state.metrics.requests.incr();
     match state.raft.configure_queue(queue, policy).await {
         Ok(snapshot) => Json(snapshot).into_response(),
-        Err(error) => internal(error),
+        Err(error) => propose_error(error),
     }
 }
 
@@ -198,7 +207,7 @@ pub async fn queue_put(
     path = "/v1/queues/{queue}/control",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = QueueControlRequest,
-    responses((status = 200, body = QueueSnapshot))
+    responses((status = 200, body = QueueSnapshot), (status = 404, body = service_http::ErrorEnvelope))
 )]
 pub async fn queue_control(
     State(state): State<AppState>,
@@ -212,7 +221,7 @@ pub async fn queue_control(
     state.metrics.requests.incr();
     match state.raft.set_queue_control(queue, request.state).await {
         Ok(snapshot) => Json(snapshot).into_response(),
-        Err(error) => internal(error),
+        Err(error) => propose_error(error),
     }
 }
 
@@ -221,7 +230,7 @@ pub async fn queue_control(
     path = "/v1/queues/{queue}/tasks",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = CreateTask,
-    responses((status = 201), (status = 409, body = service_http::ErrorEnvelope))
+    responses((status = 201), (status = 404, body = service_http::ErrorEnvelope), (status = 409, body = service_http::ErrorEnvelope))
 )]
 pub async fn task_create(
     State(state): State<AppState>,
@@ -235,7 +244,7 @@ pub async fn task_create(
     state.metrics.requests.incr();
     match state.raft.create_task(queue, task).await {
         Ok(()) => StatusCode::CREATED.into_response(),
-        Err(error) => internal(error),
+        Err(error) => propose_error(error),
     }
 }
 
@@ -244,7 +253,7 @@ pub async fn task_create(
     path = "/v1/queues/{queue}/tasks:batch",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = CreateTasksRequest,
-    responses((status = 201, body = CreateTasksResponse), (status = 409, body = service_http::ErrorEnvelope))
+    responses((status = 201, body = CreateTasksResponse), (status = 404, body = service_http::ErrorEnvelope), (status = 409, body = service_http::ErrorEnvelope))
 )]
 pub async fn task_create_batch(
     State(state): State<AppState>,
@@ -258,7 +267,7 @@ pub async fn task_create_batch(
     state.metrics.requests.incr();
     match state.raft.create_tasks(queue, request.tasks).await {
         Ok(created) => (StatusCode::CREATED, Json(CreateTasksResponse { created })).into_response(),
-        Err(error) => internal(error),
+        Err(error) => propose_error(error),
     }
 }
 
@@ -321,7 +330,7 @@ pub async fn task_cancel(
             "task is missing or terminal",
         )
         .into_response(),
-        Err(error) => internal(error),
+        Err(error) => propose_error(error),
     }
 }
 
@@ -374,6 +383,21 @@ pub async fn admin_backup(
     match state.raft.snapshot_bytes() {
         Ok(bytes) => ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response(),
         Err(error) => internal(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn propose_error_keeps_scheduler_status_and_hides_infra_failures() {
+        let missing = propose_error(SchedulerError::QueueMissing("jobs".into()).into());
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        let disabled = propose_error(SchedulerError::QueueDisabled("jobs".into()).into());
+        assert_eq!(disabled.status(), StatusCode::CONFLICT);
+        let infra = propose_error(anyhow::anyhow!("commit timed out").into());
+        assert_eq!(infra.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }
 // HANDWRITE-END

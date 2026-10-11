@@ -12,6 +12,7 @@
 
 mod bootstrap;
 mod command;
+mod error;
 mod host;
 mod state_machine;
 #[cfg(test)]
@@ -19,6 +20,7 @@ mod tests;
 
 pub use bootstrap::prepare_bootstrap_seed;
 pub use command::{DeferCommand, DeferOutcome};
+pub use error::{ProposeError, ProposeResult};
 pub use host::DeferRaft;
 pub use state_machine::DeferStateMachine;
 
