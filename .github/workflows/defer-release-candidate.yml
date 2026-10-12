@@ -175,7 +175,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          rustup component add rustfmt clippy
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
           cargo test --locked --workspace
+          cargo test --locked -p defer --features operator --test operator
           uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --app defer
 
   ghcr-image-and-attest:

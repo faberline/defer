@@ -1,26 +1,23 @@
 #!/usr/bin/env python3
-"""Static and fixture oracle for the shared candidate-first release contract.
+"""Static and fixture oracle for defer's candidate-first release contract.
 
-Five apps ride `build-release <app>`: landed main -> immutable candidate ->
-digest-pinned GKE acceptance -> protected annotated tag -> no-rebuild
-promotion. This oracle pins, per app, the two workflows that carry it
-(`<app>-release-candidate.yml`, `<app>-release.yml`), the `gke-acceptance`
-prebuilt-image input that keep/relay/defer use as their GKE gate, the
-agreement between the three copies of the per-app table (this file,
-scripts/release/apps.sh, scripts/release/make-gke-release-receipt.py), and
-the build-release skill itself: both entrypoints byte-identical, their
-bytes digest-pinned, candidate before tag, and no raw Git tag or push.
+defer releases as landed main -> immutable candidate -> digest-pinned GKE
+acceptance -> protected annotated tag -> no-rebuild promotion. This oracle
+pins the two workflows that carry it (`defer-release-candidate.yml`,
+`defer-release.yml`), the gates the candidate runs, the PR CI that runs the
+same gates, and the agreement between the three copies of the release table
+(this file, scripts/release/apps.sh, scripts/release/make-gke-release-receipt.py).
+
+The build-release skill, scripts/build/release.sh, and the gke-acceptance
+workflow are not in this repository, so this copy does not pin them.
 
 Usage:
-  verify-release-contract.py              every onboarded app + gke-acceptance + tables
-  verify-release-contract.py --app keep   one app (refused until its workflows exist)
-  verify-release-contract.py --self-test  the positive checks, static negative
-                                          controls, and an offline release fixture
-                                          per GKE backend (keep, sift)
+  verify-release-contract.py               defer + standalone gates + tables
+  verify-release-contract.py --app defer   the same checks, named
+  verify-release-contract.py --self-test   the positive checks, static negative
+                                           controls, and an offline release fixture
 
-tape keeps a deeper oracle of its own (apps/tape/scripts/verify-release-contract.py);
-this one checks the shape it shares with the shared-script apps and never
-rewrites a checked file. lumen releases from https://github.com/faberline/lumen.
+The checks never rewrite a checked file.
 """
 from __future__ import annotations
 
@@ -42,59 +39,22 @@ from typing import Callable, Dict, List, NoReturn, Optional, Sequence, Set, Tupl
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
-GKE_ACCEPTANCE = WORKFLOWS / "gke-acceptance.yml"
 RELEASE_DIR = ROOT / "scripts" / "release"
 APPS_SH = RELEASE_DIR / "apps.sh"
 RECEIPT_MAKER = RELEASE_DIR / "make-gke-release-receipt.py"
 SHARED_CANDIDATE_VERIFIER = RELEASE_DIR / "verify-release-candidate.sh"
 SHARED_ARTIFACT_VERIFIER = RELEASE_DIR / "verify-release-artifacts.sh"
-BUILD_RELEASE_SH = ROOT / "scripts" / "build" / "release.sh"
-AGENTS_SKILL = ROOT / ".agents" / "skills" / "build-release" / "SKILL.md"
-CLAUDE_SKILL = ROOT / ".claude" / "skills" / "build-release" / "SKILL.md"
 
 REPO = "faberline/defer"
 IMAGE_OWNER = "ghcr.io/faberline"
-GKE_HARNESS_APPS = ("keep", "defer", "relay", "loom")
 ACCEPTANCE_JOB = "deploy + verify on GKE"
 VERIFY_IMAGE_STEP = "Verify prebuilt image input"
-PREPARE_EVIDENCE_STEP = "Prepare evidence directory"
 HARNESS_STEP = "Run acceptance harness"
 PARK_STEP = "Park node pool (belt and suspenders)"
 FIXTURE_BANNER = "LOCAL FIXTURE ONLY"
 
-# The skill's bytes are pinned: a change that keeps both copies equal (a
-# shell-escaped `g\it tag`, say) still has to be re-read and re-pinned here.
-RELEASE_SKILL_SHA256 = "16bec3f6a894890c0a8312ac38207275d71659598a27b456d504468880fbaeab"
-SKILL_ORDER = (
-    "2. Run `git-land`",
-    "3. Dispatch `<app>-release-candidate`",
-    "Wait for the final candidate manifest.",
-    "4. Independently run the candidate verifier in full mode.",
-    "7. The controller creates one annotated `<app>@<version>` tag",
-    "8. Dispatch `<app>-release`",
-    "9. Run the public verifier.",
-)
-RETIRED_RELEASE_ROUTES = (
-    ".claude/skills/lumen-build-release/scripts/release.sh",
-    "scripts/project-build-monitor-release.sh",
-)
-
-FIVE_TARGETS = (
-    "aarch64-apple-darwin",
-    "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
-    "x86_64-unknown-linux-musl",
-    "aarch64-unknown-linux-musl",
-)
 TWO_TARGETS = ("x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl")
 HARNESS_FIELDS = ("readyz", "round_trip", "durability")
-SIFT_FIELDS = (
-    "operator_reconcile_1x1",
-    "standard_gke_cri_collector",
-    "lumen_structured_stdout_materialized",
-    "scheduled_backup",
-    "gcs_backup",
-)
 
 
 @dataclass(frozen=True)
@@ -155,30 +115,18 @@ def shared_app(name: str, root: str, targets: Tuple[str, ...], backend: str, fun
 
 
 APPS: Dict[str, App] = {
-    "tape": App(
-        name="tape",
-        root=".",
-        scripts_dir="scripts",
-        shared_scripts=False,
-        onboarded=True,
-        targets=FIVE_TARGETS,
-        candidate_jobs=("identity", "build", "tape-release-gates", "ghcr-image-and-attest", "manifest", "verify-candidate", "verify-libraries", "kind-amd64", "kind-arm64", "result"),
-        promotion_prefix="gke_receipt",
-        takes_attempt=True,
-        manifest_schema="cclab.tape.candidate-manifest.v1",
-        receipt_name="tape-gke-receipt.json",
-        receipt_schema="tape.gke-release-receipt/v1",
-        gke_backend="gcp",
-        functional=(),
-    ),
-    # onboarded flips to True in the PR that lands the app's two workflows.
-    "sift": shared_app("sift", ".", FIVE_TARGETS, "gcp", SIFT_FIELDS, onboarded=True),
-    "keep": shared_app("keep", ".", TWO_TARGETS, "gke-acceptance", HARNESS_FIELDS, onboarded=True),
-    "relay": shared_app("relay", ".", TWO_TARGETS, "gke-acceptance", HARNESS_FIELDS, onboarded=True),
     "defer": shared_app("defer", ".", TWO_TARGETS, "gke-acceptance", HARNESS_FIELDS, onboarded=True),
 }
-FIXTURE_APPS = ("keep", "sift")  # one per receipt backend
-FIXTURE_VERSION = {"keep": "0.4.13", "sift": "0.1.2"}
+FIXTURE_APPS = ("defer",)
+FIXTURE_VERSION = {"defer": "0.4.13"}
+CI_WORKFLOW = WORKFLOWS / "defer-ci.yml"
+# Every gate the candidate runs before it builds anything, and PR CI with it.
+STANDALONE_GATES = (
+    "cargo fmt --all -- --check",
+    "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
+    "cargo test --locked --workspace",
+    "cargo test --locked -p defer --features operator --test operator",
+)
 
 
 # --- helpers -----------------------------------------------------------------
@@ -556,58 +504,7 @@ def check_not_onboarded(app: App) -> None:
         fail(f"{path.relative_to(ROOT)} exists but {app.name} is still marked onboarded=False here")
 
 
-# --- static checks: gke-acceptance prebuilt image input ---------------------
-
-
-def env_line(app: str) -> str:
-    return f"{app.upper()}_IMAGE: ${{{{ contains(inputs.apps, '{app}') && inputs.image || needs.build-{app}.outputs.image }}}}"
-
-
-def build_gate(app: str) -> str:
-    return f"if: contains(inputs.apps, '{app}') && inputs.image == ''"
-
-
-def check_gke_acceptance(text: str) -> None:
-    label = "gke-acceptance"
-    if workflow_triggers(text) != ["workflow_dispatch"]:
-        fail(f"{label}: the only trigger must be workflow_dispatch, got {workflow_triggers(text)}")
-    if workflow_inputs(text) != {"apps", "ref", "image"}:
-        fail(f"{label}: inputs must be apps, ref, image, got {sorted(workflow_inputs(text))}")
-    if not re.search(r"^run-name: .*inputs\.image != ''.*image=\{0\}", text, re.M):
-        fail(f"{label}: run-name must carry the prebuilt image so release.sh can tell the runs apart")
-    expected_jobs = {f"build-{app}" for app in GKE_HARNESS_APPS} | {"acceptance"}
-    if job_ids(text) != expected_jobs:
-        fail(f"{label}: jobs must be {sorted(expected_jobs)}, got {sorted(job_ids(text))}")
-    for app in GKE_HARNESS_APPS:
-        if build_gate(app) not in job_block(text, f"build-{app}"):
-            fail(f"{label}: build-{app} must be skipped when a prebuilt image is given")
-    acceptance = job_block(text, "acceptance")
-    if f"name: {ACCEPTANCE_JOB}" not in acceptance:
-        fail(f"{label}: the acceptance job must be named {ACCEPTANCE_JOB!r}")
-    for app in GKE_HARNESS_APPS:
-        if env_line(app) not in acceptance:
-            fail(f"{label}: {app.upper()}_IMAGE must prefer the prebuilt image for a selected app")
-    verify = step_block(acceptance, VERIFY_IMAGE_STEP)
-    if "if: inputs.image != ''" not in verify:
-        fail(f"{label}: {VERIFY_IMAGE_STEP!r} must run whenever a prebuilt image is given")
-    if acceptance.index(f"- name: {VERIFY_IMAGE_STEP}") > acceptance.index(f"- name: {PREPARE_EVIDENCE_STEP}"):
-        fail(f"{label}: {VERIFY_IMAGE_STEP!r} must run before any cluster work")
-    script = run_script(verify)
-    for required in (
-        '[ "${#apps[@]}" -eq 1 ]',
-        "@sha256:[0-9a-f]{64}$",
-        "${OWNER}",
-        "${app}",
-    ):
-        if required not in script:
-            fail(f"{label}: {VERIFY_IMAGE_STEP!r} must check {required!r}")
-    if "OWNER: ${{ github.repository_owner }}" not in verify:
-        fail(f"{label}: the image owner must come from github.repository_owner")
-    for step in (HARNESS_STEP, PARK_STEP):
-        step_block(acceptance, step)
-
-
-# --- cross-checks: apps.sh, the receipt maker, release.sh --------------------
+# --- cross-checks: apps.sh and the receipt maker -----------------------------
 
 
 def bash_values(function: str, app: str) -> List[str]:
@@ -706,15 +603,34 @@ def check_tables(maker) -> None:
         if getattr(maker, attribute, None) != expected:
             fail(f"receipt maker {attribute} = {getattr(maker, attribute, None)!r}, expected {expected!r}")
 
-    release_sh = read(BUILD_RELEASE_SH)
-    for variable, expected in (("ACCEPTANCE_JOB", ACCEPTANCE_JOB), ("PARK_STEP", PARK_STEP)):
-        if f"{variable}='{expected}'" not in release_sh:
-            fail(f"scripts/build/release.sh must pin {variable}='{expected}'")
-    if '-f image="$image"' not in release_sh:
-        fail("scripts/build/release.sh must forward --image to the workflow's image input")
+
+# --- standalone gates: the candidate and PR CI ---------------------------------
 
 
-# --- build-release skill -----------------------------------------------------
+def gate_lines(script: str) -> List[str]:
+    return [line for line in logical_lines(script) if line]
+
+
+def check_standalone_gates(candidate: str, ci: str) -> None:
+    gates = gate_lines(run_script(step_block(job_block(candidate, "defer-release-gates"), "Run declared Defer gates")))
+    for gate in STANDALONE_GATES + ("uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --app defer",):
+        if gate not in gates:
+            fail(f"defer candidate: release gates must run {gate!r}")
+    label = "defer-ci"
+    if workflow_triggers(ci) != ["pull_request", "push"]:
+        fail(f"{label}: triggers must be pull_request and push, got {workflow_triggers(ci)}")
+    if "    branches: [main]" not in top_block(ci, "on"):
+        fail(f"{label}: push must be limited to main")
+    assert_actions_pinned(label, ci)
+    ci_gates = [line for script in all_run_scripts(ci) for line in gate_lines(script)]
+    for gate in STANDALONE_GATES:
+        if gate not in ci_gates:
+            fail(f"{label}: PR CI must run {gate!r}")
+    if "permissions:\n  contents: read" not in ci:
+        fail(f"{label}: PR CI must run with read-only contents permission")
+
+
+# --- shell parsing -------------------------------------------------------------
 
 
 def logical_lines(text: str) -> List[str]:
@@ -735,76 +651,6 @@ def logical_lines(text: str) -> List[str]:
     if current.strip():
         logical.append(current.strip())
     return logical
-
-
-def check_no_raw_git_tag_push(text: str) -> None:
-    for line in logical_lines(text):
-        tokens = [token for token in re.split(r"[^A-Za-z0-9_]+", line) if token]
-        if "git" in tokens and {"tag", "push"} & set(tokens[tokens.index("git") + 1:]):
-            fail(f"build-release skill: raw Git tag/push command remains: {line}")
-
-
-def check_skill_order(text: str) -> None:
-    previous = 0
-    for marker in SKILL_ORDER:
-        position = text.find(marker)
-        if position < 0:
-            fail(f"build-release skill is missing {marker!r}")
-        if position <= previous:
-            fail(f"build-release skill order is invalid at {marker!r}")
-        previous = position
-    for retired in RETIRED_RELEASE_ROUTES:
-        if retired in text:
-            fail(f"build-release skill: retired release route remains: {retired}")
-    check_no_raw_git_tag_push(text)
-
-
-def check_skill_pair(agents: str, claude: str) -> None:
-    if agents != claude:
-        fail("build-release skill: the .agents and .claude entrypoints differ")
-    digest = hashlib.sha256(agents.encode("utf-8")).hexdigest()
-    if digest != RELEASE_SKILL_SHA256:
-        fail(f"build-release skill digest changed: expected {RELEASE_SKILL_SHA256}, got {digest}")
-    check_skill_order(agents)
-
-
-def check_release_skill() -> None:
-    check_skill_pair(read(AGENTS_SKILL), read(CLAUDE_SKILL))
-
-
-def skill_controls(text: str) -> List[Tuple[str, Callable[[], None]]]:
-    label = "build-release skill"
-    candidate = "3. Dispatch `<app>-release-candidate`"
-    verifier_step = "4. Independently run the candidate verifier in full mode. Stop on any mismatch.\n"
-    tag_step = "7. The controller creates one annotated `<app>@<version>` tag at the exact\n"
-    receipt = "Wait for the final candidate manifest."
-
-    def before_candidate(line: str) -> str:
-        return replace_once(text, candidate, line + "\n" + candidate, label)
-
-    def escaped_pair() -> None:
-        escaped = before_candidate("g\\it tag -m release tape@<version>; g\\it push --tags")
-        check_skill_pair(escaped, escaped)
-
-    def tag_first() -> str:
-        moved = replace_once(text, verifier_step, "", label)
-        return replace_once(moved, tag_step, tag_step + verifier_step, label)
-
-    def receipt_after_tag() -> str:
-        moved = replace_once(text, receipt, "", label)
-        return replace_once(moved, tag_step, tag_step + receipt + "\n", label)
-
-    return [
-        (f"{label}: same-byte shell-escaped tag and push in both entrypoints", escaped_pair),
-        (f"{label}: entrypoints drift", lambda: check_skill_pair(text, replace_once(text, "Publish one verified release", "Publish a different verified release", label))),
-        (f"{label}: tag before the candidate verifier", lambda: check_skill_order(tag_first())),
-        (f"{label}: candidate manifest awaited after the tag", lambda: check_skill_order(receipt_after_tag())),
-        (f"{label}: raw tag and push before the candidate", lambda: check_skill_order(before_candidate("git tag -m release tape@<version>; git push --tags"))),
-        (f"{label}: raw tag and push behind git -C", lambda: check_skill_order(before_candidate("git -C . tag -m release tape@<version>; git -C . push --tags"))),
-        (f"{label}: raw tag split across continuations", lambda: check_skill_order(before_candidate("git \\\n-C . \\\ntag -m release tape@<version>"))),
-        (f"{label}: raw push split across continuations", lambda: check_skill_order(before_candidate("git \\\n--git-dir=.git \\\npush --tags"))),
-        (f"{label}: retired release route restored", lambda: check_skill_order(text + "\n" + RETIRED_RELEASE_ROUTES[0] + "\n")),
-    ]
 
 
 # --- offline release fixture -------------------------------------------------
@@ -989,7 +835,7 @@ def run_fixture(app: App, maker) -> Tuple[int, int]:
 
 
 def watched_files() -> List[Path]:
-    paths = [GKE_ACCEPTANCE, APPS_SH, RECEIPT_MAKER, SHARED_CANDIDATE_VERIFIER, SHARED_ARTIFACT_VERIFIER, BUILD_RELEASE_SH, AGENTS_SKILL, CLAUDE_SKILL]
+    paths = [APPS_SH, RECEIPT_MAKER, SHARED_CANDIDATE_VERIFIER, SHARED_ARTIFACT_VERIFIER, CI_WORKFLOW]
     for app in APPS.values():
         if app.onboarded:
             paths.extend([app.candidate_workflow, app.promotion_workflow])
@@ -1003,10 +849,9 @@ def check_everything() -> str:
             check_app(app)
         else:
             check_not_onboarded(app)
-    check_gke_acceptance(read(GKE_ACCEPTANCE))
     check_tables(load_receipt_maker())
-    check_release_skill()
-    return f"release contract passed: {' '.join(app.name for app in onboarded)} ({len(onboarded)} apps), gke-acceptance, shared tables, build-release skill"
+    check_standalone_gates(read(APPS["defer"].candidate_workflow), read(CI_WORKFLOW))
+    return f"release contract passed: {' '.join(app.name for app in onboarded)}, standalone gates, PR CI, release tables"
 
 
 def candidate_controls(app: App, text: str) -> List[Tuple[str, Callable[[], str]]]:
@@ -1055,26 +900,22 @@ def promotion_controls(app: App, text: str) -> List[Tuple[str, Callable[[], str]
     return controls
 
 
-def gke_controls(text: str) -> List[Tuple[str, Callable[[], str]]]:
-    label = "gke-acceptance"
-    acceptance = job_block(text, "acceptance")
-    verify = step_block(acceptance, VERIFY_IMAGE_STEP)
-    prepare = step_block(acceptance, PREPARE_EVIDENCE_STEP)
+def standalone_controls(candidate: str, ci: str) -> List[Tuple[str, Callable[[], None]]]:
+    def gates_with(candidate_text: str = candidate, ci_text: str = ci) -> Callable[[], None]:
+        return lambda: check_standalone_gates(candidate_text, ci_text)
 
-    def verify_after_prepare() -> str:
-        moved = replace_once(text, verify + "\n", "", label)
-        return replace_once(moved, prepare, prepare + "\n" + verify, label)
-
-    return [
-        (f"{label}: image input dropped", lambda: replace_once(text, "      image:\n", "      prebuilt:\n", label)),
-        (f"{label}: keep build no longer skipped for a prebuilt image", lambda: replace_once(text, build_gate("keep"), "if: contains(inputs.apps, 'keep')", label)),
-        (f"{label}: KEEP_IMAGE ignores the prebuilt image", lambda: replace_once(text, env_line("keep"), "KEEP_IMAGE: ${{ needs.build-keep.outputs.image }}", label)),
-        (f"{label}: verify step renamed", lambda: replace_once(text, f"- name: {VERIFY_IMAGE_STEP}", "- name: Verify image", label)),
-        (f"{label}: verify step moved after cluster work begins", verify_after_prepare),
-        (f"{label}: one-app rule dropped", lambda: replace_once(text, '[ "${#apps[@]}" -eq 1 ]', "true", label)),
-        (f"{label}: run-name hides the image", lambda: re.sub(r"^run-name: .*$", "run-name: gke-acceptance ${{ inputs.apps }} @ ${{ inputs.ref || github.ref_name }}", text, count=1, flags=re.M)),
-        (f"{label}: owner no longer taken from the repository", lambda: replace_once(text, "OWNER: ${{ github.repository_owner }}", "OWNER: chrischeng-c4", label)),
-    ]
+    controls: List[Tuple[str, Callable[[], None]]] = []
+    for gate in STANDALONE_GATES:
+        controls.append((f"defer candidate: gate dropped: {gate}", gates_with(candidate_text=replace_once(candidate, gate, "true", "defer candidate"))))
+        controls.append((f"defer-ci: gate dropped: {gate}", gates_with(ci_text=replace_once(ci, gate, "true", "defer-ci"))))
+    controls.extend([
+        ("defer candidate: release contract no longer checked", gates_with(candidate_text=replace_once(candidate, "verify-release-contract.py --app defer", "verify-release-contract.py --self-test", "defer candidate"))),
+        ("defer-ci: pull_request trigger dropped", gates_with(ci_text=replace_once(ci, "  pull_request:\n", "  workflow_dispatch:\n", "defer-ci"))),
+        ("defer-ci: push no longer limited to main", gates_with(ci_text=replace_once(ci, "    branches: [main]", "    branches: ['**']", "defer-ci"))),
+        ("defer-ci: action unpinned", gates_with(ci_text=unpin_first_action(ci, "defer-ci"))),
+        ("defer-ci: write permission granted", gates_with(ci_text=replace_once(ci, "permissions:\n  contents: read", "permissions:\n  contents: write", "defer-ci"))),
+    ])
+    return controls
 
 
 def self_test() -> str:
@@ -1084,13 +925,12 @@ def self_test() -> str:
     for app in onboarded:
         check_app(app)
         positives += 1
-    gke_text = read(GKE_ACCEPTANCE)
-    check_gke_acceptance(gke_text)
-    positives += 1
     maker = load_receipt_maker()
     check_tables(maker)
     positives += 1
-    check_release_skill()
+    candidate_text = read(APPS["defer"].candidate_workflow)
+    ci_text = read(CI_WORKFLOW)
+    check_standalone_gates(candidate_text, ci_text)
     positives += 1
     for app in APPS.values():
         if not app.onboarded:
@@ -1105,14 +945,11 @@ def self_test() -> str:
         for label, mutate in promotion_controls(app, promotion):
             expect_static_failure(label, lambda mutate=mutate, app=app: check_promotion(app, mutate()))
             negatives += 1
-    for label, mutate in gke_controls(gke_text):
-        expect_static_failure(label, lambda mutate=mutate: check_gke_acceptance(mutate()))
-        negatives += 1
-    expect_static_failure("table: a non-onboarded app is checked as onboarded", lambda: check_app(replace(APPS["keep"], onboarded=False)))
-    negatives += 1
-    for label, control in skill_controls(read(AGENTS_SKILL)):
+    for label, control in standalone_controls(candidate_text, ci_text):
         expect_static_failure(label, control)
         negatives += 1
+    expect_static_failure("table: a non-onboarded app is checked as onboarded", lambda: check_app(replace(APPS["defer"], onboarded=False)))
+    negatives += 1
 
     fixture_names = []
     for name in FIXTURE_APPS:
@@ -1145,9 +982,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             app = APPS[args.app]
             check_app(app)
             check_tables(load_receipt_maker())
-            check_release_skill()
-            if app.gke_backend == "gke-acceptance":
-                check_gke_acceptance(read(GKE_ACCEPTANCE))
+            check_standalone_gates(read(app.candidate_workflow), read(CI_WORKFLOW))
             summary = f"release contract passed: {app.name}"
         else:
             summary = check_everything()
