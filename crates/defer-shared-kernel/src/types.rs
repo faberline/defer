@@ -1,4 +1,3 @@
-// SPEC-MANAGED: tech-design/logic/core-scheduler-priority-rate-dispatch.md#schema
 // HANDWRITE-BEGIN gap="missing-generator:schema:defer-core-types" tracker="#766" reason="Core DTOs for delayed push-queue scheduling and dispatch attempts."
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

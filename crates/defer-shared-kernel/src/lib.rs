@@ -1,4 +1,3 @@
-// SPEC-MANAGED: tech-design/logic/core-scheduler-priority-rate-dispatch.md#logic
 // HANDWRITE-BEGIN gap="missing-generator:logic:defer-core-scheduler" tracker="#766" reason="In-memory delayed push-queue scheduler core: ETA gate, u8 priority ordering, Defer-owned dispatch budget/concurrency, retry, DLQ, cancel, and terminal ack."
 //! Defer core scheduler.
 //!

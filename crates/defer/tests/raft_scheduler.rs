@@ -1,4 +1,3 @@
-// SPEC-MANAGED: tech-design/logic/core-scheduler-priority-rate-dispatch.md#unit-test
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:defer-raft-scheduler" tracker="#766" reason="Real three-node h2c Raft integration for committed task state and fenced dispatch ownership."
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

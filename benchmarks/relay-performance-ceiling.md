@@ -6,7 +6,7 @@ Defer may spend more work maintaining ETA ordering, queue controls, permits,
 attempts, retry/DLQ transitions, and terminal task records, but its scheduler
 must retain at least 80% of Relay's throughput under the same durable lifecycle.
 Google Cloud Tasks is Defer's external feature-contract peer; this local
-performance ceiling intentionally compares the two Axiom state machines so
+performance ceiling intentionally compares the Defer and Relay state machines so
 network-region effects do not dominate scheduler overhead.
 
 ```yaml

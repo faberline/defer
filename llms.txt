@@ -1,29 +1,30 @@
-<!-- SPEC-MANAGED: tech-design/logic/repo-taxonomy-move-defer-from-projects-defer-to-apps-defer.md#schema -->
-<!-- CODEGEN-BEGIN -->
 # defer Agent Context
 
-> TD-first map for agents. Start from tech design and capability intent before implementation files.
+> Map for agents. Start from the product contract and support matrix before
+> implementation files.
 
-## Tech Design
+## Product contract
 
-- [Tech Design](../../apps/defer/tech-design): implementation source of truth.
-- Validate: `aw td check tech-design`.
+- [README](README.md): capabilities, primary workflow, and contract discovery.
+- [STATUS](STATUS.md): support matrix; each row names its executable gate.
+- [ROADMAP](ROADMAP.md): future outcomes and explicit non-goals.
+- [ADRs](docs/adr): design decisions carried by the source.
+- [CONTRIBUTING](CONTRIBUTING.md): how to change defer and which gates to run.
 
-## Capability Map
+## Source
 
-- [README](README.md): capability source of truth and product contract.
-
-## Agent Workflow
-
-- Capability next action: `aw capability next --project defer`.
-- Readiness: `aw health --project defer`.
-- Blockers: `aw health --project defer blockers`.
+- `crates/defer-shared-kernel`: scheduler, task, queue, lease, and settlement types.
+- `crates/defer-replication`: Raft state machine, host, bootstrap seed, peer TLS.
+- `crates/defer-dispatch`: HTTP target dispatch, retries, and signing.
+- `crates/defer-access`: per-queue authorization.
+- `crates/defer-queue`: HTTP API router and OpenAPI.
+- `crates/defer-operator`: Kubernetes operator (feature `operator`).
+- `crates/defer`: the `defer` binary and the integration tests in `crates/defer/tests`.
 
 ## Commands
 
-- Test: `true` until the Defer crate and service test gates exist.
-
-## Root Artifacts
-
-- [llms.txt](llms.txt): agent orientation for the app source root.
-<!-- CODEGEN-END -->
+- Format: `cargo fmt --all -- --check`
+- Lint: `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- Test: `cargo test --locked --workspace`
+- Operator: `cargo test -p defer --features operator --test operator`
+- Product docs: `python3 -B scripts/meta/project_docs_contract.py check .`

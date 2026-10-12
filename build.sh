@@ -54,7 +54,7 @@ DEFER_IMAGE_PINS=(
 
 # `defer dockerfile render --variant release` substitutes CARGO_PKG_VERSION into
 # exactly these three lines of the committed Dockerfile.release and must
-# reproduce the file byte-for-byte (`cargo test -p defer --test deploy_cli`), so
+# reproduce the file byte-for-byte (`cargo test -p defer --test cli_contract`), so
 # a Cargo.toml bump without this sync turns that test red; this sync is the fix.
 DEFER_DOCKERFILE=Dockerfile.release
 

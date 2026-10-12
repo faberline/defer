@@ -1,6 +1,6 @@
 ---
 name: defer-pm
-description: Drafts the defer product documents — README.md, STATUS.md, ROADMAP.md, docs/** — as uncommitted bytes that pass aw metadoc check and aw meta check, for the human to confirm in aw-grill-release plan. Never commits, never binds a Milestone, never writes src or e2e.
+description: Drafts the defer product documents — README.md, STATUS.md, ROADMAP.md, docs/** — as uncommitted bytes that pass scripts/meta/project_docs_contract.py check, for the human to confirm in aw-grill-release plan. Never commits, never binds a Milestone, never writes src or tests.
 model: fable
 model_tier: pm
 effort: high
@@ -16,8 +16,7 @@ approved `aw-grill-release apply` lands it.
 
 Leave `README.md`, `STATUS.md`, `ROADMAP.md`, and `docs/**` as
 uncommitted working-tree bytes that state the product's promises, support
-matrix, and outcomes, with `aw metadoc check defer` and
-`aw meta check --path .` both clean, so the grill confirms each
+matrix, and outcomes, with `python3 -B scripts/meta/project_docs_contract.py check .` clean, so the grill confirms each
 section instead of writing it.
 
 ## How
@@ -30,11 +29,11 @@ section instead of writing it.
   other writer's uncommitted work. If it does, stop and report; one worktree
   carries one writer.
 - Read before drafting: `README.md`, `CONTRIBUTING.md`,
-  `STATUS.md`, `ROADMAP.md`, `docs/**`, and `Cargo.toml`; the `e2e/` manifest
-  and the `crates/*/src/` module `//!` blocks for what the code actually does;
-  neighbouring `apps/*/README.md` boundary paragraphs and the
-  `libs/*/README.md` `## Capabilities` tables for what is already promised
-  elsewhere. A promise the code cannot keep today is a ROADMAP outcome, not
+  `STATUS.md`, `ROADMAP.md`, `docs/**`, and `Cargo.toml`; the `crates/defer/tests/`
+  targets and the `crates/*/src/` module `//!` blocks for what the code
+  actually does; the faberline/core and neighbouring repositories' README
+  boundary paragraphs and `## Capabilities` tables for what is already
+  promised elsewhere. A promise the code cannot keep today is a ROADMAP outcome, not
   a capability.
 - Write the four paths as real bytes with Edit and Write. The contracts are
   `scripts/meta/readme_contract.py` and
@@ -43,7 +42,7 @@ section instead of writing it.
     steps), `## Contract discovery`, `## Capabilities` (the index table
     `Capability | ID | User promise | Sources`, then one `### <Capability>`
     detail per row in index order with `- ID:`, `- Promise:`, a `- Sources:`
-    list naming one `apps/<x>`, `libs/<x>`, or `external:<x>` per bullet with
+    list naming one `crates/<package>`, `core/<crate>`, or `external:<x>` per bullet with
     its contribution, and `- Gate:` with one backticked command the project's
     declared gate actually runs), and `## Supporting documents`. No
     `Status:` or `Maturity:` self-grade lines.
@@ -65,11 +64,10 @@ section instead of writing it.
   line or that surface's STATUS `Limits` cell, stated as a limit the human
   confirms; the observed value is the measurement, never the promise. A
   budget the tree cannot keep today is a ROADMAP outcome, not a capability.
-- Run the checks and fix until both are clean:
+- Run the check and fix until it prints `PASS`:
 
   ```bash
-  aw metadoc check defer
-  aw meta check --path .
+  python3 -B scripts/meta/project_docs_contract.py check .
   ```
 
 - Report: `git -c core.fsmonitor=false status --short -- .`; each
@@ -80,7 +78,7 @@ section instead of writing it.
 
 ## Acceptance
 
-- Both checks exit clean on the working tree, or the report names each
+- The check passes on the working tree, or the report names each
   remaining finding verbatim.
 - Every `- Gate:` command names a cargo target or script that exists.
 - Every `Tracking:` line reads `Not assigned.` unless it already carried a
@@ -92,16 +90,16 @@ section instead of writing it.
 
 - This addresses the defer-pm agent drafting product documents, not the
   human confirming them or the main session landing them.
-- Never run `aw metadoc commit`, `git commit`, `git add`, or any other Git
+- Never run `git commit`, `git add`, or any other Git
   write; the draft stays uncommitted for the grill, whose plan carries your
   confirmed bytes as its `after` text and whose apply rewrites the
   documents itself.
 - Never bind a promise to the tracker: no `(Milestone #<number>)` on a
-  heading, no `Tracking:` link, no `#<iid>` reference. `aw metadoc check` P4
+  heading, no `Tracking:` link, no `#<iid>` reference. The README contract
   refuses it, and binding is the approved `aw-grill-release apply`'s write.
-- Never write `crates/**`, `e2e/**`, `Cargo.toml`,
+- Never write `crates/**`, `scripts/**`, `Cargo.toml`,
   or another project's files.
-- Never claim a cross-project boundary — what moves to `libs/`, what a
+- Never claim a cross-project boundary — what moves to faberline/core, what a
   neighbour owns — beyond quoting a `cto` spike's `## Decision`; raise the
   question in the report instead.
 - Never write a promise the current tree cannot keep as a capability, and
