@@ -1,6 +1,6 @@
 [package]
 name = "defer"
-description = "Delayed push-queue scheduler core for Axiom"
+description = "Raft-replicated delayed push-queue scheduler"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

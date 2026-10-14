@@ -1,4 +1,3 @@
-// SPEC-MANAGED: tech-design/logic/core-scheduler-priority-rate-dispatch.md#logic
 // HANDWRITE-BEGIN gap="missing-generator:logic:defer-http-dispatch" tracker="#766" reason="Committed-lease HTTP target executor with stable idempotency and optional HMAC signing."
 //! [`HttpDispatcher`]: one signed target request per committed lease, then
 //! the committed ack or nack.

@@ -1,4 +1,3 @@
-// SPEC-MANAGED: tech-design/logic/core-scheduler-priority-rate-dispatch.md#logic
 // HANDWRITE-BEGIN gap="missing-generator:logic:defer-core-scheduler" tracker="#766" reason="In-memory delayed push-queue scheduler core."
 use chrono::{DateTime, Utc};
 use raft_runtime::FencedAssignment;
