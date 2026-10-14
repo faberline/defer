@@ -52,7 +52,7 @@ Boundaries that every section inherits:
 
 | Horizon | Outcome | Section |
 |---|---|---|
-| H1 | `declarative-queues-and-request-limits` | [operations.md](operations.md) § Declarative queues and request limits |
+| H1 | `declarative-queues` | [operations.md](operations.md) § Declarative queues |
 | H1 | `live-topology-transitions` | [replication-and-availability.md](replication-and-availability.md) § Live topology transitions |
 | H1 | `gke-acceptance-in-repo` | [operations.md](operations.md) § GKE acceptance in repo |
 | H1 | `reliable-soak-gate` | [operations.md](operations.md) § Reliable soak gate |
@@ -84,7 +84,7 @@ on.
 | Kubernetes operator and direct install | operations.md | shipped, limited | STATUS `k8s-deployment-assets`, `k8s-operator`, `kind-cluster-acceptance` |
 | Health, metrics, traces, and drain | operations.md | shipped | STATUS `standard-operational-endpoints`, `dispatch-metrics`, `bounded-soak` |
 | Relay performance ceiling | operations.md | shipped | STATUS `relay-performance-ceiling`, `competitor-feature-matrix` |
-| Declarative queues and request limits | operations.md | outcome | ROADMAP `declarative-queues-and-request-limits` |
+| Declarative queues | operations.md | outcome | ROADMAP `declarative-queues` |
 | GKE acceptance in repo | operations.md | outcome | ROADMAP `gke-acceptance-in-repo` |
 | Reliable soak gate | operations.md | outcome | ROADMAP `reliable-soak-gate` |
 | Sift observability integration | operations.md | outcome | ROADMAP `sift-observability-integration` |

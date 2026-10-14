@@ -56,6 +56,11 @@ spec:
                 - destination
                 - schedule
                 type: object
+              bodyLimitBytes:
+                default: 8388608
+                description: 'Data-plane request body size limit (bytes). Requests with `Content-Length` over it are rejected with 413; streamed bodies are bounded mid-read. Defaults to 8 MiB, the `defer serve` default (`DEFER_BODY_LIMIT_BYTES`, #18).'
+                type: integer
+                minimum: 0.0
               bootstrapSeedUri:
                 nullable: true
                 type: string

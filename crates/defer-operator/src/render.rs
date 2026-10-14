@@ -1,4 +1,4 @@
-// HANDWRITE-BEGIN gap="missing-generator:logic:defer-k8s-render" tracker="#766" reason="Defer-owned domain/env wiring over shared StatefulSet, Services, PDB, Secret projection, and CronJob renderers."
+// HANDWRITE-BEGIN gap="missing-generator:logic:defer-k8s-render" tracker="#766" reason="Defer-owned domain/env wiring (bind, Raft port, data dir, grace, body limit, log, auth, signing, peer mTLS) over shared StatefulSet, Services, PDB, Secret projection, and CronJob renderers."
 use serde_json::{json, Value};
 use service_k8s::render::{self, RenderCtx, ServiceStatefulSet, WorkloadVolumeClaim};
 
@@ -164,6 +164,7 @@ fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
         json!({"name": "DEFER_RAFT_PORT", "value": RAFT_PORT.to_string()}),
         json!({"name": "DEFER_DATA_DIR", "value": "/data"}),
         json!({"name": "DEFER_GRACE_SECS", "value": spec.grace_secs.to_string()}),
+        json!({"name": "DEFER_BODY_LIMIT_BYTES", "value": spec.body_limit_bytes.to_string()}),
         json!({"name": "DEFER_LOG_FORMAT", "value": "json"}),
     ];
     if let Some(level) = &spec.log_level {

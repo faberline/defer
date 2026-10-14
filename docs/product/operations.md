@@ -8,8 +8,7 @@ owns four outcomes.
 
 ## Grants, admission, and body limit
 
-- Problem: none open as shipped; the body limit on the custom resource is the
-  outcome below.
+- Problem: none open as shipped.
 - Who: operators exposing defer to more than one producer.
 - Promise: with `--auth required`, queue writes and task create or cancel
   need a write grant on the queue, reads need a read grant, dispatch and
@@ -17,11 +16,12 @@ owns four outcomes.
   reloads without restart and a malformed rotation keeps the last good
   registry; `DEFER_ADMISSION_*` enables bounded admission classified
   `defer.write`, `defer.read`, and `defer.admin` per bearer token;
-  `--body-limit-bytes` (default 8 MiB) refuses oversized data-plane bodies
-  with 413 before the scheduler sees them.
+  `--body-limit-bytes` (default 8 MiB), or `spec.bodyLimitBytes` on the
+  custom resource, refuses oversized data-plane bodies with 413 before the
+  scheduler sees them.
 - Limits today: grants are per queue name with no wildcard; `--auth off` is
-  the default; admission and the body limit are not exposed on the custom
-  resource.
+  the default; admission is not exposed on the custom resource; the body
+  limit is one value per instance.
 - Non-goals: per-task or per-target grants.
 - Neighbours: none; first section of the area.
 - Status rows: `per-queue-authorization`, `request-admission`,
@@ -40,9 +40,9 @@ owns four outcomes.
   opt-in NetworkPolicy and observability components; `defer k8s crd`,
   `operator`, and `instance render` emit every layer offline; the kind script
   proves pod replacement keeps the claim and the task state.
-- Limits today: `shardCount` is pinned to 1; the resource declares no queues
-  and no body limit; status carries no conditions; the kind run is manual
-  and single-voter; no GKE run lives in this repository.
+- Limits today: `shardCount` is pinned to 1; the resource declares no
+  queues; status carries no conditions; the kind run is manual and
+  single-voter; no GKE run lives in this repository.
 - Non-goals: an HPA; replicas are a replication decision, not a load
   decision.
 - Neighbours: projects the secrets from Grants, admission, and body limit
@@ -89,23 +89,22 @@ owns four outcomes.
 - Neighbours: none within the area.
 - Status rows: `relay-performance-ceiling`, `competitor-feature-matrix`.
 
-## Declarative queues and request limits
+## Declarative queues
 
 - Problem: a fresh install or a cold seed serves nothing until a client
-  `PUT`s a queue, and an operator-managed instance cannot set the body limit.
+  `PUT`s a queue.
 - Who: operators provisioning an instance from a manifest.
 - Promise: a `Defer` custom resource declares the queues an instance must
-  serve, each with policy and control state, and the request body limit;
-  declarations are proposed through Raft at start and reconciled on every
-  operator pass; the renderer forwards the limit as
-  `DEFER_BODY_LIMIT_BYTES`; queue creation over HTTP stays.
+  serve, each with policy and control state; declarations are proposed
+  through Raft at start and reconciled on every operator pass; queue creation
+  over HTTP stays.
 - Non-goals: writing queues into the data directory; deleting a queue the
   resource no longer lists.
 - Open: whether a declared policy overrides a later HTTP `PUT` on every
   reconcile or only on creation.
 - Neighbours: extends Kubernetes operator and direct install and
   [tasks-and-queues.md](tasks-and-queues.md) § Queue policy and control.
-- Outcome: `declarative-queues-and-request-limits`. Tracking: not assigned.
+- Outcome: `declarative-queues`. Tracking: not assigned.
 
 ## GKE acceptance in repo
 
@@ -120,7 +119,7 @@ owns four outcomes.
 - Open: whether the script is copied from the organisation workflow or
   rewritten against the kind script.
 - Neighbours: extends Kubernetes operator and direct install; depends on
-  Declarative queues and request limits so the instance serves a queue
+  Declarative queues so the instance serves a queue
   without a client `PUT`.
 - Outcome: `gke-acceptance-in-repo`. Tracking: not assigned.
 

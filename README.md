@@ -98,7 +98,7 @@ onto Cloud Tasks as follows.
 
 | Cloud Tasks concept | Defer today | Gap owner in ROADMAP |
 |---|---|---|
-| Queue | `PUT /v1/queues/{queue}` with `max_in_flight`, `max_dispatch_per_tick`, `max_dispatches_per_second`, `max_burst_size`, `lease_ttl_ms`, `retry_backoff_ms`; `GET` reads it back | `resource-listing-and-retention` adds list, purge, and delete; `declarative-queues-and-request-limits` declares queues on the custom resource |
+| Queue | `PUT /v1/queues/{queue}` with `max_in_flight`, `max_dispatch_per_tick`, `max_dispatches_per_second`, `max_burst_size`, `lease_ttl_ms`, `retry_backoff_ms`; `GET` reads it back | `resource-listing-and-retention` adds list, purge, and delete; `declarative-queues` declares queues on the custom resource |
 | Queue state | `POST /v1/queues/{queue}/control` with `Running`, `Paused`, or `Disabled` | None |
 | Task | `{task_id, schedule_at, priority?, target, payload, max_attempts?}`; `POST .../tasks` for one, `POST .../tasks:batch` for an atomic batch | None |
 | HTTP target | `target.url`, `target.method` (default `POST`), `target.headers`; the payload is the body | `cloud-identity-target-tokens` and `app-engine-targets` are non-goals |

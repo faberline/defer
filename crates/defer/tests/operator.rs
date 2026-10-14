@@ -212,6 +212,59 @@ fn generated_crd_is_structural_and_includes_backup_and_signing() {
     assert!(!yaml.contains("format: uint32"));
 }
 
+/// `k8s/operator/crd.yaml` is what `defer k8s crd render` emits without the
+/// `operator` feature, so it must stay byte-identical to the generator.
+#[test]
+fn committed_crd_matches_the_generator() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../k8s/operator/crd.yaml");
+    let committed = std::fs::read_to_string(path).unwrap();
+    let generated = format!("{}\n", operator::crd_yaml().trim_end_matches('\n'));
+    assert!(
+        committed == generated,
+        "k8s/operator/crd.yaml drifted; regenerate with \
+         `cargo run -p defer --features operator --bin defer -- k8s crd render --out k8s/operator`"
+    );
+}
+
+fn body_limit_env(spec_extra: Value) -> Value {
+    let mut spec = json!({
+        "image": "registry/defer:1",
+        "replicasPerShard": 3,
+        "voterCount": 3
+    });
+    spec.as_object_mut()
+        .unwrap()
+        .extend(spec_extra.as_object().unwrap().clone());
+    let defer: Defer = serde_json::from_value(json!({
+        "apiVersion": "defer.dev/v1alpha1",
+        "kind": "Defer",
+        "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+        "spec": spec
+    }))
+    .unwrap();
+    let objects = operator::render::render(&defer);
+    let stateful = object(&objects, "StatefulSet", "jobs");
+    named(
+        &stateful["spec"]["template"]["spec"]["containers"][0]["env"],
+        "DEFER_BODY_LIMIT_BYTES",
+    )
+    .clone()
+}
+
+/// #18: `spec.bodyLimitBytes` reaches the pod, and omitting it keeps the
+/// 8 MiB `defer serve` default.
+#[test]
+fn body_limit_bytes_reaches_the_pod_env() {
+    assert_eq!(
+        body_limit_env(json!({"bodyLimitBytes": 1_048_576}))["value"],
+        "1048576"
+    );
+    assert_eq!(
+        body_limit_env(json!({}))["value"],
+        (8 * 1024 * 1024).to_string()
+    );
+}
+
 /// GKE's managed Secrets Store add-on registers a different CSI driver name
 /// than the community default (#2456/#2457); an explicit
 /// `tokensSecretCsiDriver` must render that name on the pod volume.
