@@ -52,7 +52,6 @@ Boundaries that every section inherits:
 
 | Horizon | Outcome | Section |
 |---|---|---|
-| H1 | `write-path-error-envelope` | [tasks-and-queues.md](tasks-and-queues.md) § Write-path error envelope |
 | H1 | `declarative-queues-and-request-limits` | [operations.md](operations.md) § Declarative queues and request limits |
 | H1 | `live-topology-transitions` | [replication-and-availability.md](replication-and-availability.md) § Live topology transitions |
 | H1 | `gke-acceptance-in-repo` | [operations.md](operations.md) § GKE acceptance in repo |
@@ -62,8 +61,7 @@ Boundaries that every section inherits:
 | H2 | `capacity-policy` | [replication-and-availability.md](replication-and-availability.md) § Capacity policy |
 | H2 | `sift-observability-integration` | [operations.md](operations.md) § Sift observability integration |
 
-H1 is ordered by dependency, not by value: the error envelope first, because
-every later HTTP case asserts a status code; then declarative queues, which
+H1 is ordered by dependency, not by value: declarative queues first, which
 the kind and GKE runs need so a fresh instance serves something; then the
 topology and soak gates, which are the evidence the H2 capacity work builds
 on.
@@ -74,7 +72,6 @@ on.
 |---|---|---|---|
 | Scheduled tasks | tasks-and-queues.md | shipped, limited | STATUS `scheduled-eta`, `task-create-and-batch`, `task-status-and-cancel`, `dead-letter-terminal-state` |
 | Queue policy and control | tasks-and-queues.md | shipped | STATUS `queue-rate-and-concurrency`, `queue-pause-resume-disable` |
-| Write-path error envelope | tasks-and-queues.md | outcome | ROADMAP `write-path-error-envelope` |
 | Resource listing and retention | tasks-and-queues.md | outcome | ROADMAP `resource-listing-and-retention` |
 | Committed HTTP dispatch | dispatch-and-delivery.md | shipped, limited | STATUS `http-target-dispatch`, `target-method-and-headers`, `completion-on-2xx`, `at-least-once-retry`, `retry-policy`, `dispatch-fencing` |
 | Signed targets | dispatch-and-delivery.md | shipped | STATUS `target-signing` |

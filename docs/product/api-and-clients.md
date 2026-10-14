@@ -22,8 +22,7 @@ from it. This area is the README capability `api-cli-clients`.
 - Non-goals: a committed client package per language.
 - Neighbours: the listing operations from
   [tasks-and-queues.md](tasks-and-queues.md) § Resource listing and
-  retention and the status codes from § Write-path error envelope land in
-  this contract when those outcomes ship.
+  retention land in this contract when that outcome ships.
 - Status rows: `openapi-and-generated-clients`, `cli-surface`.
 
 ## Non-goals in this area
