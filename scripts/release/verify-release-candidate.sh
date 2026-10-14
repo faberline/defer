@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# Verify only a run-scoped release candidate of one shared-script app (sift,
-# keep, relay, defer). This script never creates a Git tag, GitHub Release,
-# semver/latest image tag, signature, or attestation. tape keeps its own
-# copies under apps/tape/scripts; the per-app facts here come from
-# scripts/release/apps.sh.
+# Verify only a run-scoped defer release candidate. This script never creates
+# a Git tag, GitHub Release, semver/latest image tag, signature, or
+# attestation. The release facts here come from scripts/release/apps.sh.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/release/apps.sh
@@ -11,7 +9,7 @@ source "$SCRIPT_DIR/apps.sh"
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: verify-release-candidate.sh --app <sift|keep|relay|defer> \
+Usage: verify-release-candidate.sh --app defer \
   --repo <owner/repo> --version <semver> --commit <40-hex> \
   --run-id <id> --run-attempt <attempt> \
   --manifest <path> --manifest-sidecar <path> --artifacts-dir <directory> \
@@ -221,7 +219,6 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$APP" ]] || usage
 release_app_require "$APP"
-release_app_uses_shared_scripts "$APP" || fail "$APP verifies with apps/$APP/scripts/verify-release-candidate.sh, not the shared verifier"
 [[ "$REPO" == "$RELEASE_REPO" ]] || fail "unsupported repository: $REPO"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail "invalid version or commit"
 [[ "$RUN_ID" =~ ^[0-9]+$ && "$RUN_ATTEMPT" =~ ^[0-9]+$ ]] || fail "invalid run identity"
