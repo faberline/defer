@@ -22,6 +22,7 @@ use raft_runtime::{
 };
 
 use super::command::{DeferCommand, DeferEnvelope, DeferOutcome, ProposalId};
+use super::error::{ProposeError, ProposeResult};
 use super::state_machine::DeferStateMachine;
 
 pub struct DeferRaft {
@@ -190,13 +191,13 @@ impl DeferRaft {
         &self,
         queue: String,
         policy: QueuePolicy,
-    ) -> Result<QueueSnapshot> {
+    ) -> ProposeResult<QueueSnapshot> {
         match self
             .propose(DeferCommand::ConfigureQueue { queue, policy })
             .await?
         {
             DeferOutcome::Queue(result) => Ok(result?),
-            other => anyhow::bail!("configure queue outcome mismatch: {other:?}"),
+            other => Err(mismatch("configure queue", other)),
         }
     }
 
@@ -204,13 +205,13 @@ impl DeferRaft {
         &self,
         queue: String,
         policy: QueuePolicy,
-    ) -> Result<QueueSnapshot> {
+    ) -> ProposeResult<QueueSnapshot> {
         match self
             .propose(DeferCommand::UpdateQueuePolicy { queue, policy })
             .await?
         {
             DeferOutcome::Queue(result) => Ok(result?),
-            other => anyhow::bail!("update queue outcome mismatch: {other:?}"),
+            other => Err(mismatch("update queue", other)),
         }
     }
 
@@ -218,33 +219,37 @@ impl DeferRaft {
         &self,
         queue: String,
         control: QueueControlState,
-    ) -> Result<QueueSnapshot> {
+    ) -> ProposeResult<QueueSnapshot> {
         match self
             .propose(DeferCommand::SetQueueControl { queue, control })
             .await?
         {
             DeferOutcome::Queue(result) => Ok(result?),
-            other => anyhow::bail!("queue control outcome mismatch: {other:?}"),
+            other => Err(mismatch("queue control", other)),
         }
     }
 
-    pub async fn create_task(&self, queue: String, task: CreateTask) -> Result<()> {
+    pub async fn create_task(&self, queue: String, task: CreateTask) -> ProposeResult<()> {
         match self
             .propose(DeferCommand::CreateTask { queue, task })
             .await?
         {
             DeferOutcome::Created(result) => Ok(result?),
-            other => anyhow::bail!("create task outcome mismatch: {other:?}"),
+            other => Err(mismatch("create task", other)),
         }
     }
 
-    pub async fn create_tasks(&self, queue: String, tasks: Vec<CreateTask>) -> Result<usize> {
+    pub async fn create_tasks(
+        &self,
+        queue: String,
+        tasks: Vec<CreateTask>,
+    ) -> ProposeResult<usize> {
         match self
             .propose(DeferCommand::CreateTasks { queue, tasks })
             .await?
         {
             DeferOutcome::CreatedBatch(result) => Ok(result?),
-            other => anyhow::bail!("create tasks outcome mismatch: {other:?}"),
+            other => Err(mismatch("create tasks", other)),
         }
     }
 
@@ -253,7 +258,7 @@ impl DeferRaft {
         queue: String,
         now: DateTime<Utc>,
         requested: usize,
-    ) -> Result<Vec<DispatchLease>> {
+    ) -> ProposeResult<Vec<DispatchLease>> {
         match self
             .propose(DeferCommand::LeaseDue {
                 queue,
@@ -264,7 +269,7 @@ impl DeferRaft {
             .await?
         {
             DeferOutcome::Leased(result) => Ok(result?),
-            other => anyhow::bail!("lease outcome mismatch: {other:?}"),
+            other => Err(mismatch("lease", other)),
         }
     }
 
@@ -274,7 +279,7 @@ impl DeferRaft {
         attempt_id: String,
         epoch: u64,
         now: DateTime<Utc>,
-    ) -> Result<bool> {
+    ) -> ProposeResult<bool> {
         match self
             .propose(DeferCommand::Ack {
                 queue,
@@ -286,7 +291,7 @@ impl DeferRaft {
             .await?
         {
             DeferOutcome::Acked(result) => Ok(result?),
-            other => anyhow::bail!("ack outcome mismatch: {other:?}"),
+            other => Err(mismatch("ack", other)),
         }
     }
 
@@ -296,7 +301,7 @@ impl DeferRaft {
         attempt_id: String,
         epoch: u64,
         now: DateTime<Utc>,
-    ) -> Result<Option<NackOutcome>> {
+    ) -> ProposeResult<Option<NackOutcome>> {
         match self
             .propose(DeferCommand::Nack {
                 queue,
@@ -308,7 +313,7 @@ impl DeferRaft {
             .await?
         {
             DeferOutcome::Nacked(result) => Ok(result?),
-            other => anyhow::bail!("nack outcome mismatch: {other:?}"),
+            other => Err(mismatch("nack", other)),
         }
     }
 
@@ -316,7 +321,7 @@ impl DeferRaft {
         &self,
         queue: String,
         attempts: Vec<AttemptSettlement>,
-    ) -> Result<Vec<SettlementOutcome>> {
+    ) -> ProposeResult<Vec<SettlementOutcome>> {
         match self
             .propose(DeferCommand::SettleBatch {
                 queue,
@@ -326,27 +331,31 @@ impl DeferRaft {
             .await?
         {
             DeferOutcome::Settled(result) => Ok(result?),
-            other => anyhow::bail!("settle batch outcome mismatch: {other:?}"),
+            other => Err(mismatch("settle batch", other)),
         }
     }
 
-    pub async fn reclaim_expired(&self, queue: String, now: DateTime<Utc>) -> Result<Vec<String>> {
+    pub async fn reclaim_expired(
+        &self,
+        queue: String,
+        now: DateTime<Utc>,
+    ) -> ProposeResult<Vec<String>> {
         match self
             .propose(DeferCommand::ReclaimExpired { queue, now })
             .await?
         {
             DeferOutcome::Reclaimed(result) => Ok(result?),
-            other => anyhow::bail!("reclaim outcome mismatch: {other:?}"),
+            other => Err(mismatch("reclaim", other)),
         }
     }
 
-    pub async fn cancel(&self, queue: String, task_id: String) -> Result<bool> {
+    pub async fn cancel(&self, queue: String, task_id: String) -> ProposeResult<bool> {
         match self
             .propose(DeferCommand::Cancel { queue, task_id })
             .await?
         {
             DeferOutcome::Canceled(result) => Ok(result?),
-            other => anyhow::bail!("cancel outcome mismatch: {other:?}"),
+            other => Err(mismatch("cancel", other)),
         }
     }
 
@@ -375,5 +384,8 @@ impl DeferRaft {
         self.sm.snapshot(&mut buf)?;
         Ok(buf)
     }
+}
+fn mismatch(operation: &str, outcome: DeferOutcome) -> ProposeError {
+    anyhow::anyhow!("{operation} outcome mismatch: {outcome:?}").into()
 }
 // HANDWRITE-END
