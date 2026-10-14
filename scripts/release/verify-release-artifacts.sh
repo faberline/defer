@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Verify a promotion of one shared-script app (sift, keep, relay, defer). This
-# script never creates or changes a tag, image, release, signature,
-# provenance, or attestation. tape keeps its own copies under
-# apps/tape/scripts; the per-app facts here come from scripts/release/apps.sh.
+# Verify a defer promotion. This script never creates or changes a tag, image,
+# release, signature, provenance, or attestation. The release facts here come
+# from scripts/release/apps.sh.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/release/apps.sh
@@ -10,7 +9,7 @@ source "$SCRIPT_DIR/apps.sh"
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: verify-release-artifacts.sh --app <sift|keep|relay|defer> \
+Usage: verify-release-artifacts.sh --app defer \
      --repo <owner/repo> --tag <app@semver> --commit <40-hex> \
      --candidate-run-id <id> --candidate-run-attempt <attempt> \
      --mode <candidate|fixture|public> \
@@ -376,7 +375,6 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$APP" ]] || usage
 release_app_require "$APP"
-release_app_uses_shared_scripts "$APP" || fail "$APP verifies with apps/$APP/scripts/verify-release-artifacts.sh, not the shared verifier"
 RECEIPT_NAME="$(release_app_receipt_name "$APP")"
 [[ "$REPO" == "$RELEASE_REPO" && "$TAG" =~ ^${APP}@[0-9]+\.[0-9]+\.[0-9]+$ && "$COMMIT" =~ ^[0-9a-f]{40}$ && "$CANDIDATE_RUN_ID" =~ ^[0-9]+$ && "$CANDIDATE_RUN_ATTEMPT" =~ ^[0-9]+$ ]] || fail "invalid promotion identity"
 [[ "$MODE" == candidate || "$MODE" == fixture || "$MODE" == public ]] || usage
