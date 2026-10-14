@@ -15,22 +15,18 @@ custom resource and the shared Raft runtime carry the state they need.
 
 ## Near-term outcomes
 
-### Declarative queues and request limits
+### Declarative queues
 
-- ID: `declarative-queues-and-request-limits`
+- ID: `declarative-queues`
 - Outcome: A `Defer` custom resource declares the queues an instance must
-  serve, each with its policy and control state, and the request body limit,
-  so an operator never has to `PUT` a queue after a fresh install or a cold
-  seed.
+  serve, each with its policy and control state, so an operator never has to
+  `PUT` a queue after a fresh install or a cold seed.
 - Boundary: Queue declarations are proposed through Raft at start, not
-  written into the data directory. The CRD exposes `--body-limit-bytes`
-  as a spec field that the renderer forwards as `DEFER_BODY_LIMIT_BYTES`.
-  Queue creation over HTTP stays, and a declared queue is reconciled on
-  every operator pass instead of only once.
+  written into the data directory. Queue creation over HTTP stays, and a
+  declared queue is reconciled on every operator pass instead of only once.
 - Completion evidence: The operator render case proves the forwarded
-  environment, the kind script proves a declared queue exists after the pod
-  is replaced without any `PUT`, and a live case proves the configured body
-  limit answers 413.
+  declarations, and the kind script proves a declared queue exists after the
+  pod is replaced without any `PUT`.
 - Tracking: Not assigned.
 
 ### Live topology transitions

@@ -27,6 +27,12 @@ pub struct DeferSpec {
     pub grace_secs: u64,
     #[serde(default)]
     pub log_level: Option<String>,
+    /// Data-plane request body size limit (bytes). Requests with
+    /// `Content-Length` over it are rejected with 413; streamed bodies are
+    /// bounded mid-read. Defaults to 8 MiB, the `defer serve` default
+    /// (`DEFER_BODY_LIMIT_BYTES`, #18).
+    #[serde(default = "default_body_limit_bytes")]
+    pub body_limit_bytes: u64,
     #[serde(default = "default_auth")]
     pub auth: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -87,6 +93,9 @@ fn default_storage() -> String {
 }
 fn default_grace_secs() -> u64 {
     10
+}
+fn default_body_limit_bytes() -> u64 {
+    8 * 1024 * 1024
 }
 fn default_auth() -> String {
     "off".into()

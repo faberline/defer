@@ -44,7 +44,7 @@ H2 outcome.
   after a long idle can dispatch one full burst; control is per queue, with
   no instance-wide pause.
 - Non-goals: queue declarations on the custom resource are
-  [operations.md](operations.md) § Declarative queues and request limits.
+  [operations.md](operations.md) § Declarative queues.
 - Neighbours: Scheduled tasks consumes the permits this section defines.
 - Status rows: `queue-rate-and-concurrency`, `queue-pause-resume-disable`.
 
