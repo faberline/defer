@@ -5,5 +5,7 @@
 pub mod peer_tls;
 pub mod raft;
 
-pub use raft::{DeferCommand, DeferOutcome, DeferRaft, DeferStateMachine};
+pub use raft::{
+    DeferCommand, DeferOutcome, DeferRaft, DeferStateMachine, ProposeError, ProposeResult,
+};
 // HANDWRITE-END

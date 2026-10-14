@@ -635,5 +635,102 @@ async fn undersized_task_body_succeeds() {
         .unwrap();
     assert_eq!(status["status"], "Scheduled");
 }
+
+async fn assert_api_error(response: reqwest::Response, status: StatusCode, kind: &str) {
+    assert_eq!(response.status(), status);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["error"], kind, "unexpected error envelope: {body}");
+}
+
+fn task_body(task_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "task_id": task_id,
+        "target": {"url": "http://127.0.0.1/", "method": "POST", "headers": {}},
+        "payload": {},
+        "schedule_at": Utc::now() + chrono::Duration::minutes(5),
+        "priority": 10,
+        "max_attempts": 1
+    })
+}
+
+/// faberline/defer#19: write paths map a committed `SchedulerError` to its
+/// typed status instead of 500.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn write_paths_return_typed_scheduler_errors() {
+    let (_dir, raft) = raft().await;
+    let (url, _server) = start(raft, AuthConfig::open()).await;
+    let client = http1_client();
+
+    let missing = client
+        .post(format!("{url}/v1/queues/missing/tasks"))
+        .json(&task_body("t"))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(missing, StatusCode::NOT_FOUND, "not_found").await;
+    let missing = client
+        .post(format!("{url}/v1/queues/missing/tasks:batch"))
+        .json(&serde_json::json!({"tasks": [task_body("t")]}))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(missing, StatusCode::NOT_FOUND, "not_found").await;
+    let missing = client
+        .post(format!("{url}/v1/queues/missing/control"))
+        .json(&serde_json::json!({"state": "Paused"}))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(missing, StatusCode::NOT_FOUND, "not_found").await;
+    let missing = client
+        .delete(format!("{url}/v1/queues/missing/tasks/t"))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(missing, StatusCode::NOT_FOUND, "not_found").await;
+
+    client
+        .put(format!("{url}/v1/queues/jobs"))
+        .json(&QueuePolicy::default())
+        .send()
+        .await
+        .unwrap();
+    let created = client
+        .post(format!("{url}/v1/queues/jobs/tasks"))
+        .json(&task_body("dup"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let duplicate = client
+        .post(format!("{url}/v1/queues/jobs/tasks"))
+        .json(&task_body("dup"))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(duplicate, StatusCode::CONFLICT, "conflict").await;
+    let duplicate = client
+        .post(format!("{url}/v1/queues/jobs/tasks:batch"))
+        .json(&serde_json::json!({"tasks": [task_body("dup")]}))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(duplicate, StatusCode::CONFLICT, "conflict").await;
+
+    let disabled = client
+        .post(format!("{url}/v1/queues/jobs/control"))
+        .json(&serde_json::json!({"state": "Disabled"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(disabled.status(), StatusCode::OK);
+    let refused = client
+        .post(format!("{url}/v1/queues/jobs/tasks"))
+        .json(&task_body("after-disable"))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(refused, StatusCode::CONFLICT, "queue_disabled").await;
+}
 // </HANDWRITE>
 // HANDWRITE-END
