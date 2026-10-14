@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# build-release step 3 for one app: dispatch <app>-release-candidate.yml from
+# Release step 3: dispatch <app>-release-candidate.yml from
 # main at the exact landed commit, watch it to a terminal state, and download
 # the run-scoped candidate bundle. This script never tags, never promotes,
 # and never rebuilds; the candidate workflow owns build, image, attestation,
 # and the final manifest.
 #
 # usage: scripts/release/candidate.sh <app> <version> <commit> [--out <dir>]
-#   app      one of: tape sift keep relay defer
+#   app      defer (the only app scripts/release/apps.sh knows)
 #   version  X.Y.Z, equal to Cargo.toml at <commit>
 #   commit   40-hex sha; must be the head of origin/main (the workflow's
 #            identity job requires the dispatched commit to equal GITHUB_SHA)
