@@ -2,14 +2,13 @@
 
 A queue is a named policy plus a control state; a task is one future HTTP
 request with a terminal outcome. This area is the README capabilities
-`scheduled-task-lifecycle` and `queue-controls-and-limits`, and it owns the
-first H1 outcome, because every later HTTP case asserts a status code the
-write path does not yet return.
+`scheduled-task-lifecycle` and `queue-controls-and-limits`, and it owns one
+H2 outcome.
 
 ## Scheduled tasks
 
-- Problem: none open as shipped; the limits below are what the next two
-  sections close.
+- Problem: none open as shipped; the listing limit below is what
+  § Resource listing and retention closes.
 - Who: producers creating work for later; operators reading task state.
 - Promise: `POST /v1/queues/{queue}/tasks` creates one task and
   `POST .../tasks:batch` creates an atomic batch, each with `task_id`,
@@ -19,11 +18,11 @@ write path does not yet return.
   passed, higher priority first and creation order within a priority;
   `GET .../tasks/{task_id}` reads `Scheduled`, `Leased` with executor and
   epoch, `Succeeded`, `DeadLettered`, or `Canceled`; `DELETE` cancels a
-  scheduled or leased task; a dead-lettered task stays readable.
-- Limits today: a refused create or a cancel against a missing queue answers
-  500 instead of the 409 or 404 the OpenAPI document declares; there is no
-  listing, purge, or retention, so terminal records stay in every snapshot;
-  ETA resolution is the dispatch tick.
+  scheduled or leased task; a dead-lettered task stays readable; a refusal
+  answers the shared error envelope with 404 for a missing queue or task and
+  409 for a duplicate id or a disabled queue.
+- Limits today: there is no listing, purge, or retention, so terminal
+  records stay in every snapshot; ETA resolution is the dispatch tick.
 - Non-goals: nothing beyond the single-task model is promised by this
   section.
 - Neighbours: none; first section of the area.
@@ -48,22 +47,6 @@ write path does not yet return.
   [operations.md](operations.md) § Declarative queues and request limits.
 - Neighbours: Scheduled tasks consumes the permits this section defines.
 - Status rows: `queue-rate-and-concurrency`, `queue-pause-resume-disable`.
-
-## Write-path error envelope
-
-- Problem: a producer cannot tell a duplicate id from a crashed node, because
-  both answer 500.
-- Who: producers and generated clients that branch on status.
-- Promise: a scheduler refusal on task create, batch create, cancel, or queue
-  control answers with the shared error envelope and the status the OpenAPI
-  document already declares: 404 for a missing queue or task, 409 for a
-  duplicate id or a disabled queue, never 500.
-- Non-goals: no new error kinds; read routes already map correctly and do not
-  change.
-- Open: none.
-- Neighbours: narrows the limit of Scheduled tasks; every later HTTP case in
-  this directory depends on it.
-- Outcome: `write-path-error-envelope`. Tracking: not assigned.
 
 ## Resource listing and retention
 

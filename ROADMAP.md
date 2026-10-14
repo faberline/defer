@@ -15,22 +15,6 @@ custom resource and the shared Raft runtime carry the state they need.
 
 ## Near-term outcomes
 
-### Write-path error envelope
-
-- ID: `write-path-error-envelope`
-- Outcome: A scheduler refusal on task create, batch create, cancel, or queue
-  control answers with the shared error envelope and the status the OpenAPI
-  document already declares: 404 for a missing queue or task, 409 for a
-  duplicate task id or a disabled queue, never 500.
-- Boundary: The refusal set stays the current `SchedulerError` variants; this
-  outcome changes only how the HTTP layer maps a committed refusal. Read
-  routes already map correctly and do not change. No new error kinds are
-  added.
-- Completion evidence: The live HTTP API case proves each refusal status over
-  HTTP/1.1 and h2c, the served OpenAPI document declares every status the
-  handlers return, and the generated clients type the envelope.
-- Tracking: Not assigned.
-
 ### Declarative queues and request limits
 
 - ID: `declarative-queues-and-request-limits`

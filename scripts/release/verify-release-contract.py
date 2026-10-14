@@ -126,6 +126,7 @@ STANDALONE_GATES = (
     "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
     "cargo test --locked --workspace",
     "cargo test --locked -p defer --features operator --test operator",
+    "python3 -B scripts/meta/project_docs_contract.py check .",
 )
 
 
