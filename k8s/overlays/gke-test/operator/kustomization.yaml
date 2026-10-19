@@ -1,0 +1,72 @@
+# The shipped operator layer, fitted to the shared test cluster: in the run's
+# namespace instead of defer-system, on pool-defer-server, pulling the image
+# under test with ghcr-pull, one replica, one pod per node, and requests
+# without limits.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: defer
+
+resources:
+  - ../../../operator
+
+patches:
+  # Cluster-scoped, so they outlive the namespace. aw's teardown and reaper
+  # delete cluster RBAC by this label.
+  - target:
+      group: rbac.authorization.k8s.io
+      kind: ClusterRole|ClusterRoleBinding
+      name: defer-operator
+    patch: |-
+      - op: add
+        path: /metadata/labels
+        value:
+          faberline.dev/owner-namespace: defer
+  # run.sh creates the namespace `defer` itself and rejects any other
+  # Namespace object.
+  - patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: defer-system
+  - target:
+      kind: Deployment
+      name: defer-operator
+    patch: |-
+      # pool-defer-server has at most 2 nodes: one for the operator, one for
+      # defer-0.
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      # The base names a local tag; the overlay's images entry sets the image
+      # under test.
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: ghcr.io/faberline/defer:REPLACE_ME
+      - op: add
+        path: /spec/template/spec/nodeSelector
+        value:
+          faberline.dev/pool: defer-server
+      - op: add
+        path: /spec/template/spec/tolerations
+        value:
+          - key: faberline.dev/pool
+            operator: Equal
+            value: defer-server
+            effect: NoSchedule
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: ghcr-pull
+      # One pod per node. The empty selector matches every pod of the
+      # namespace, so defer-0 never shares a node with the operator.
+      - op: add
+        path: /spec/template/spec/affinity
+        value:
+          podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              - topologyKey: kubernetes.io/hostname
+                labelSelector: {}
+      - op: remove
+        path: /spec/template/spec/containers/0/resources/limits

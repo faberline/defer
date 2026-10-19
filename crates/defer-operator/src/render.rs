@@ -125,7 +125,7 @@ fn backup_cron_job(defer: &Defer, cx: &RenderCtx<'_>) -> Option<Value> {
         .image_pull_policy
         .as_deref()
         .unwrap_or("IfNotPresent");
-    Some(render::cron_job(render::CronJob {
+    let mut cron = render::cron_job(render::CronJob {
         cx,
         name: &cron_name,
         component: BACKUP_COMPONENT,
@@ -143,7 +143,12 @@ fn backup_cron_job(defer: &Defer, cx: &RenderCtx<'_>) -> Option<Value> {
         memory: "128Mi",
         successful_jobs_history_limit: 3,
         failed_jobs_history_limit: 3,
-    }))
+    });
+    apply_pod_placement(
+        &mut cron["spec"]["jobTemplate"]["spec"]["template"]["spec"],
+        defer,
+    );
+    Some(cron)
 }
 
 fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
@@ -223,7 +228,7 @@ fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
         ]);
     }
 
-    render::service_statefulset(ServiceStatefulSet {
+    let mut sts = render::service_statefulset(ServiceStatefulSet {
         cx,
         name: cx.name,
         component: COMPONENT,
@@ -274,8 +279,8 @@ fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
         volumes,
         volume_mounts: mounts,
         affinity: Some(render::dedicated_node_affinity(cx.selector(COMPONENT))),
-        node_selector: None,
-        tolerations: vec![],
+        node_selector: placement_node_selector(defer),
+        tolerations: placement_tolerations(defer),
         topology_spread_constraints: vec![],
         revision_history_limit: Some(5),
         update_strategy: Some(json!({"type": "RollingUpdate"})),
@@ -285,6 +290,51 @@ fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
             mount_path: "/data",
             read_only: false,
         }),
-    })
+    });
+    set_image_pull_secrets(&mut sts["spec"]["template"]["spec"], defer);
+    sts
+}
+
+/// `spec.placement.nodeSelector` as a pod `nodeSelector`, or `None` when the
+/// CR names no node labels.
+fn placement_node_selector(defer: &Defer) -> Option<Value> {
+    defer
+        .spec
+        .placement
+        .as_ref()
+        .filter(|p| !p.node_selector.is_empty())
+        .map(|p| json!(p.node_selector))
+}
+
+/// `spec.placement.tolerations` as pod `tolerations`.
+fn placement_tolerations(defer: &Defer) -> Vec<Value> {
+    defer
+        .spec
+        .placement
+        .iter()
+        .flat_map(|p| &p.tolerations)
+        .map(|t| json!(t))
+        .collect()
+}
+
+/// Copy `spec.imagePullSecrets` into a rendered pod spec. Leaves the pod spec
+/// untouched when the CR names none.
+fn set_image_pull_secrets(pod_spec: &mut Value, defer: &Defer) {
+    if !defer.spec.image_pull_secrets.is_empty() {
+        pod_spec["imagePullSecrets"] = json!(defer.spec.image_pull_secrets);
+    }
+}
+
+/// Apply all of `spec.placement` and `spec.imagePullSecrets` to a pod spec
+/// rendered without them (the backup CronJob's job template).
+fn apply_pod_placement(pod_spec: &mut Value, defer: &Defer) {
+    if let Some(selector) = placement_node_selector(defer) {
+        pod_spec["nodeSelector"] = selector;
+    }
+    let tolerations = placement_tolerations(defer);
+    if !tolerations.is_empty() {
+        pod_spec["tolerations"] = json!(tolerations);
+    }
+    set_image_pull_secrets(pod_spec, defer);
 }
 // HANDWRITE-END

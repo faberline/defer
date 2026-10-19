@@ -1,0 +1,36 @@
+# defer on Faberline's shared GKE test cluster (faberline-test), for the
+# cluster e2e suites in crates/defer/tests/it/e2e/ (faberline/aw
+# docs/standards/test-cluster.md).
+#
+# faberline/aw's gke-test workflow renders this overlay, sets the image under
+# test with `kustomize edit set image ghcr.io/faberline/defer=<image>`, applies
+# the CRD first and then everything else in the namespace `defer`, waits for
+# the operator rollout, and runs one suite's Job from k8s/gke-test-job/<suite>.
+#
+# What it deploys: the shipped operator layer (../../operator, moved from
+# defer-system into defer) and one Defer CR, `defer`, that the operator turns
+# into StatefulSet/defer, Service/defer (:7141), and the pod defer-0.
+#
+# Every pod runs on pool-defer-server, one pod per node: the operator replica
+# here and defer-0 through the CR's spec.placement. The pool has at most 2
+# nodes, so the operator runs 1 replica. aw's infra/gke-test/pools.yaml owns
+# the pools; nothing here creates cloud resources.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: defer
+
+resources:
+  - operator
+  - defer-cr.yaml
+
+# `kustomize edit set image` also rewrites the CR's spec.image, so the
+# operator and the server it renders run the same image.
+configurations:
+  - kustomizeconfig.yaml
+
+# The workflow replaces REPLACE_ME with the image under test. run.sh fails a
+# render that still has it.
+images:
+  - name: ghcr.io/faberline/defer
+    newTag: REPLACE_ME

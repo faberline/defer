@@ -3,6 +3,9 @@ pub mod crd;
 pub mod reconcile;
 pub mod render;
 
-pub use crd::{crd_yaml, Defer, DeferBackupSpec, DeferSpec, DeferStatus};
+pub use crd::{
+    crd_yaml, Defer, DeferBackupSpec, DeferPlacement, DeferSpec, DeferStatus, LocalObjectReference,
+    Toleration,
+};
 pub use reconcile::run;
 // HANDWRITE-END
