@@ -1,0 +1,34 @@
+# The Defer instance the e2e suites test: one replica, so the operator renders
+# StatefulSet/defer with the single pod defer-0 and its PVC data-defer-0. The
+# suites reach it at http://defer:7141.
+apiVersion: defer.dev/v1alpha1
+kind: Defer
+metadata:
+  name: defer
+spec:
+  # Set by the workflow through ../kustomizeconfig.yaml.
+  image: ghcr.io/faberline/defer:REPLACE_ME
+  imagePullPolicy: IfNotPresent
+  shardCount: 1
+  replicasPerShard: 1
+  voterCount: 1
+  storage: 1Gi
+  graceSecs: 1
+  logLevel: info
+  # Stated, not omitted: the suites test the PVC-retained queue state, not
+  # auth.
+  auth: "off"
+  # Small enough to share an e2-standard-4 with the node's system pods.
+  resources:
+    cpu: 250m
+    memory: 512Mi
+  imagePullSecrets:
+    - name: ghcr-pull
+  placement:
+    nodeSelector:
+      faberline.dev/pool: defer-server
+    tolerations:
+      - key: faberline.dev/pool
+        operator: Equal
+        value: defer-server
+        effect: NoSchedule

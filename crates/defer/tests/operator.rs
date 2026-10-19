@@ -226,6 +226,98 @@ fn committed_crd_matches_the_generator() {
     );
 }
 
+fn placed(placement: Value, pull_secrets: Value) -> Defer {
+    let mut defer = production();
+    defer.spec.placement = serde_json::from_value(placement).unwrap();
+    defer.spec.image_pull_secrets = serde_json::from_value(pull_secrets).unwrap();
+    defer
+}
+
+/// `spec.placement` and `spec.imagePullSecrets` reach every operator-rendered
+/// pod: the serving StatefulSet and the backup CronJob. The one-pod-per-node
+/// anti-affinity stays.
+#[test]
+fn placement_and_pull_secrets_reach_every_rendered_pod() {
+    let defer = placed(
+        json!({
+            "nodeSelector": {"faberline.dev/pool": "defer-server"},
+            "tolerations": [{
+                "key": "faberline.dev/pool",
+                "operator": "Equal",
+                "value": "defer-server",
+                "effect": "NoSchedule"
+            }]
+        }),
+        json!([{"name": "ghcr-pull"}]),
+    );
+    let objects = operator::render::render(&defer);
+    let stateful = &object(&objects, "StatefulSet", "jobs")["spec"]["template"]["spec"];
+    let cron = &object(&objects, "CronJob", "jobs-backup")["spec"]["jobTemplate"]["spec"]
+        ["template"]["spec"];
+    for pod in [stateful, cron] {
+        assert_eq!(
+            pod["nodeSelector"],
+            json!({"faberline.dev/pool": "defer-server"})
+        );
+        assert_eq!(
+            pod["tolerations"],
+            json!([{
+                "key": "faberline.dev/pool",
+                "operator": "Equal",
+                "value": "defer-server",
+                "effect": "NoSchedule"
+            }])
+        );
+        assert_eq!(pod["imagePullSecrets"], json!([{"name": "ghcr-pull"}]));
+    }
+    assert!(
+        stateful["affinity"]["podAntiAffinity"].is_object(),
+        "placement must not replace the operator-owned anti-affinity"
+    );
+}
+
+/// Without `spec.placement` or `spec.imagePullSecrets` the pods carry none of
+/// those fields, the previous behavior.
+#[test]
+fn no_placement_renders_no_selector_tolerations_or_pull_secrets() {
+    let objects = operator::render::render(&production());
+    let stateful = &object(&objects, "StatefulSet", "jobs")["spec"]["template"]["spec"];
+    let cron = &object(&objects, "CronJob", "jobs-backup")["spec"]["jobTemplate"]["spec"]
+        ["template"]["spec"];
+    for pod in [stateful, cron] {
+        assert!(pod.get("nodeSelector").is_none_or(Value::is_null), "{pod}");
+        assert!(
+            pod.get("tolerations")
+                .is_none_or(|t| t.as_array().is_some_and(Vec::is_empty)),
+            "{pod}"
+        );
+        assert!(pod.get("imagePullSecrets").is_none(), "{pod}");
+    }
+}
+
+/// An empty placement block is the same as none.
+#[test]
+fn empty_placement_renders_no_selector() {
+    let objects = operator::render::render(&placed(json!({}), json!([])));
+    let stateful = &object(&objects, "StatefulSet", "jobs")["spec"]["template"]["spec"];
+    assert!(stateful.get("nodeSelector").is_none_or(Value::is_null));
+    assert!(stateful.get("imagePullSecrets").is_none());
+}
+
+#[test]
+fn generated_crd_carries_placement_and_pull_secrets() {
+    let yaml = operator::crd_yaml();
+    for field in [
+        "placement:",
+        "nodeSelector:",
+        "tolerations:",
+        "tolerationSeconds:",
+        "imagePullSecrets:",
+    ] {
+        assert!(yaml.contains(field), "CRD is missing {field}");
+    }
+}
+
 fn body_limit_env(spec_extra: Value) -> Value {
     let mut spec = json!({
         "image": "registry/defer:1",
