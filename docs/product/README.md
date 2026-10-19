@@ -62,7 +62,7 @@ Boundaries that every section inherits:
 | H2 | `sift-observability-integration` | [operations.md](operations.md) § Sift observability integration |
 
 H1 is ordered by dependency, not by value: declarative queues first, which
-the kind and GKE runs need so a fresh instance serves something; then the
+the GKE runs need so a fresh instance serves something; then the
 topology and soak gates, which are the evidence the H2 capacity work builds
 on.
 
@@ -81,7 +81,7 @@ on.
 | Live topology transitions | replication-and-availability.md | outcome | ROADMAP `live-topology-transitions` |
 | Capacity policy | replication-and-availability.md | outcome | ROADMAP `capacity-policy` |
 | Grants, admission, and body limit | operations.md | shipped, limited | STATUS `per-queue-authorization`, `request-admission`, `request-body-limit` |
-| Kubernetes operator and direct install | operations.md | shipped, limited | STATUS `k8s-deployment-assets`, `k8s-operator`, `kind-cluster-acceptance` |
+| Kubernetes operator and direct install | operations.md | shipped, limited | STATUS `k8s-deployment-assets`, `k8s-operator`, `gke-operator-acceptance` |
 | Health, metrics, traces, and drain | operations.md | shipped | STATUS `standard-operational-endpoints`, `dispatch-metrics`, `bounded-soak` |
 | Relay performance ceiling | operations.md | shipped | STATUS `relay-performance-ceiling`, `competitor-feature-matrix` |
 | Declarative queues | operations.md | outcome | ROADMAP `declarative-queues` |
