@@ -1,6 +1,6 @@
 # GKE e2e suite `operator_recovery` (crates/defer/tests/it/e2e/operator_recovery.rs):
 # the Defer CR `defer` reconciled by the shipped operator, reached at
-# http://defer:7141. It replaces scripts/kind-e2e.sh.
+# http://defer:7141.
 #
 # faberline/aw's run.sh deploys k8s/overlays/gke-test, waits for the operator
 # rollout, sets this folder's namespace and test image, adds the ConfigMap

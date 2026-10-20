@@ -38,18 +38,19 @@ owns four outcomes.
   target signing, and peer TLS secrets, and reports phase and ready
   replicas; the direct-install base is a restricted durable singleton with
   opt-in NetworkPolicy and observability components; `defer k8s crd`,
-  `operator`, and `instance render` emit every layer offline; the kind script
-  proves pod replacement keeps the claim and the task state.
+  `operator`, and `instance render` emit every layer offline; the GKE
+  `operator_recovery` suite proves pod replacement keeps the claim and the
+  task state.
 - Limits today: `shardCount` is pinned to 1; the resource declares no
-  queues; status carries no conditions; the kind run is manual and
-  single-voter; no GKE run lives in this repository.
+  queues; status carries no conditions; the GKE run is
+  single-voter on a shared cluster.
 - Non-goals: an HPA; replicas are a replication decision, not a load
   decision.
 - Neighbours: projects the secrets from Grants, admission, and body limit
   and [dispatch-and-delivery.md](dispatch-and-delivery.md) § Signed
   targets.
 - Status rows: `k8s-deployment-assets`, `k8s-operator`,
-  `kind-cluster-acceptance`.
+  `gke-operator-acceptance`.
 
 ## Health, metrics, traces, and drain
 
@@ -108,8 +109,9 @@ owns four outcomes.
 
 ## GKE acceptance in repo
 
-- Problem: the only paid acceptance workflow lives outside this repository,
-  so a release cannot cite a run next to the code it proves.
+- Problem: the in-repo GKE suite runs on a shared test cluster that this
+  repository does not provision, so a release cannot cite a dedicated-cluster
+  run next to the code it proves.
 - Who: release owners.
 - Promise: this repository carries the script and expected readback for a
   manual, paid run of the operator path on a zonal GKE Standard cluster that
@@ -117,7 +119,7 @@ owns four outcomes.
   pod, and tears the cluster down; the run never joins the default test set.
 - Non-goals: an unpaid or automatic GKE gate.
 - Open: whether the script is copied from the organisation workflow or
-  rewritten against the kind script.
+  built on the `gke-test` workflow.
 - Neighbours: extends Kubernetes operator and direct install; depends on
   Declarative queues so the instance serves a queue
   without a client `PUT`.
@@ -145,7 +147,8 @@ owns four outcomes.
 - Who: operators watching lease loss, dead-lettering, and leader changes.
 - Promise: defer's request, dispatch, and Raft metrics and traces land in
   Sift with a shipped dashboard and alert pack; the pack imports against a
-  live instance and its alerts fire in a kind run that forces lease loss.
+  live instance and its alerts fire in a GKE test-cluster run that forces
+  lease loss.
 - Non-goals: a new exporter; defer keeps Prometheus text and OTLP.
 - Open: the resource-attribute contract Sift expects from defer.
 - Neighbours: extends Health, metrics, traces, and drain.

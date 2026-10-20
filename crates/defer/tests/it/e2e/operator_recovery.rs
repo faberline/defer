@@ -1,9 +1,8 @@
 //! Suite `operator_recovery`: the Defer CR `defer` of k8s/overlays/gke-test,
 //! reconciled by the shipped operator into StatefulSet/defer and its one pod
-//! defer-0. It replaces the checks of scripts/kind-e2e.sh: the operator
-//! renders the expected topology on the placed pool, the image under test
-//! runs in every pod, and the queue and task state survives the replacement
-//! of the serving pod with its PVC kept.
+//! defer-0. It checks that the operator renders the expected topology on the
+//! placed pool, the image under test runs in every pod, and the queue and
+//! task state survives the replacement of the serving pod with its PVC kept.
 
 use std::time::Duration;
 
@@ -67,8 +66,8 @@ fn operator_renders_the_placed_topology() {
     let capacity = pvc["status"]["capacity"]["storage"]
         .as_str()
         .unwrap_or_default();
-    // kind's local-path provisioner gives exactly 1Gi; a cloud disk may round
-    // up, so the floor is the contract.
+    // A local-path provisioner gives exactly 1Gi; a cloud disk may round up,
+    // so the floor is the contract.
     assert!(
         gibibytes(capacity).is_some_and(|gi| gi >= 1),
         "PVC {PVC} capacity {capacity:?} is under the requested 1Gi"

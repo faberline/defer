@@ -25,7 +25,7 @@ custom resource and the shared Raft runtime carry the state they need.
   written into the data directory. Queue creation over HTTP stays, and a
   declared queue is reconciled on every operator pass instead of only once.
 - Completion evidence: The operator render case proves the forwarded
-  declarations, and the kind script proves a declared queue exists after the
+  declarations, and the GKE e2e suite proves a declared queue exists after the
   pod is replaced without any `PUT`.
 - Tracking: Not assigned.
 
@@ -52,9 +52,9 @@ custom resource and the shared Raft runtime carry the state they need.
   cluster, so a release can cite a run that lives next to the code it
   proves.
 - Boundary: The run is manual and paid; it never joins the default test
-  set. The organisation-level acceptance workflow that exists today is
-  outside this repository and is not a STATUS gate until it is mirrored
-  here.
+  set. The `gke-test` workflow already runs the `operator_recovery` suite
+  on the shared test cluster as the STATUS gate `gke-operator-acceptance`;
+  it provisions no cluster of its own.
 - Completion evidence: The script provisions, deploys, runs the queue and
   task smoke sequence, replaces a pod, and tears the cluster down, and the
   release notes cite one passing run with its date.
@@ -119,7 +119,7 @@ custom resource and the shared Raft runtime carry the state they need.
   across shards or move queues. Volume growth follows the storage class's
   expansion support and is never destructive.
 - Completion evidence: The operator render case proves the derived
-  resources and claim size, and the kind script proves a resized claim
+  resources and claim size, and the GKE e2e suite proves a resized claim
   stays bound through pod replacement.
 - Tracking: Not assigned.
 
@@ -134,8 +134,8 @@ custom resource and the shared Raft runtime carry the state they need.
   is the dashboard, alert, and resource-attribute contract, not a new
   exporter.
 - Completion evidence: A documented import of the pack renders the panels
-  against a live instance, and the alert rules fire in a kind run that
-  forces lease loss.
+  against a live instance, and the alert rules fire in a GKE test-cluster
+  run that forces lease loss.
 - Tracking: Not assigned.
 
 ## Non-goals

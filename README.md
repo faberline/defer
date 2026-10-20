@@ -286,7 +286,8 @@ its direct contribution.
   projected token, signing, and peer TLS secrets, and report phase and ready
   replicas in status; ship a direct-install base for a restricted durable
   singleton with opt-in NetworkPolicy and observability components; prove pod
-  replacement keeps the claim and the task state in a disposable kind cluster.
+  replacement keeps the claim and the task state on the shared GKE test
+  cluster.
 - Sources:
   - [`crates/defer-operator`](crates/defer-operator) defines the CRD,
     defaults, renderer, and reconcile loop.
@@ -297,7 +298,7 @@ its direct contribution.
   - `external:kubernetes` stores desired state and runs the workload,
     network, RBAC, and Secret contracts.
 - Gate: `cargo test -p defer --features operator --test direct_k8s_assets --test operator`
-- Gate: `bash scripts/kind-e2e.sh`
+- Gate: `gh workflow run gke-test.yml -f suite=operator_recovery`
 
 ### Operations and observability
 
