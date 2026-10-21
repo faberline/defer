@@ -54,7 +54,7 @@ but must not be reported as Google Cloud Tasks performance.
 
 Defer's local implementation-efficiency ceiling is its sibling Relay, not a
 substitute competitor. Run
-`cargo test --release -p defer --test relay_performance_ceiling -- --ignored --nocapture`.
+`cargo test --release -p defer --test it -- relay_performance_ceiling:: --ignored --nocapture`.
 The gate uses identical 128-byte payloads, batch shape, single-voter Raft,
 fsync-always durability, and enqueue -> committed lease -> committed ack
 lifecycle. Defer may trail Relay by at most 20% because it additionally owns

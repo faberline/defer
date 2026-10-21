@@ -173,8 +173,8 @@ its direct contribution.
     lease table, and the settlement rules.
   - [`crates/defer-queue`](crates/defer-queue) defines the queue and task
     routes and their JSON shapes.
-- Gate: `cargo test -p defer --test task_lifecycle`
-- Gate: `cargo test -p defer --test http_api`
+- Gate: `cargo test -p defer --test it -- task_lifecycle::`
+- Gate: `cargo test -p defer --test it -- http_api::`
 
 ### Committed HTTP dispatch
 
@@ -196,8 +196,8 @@ its direct contribution.
     lease, ack, nack, and fence semantics the dispatcher settles against.
   - [`core/service-executor`](https://github.com/faberline/core/blob/v0.4.14/crates/service-executor/README.md)
     provides the bounded concurrent HTTP execution with per-request timeout.
-- Gate: `cargo test -p defer --test http_dispatch`
-- Gate: `cargo test -p defer --test http_dispatch_signing`
+- Gate: `cargo test -p defer --test it -- http_dispatch::`
+- Gate: `cargo test -p defer --test it -- http_dispatch_signing::`
 
 ### Queue controls and limits
 
@@ -214,8 +214,8 @@ its direct contribution.
     caps.
   - [`crates/defer-queue`](crates/defer-queue) defines the queue policy and
     control routes.
-- Gate: `cargo test -p defer --test rate_limits`
-- Gate: `cargo test -p defer --test raft_scheduler`
+- Gate: `cargo test -p defer --test it -- rate_limits::`
+- Gate: `cargo test -p defer --test it -- raft_scheduler::`
 
 ### Replicated availability
 
@@ -234,8 +234,8 @@ its direct contribution.
     hosts the group, the log, snapshots, and the fence value types.
   - [`core/peer-tls`](https://github.com/faberline/core/blob/v0.4.14/crates/peer-tls/README.md)
     provides the mutual TLS material and verification for peer links.
-- Gate: `cargo test -p defer --test raft_scheduler`
-- Gate: `cargo test -p defer --test raft_peer_mtls`
+- Gate: `cargo test -p defer --test it -- raft_scheduler::`
+- Gate: `cargo test -p defer --test it -- raft_peer_mtls::`
 
 ### Backup and seed
 
@@ -253,8 +253,8 @@ its direct contribution.
     flag that reads the seed.
   - [`core/service-backup`](https://github.com/faberline/core/blob/v0.4.14/crates/service-backup/README.md)
     provides the destination sinks and retention pruning.
-- Gate: `cargo test -p defer --test http_api`
-- Gate: `cargo test -p defer --test cli_contract`
+- Gate: `cargo test -p defer --test it -- http_api::`
+- Gate: `cargo test -p defer --test it -- cli_contract::`
 
 ### Security hardening
 
@@ -274,9 +274,9 @@ its direct contribution.
     provides the bearer-token registry, grant evaluation, and rotation.
   - [`core/service-http`](https://github.com/faberline/core/blob/v0.4.14/crates/service-http/README.md)
     provides the shared router shell, error envelope, and admission hooks.
-- Gate: `cargo test -p defer --test service_auth`
-- Gate: `cargo test -p defer --test service_admission`
-- Gate: `cargo test -p defer --test http_api`
+- Gate: `cargo test -p defer --test it -- service_auth::`
+- Gate: `cargo test -p defer --test it -- service_admission::`
+- Gate: `cargo test -p defer --test it -- http_api::`
 
 ### Kubernetes-native deployment
 
@@ -297,7 +297,8 @@ its direct contribution.
     provides the cluster spec, reconciliation, and workload mechanisms.
   - `external:kubernetes` stores desired state and runs the workload,
     network, RBAC, and Secret contracts.
-- Gate: `cargo test -p defer --features operator --test direct_k8s_assets --test operator`
+- Gate: `cargo test -p defer --features operator --test it -- direct_k8s_assets::`
+- Gate: `cargo test -p defer --features operator --test operator`
 - Gate: `gh workflow run gke-test.yml -f suite=operator_recovery`
 
 ### Operations and observability
@@ -322,7 +323,7 @@ its direct contribution.
     provides the one shutdown deadline the drain and the Raft handoff share.
   - [`core/metrics-prometheus`](https://github.com/faberline/core/blob/v0.4.14/crates/metrics-prometheus/README.md)
     provides the Prometheus text exposition.
-- Gate: `cargo test -p defer --test http_api`
+- Gate: `cargo test -p defer --test it -- http_api::`
 - Gate: `DEFER_SOAK_AUTOSTART=1 bash scripts/soak.sh`
 
 ### API, CLI, and clients
@@ -342,8 +343,8 @@ its direct contribution.
     provides the in-binary client generator.
   - [`core/cli-std`](https://github.com/faberline/core/blob/v0.4.14/crates/cli-std/README.md)
     provides the standard command set and output conventions.
-- Gate: `cargo test -p defer --test cli_contract`
-- Gate: `cargo test -p defer --test http_api`
+- Gate: `cargo test -p defer --test it -- cli_contract::`
+- Gate: `cargo test -p defer --test it -- http_api::`
 
 ### Competitor contract and ceiling
 
@@ -358,8 +359,8 @@ its direct contribution.
     relay-ceiling benchmark.
   - `external:relay` supplies the sibling pull queue the ceiling is measured
     against.
-- Gate: `cargo test -p defer --test competitor_feature_matrix`
-- Gate: `cargo test --release -p defer --test relay_performance_ceiling -- --ignored`
+- Gate: `cargo test -p defer --test it -- competitor_feature_matrix::`
+- Gate: `cargo test --release -p defer --test it -- relay_performance_ceiling:: --ignored`
 
 ## Supporting documents
 

@@ -27,7 +27,7 @@ benchmark_contract:
 ## Reproduce
 
 ```bash
-cargo test --release -p defer --test relay_performance_ceiling -- --ignored --nocapture
+cargo test --release -p defer --test it -- relay_performance_ceiling:: --ignored --nocapture
 ```
 
 The gate uses 1,000 messages in ten batches of 100, a 128-byte serialized JSON payload, one
