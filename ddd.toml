@@ -7,10 +7,9 @@
 
 schema = 1
 
-# Not enforced yet: the docs tree (docs/README.md, architecture, glossary,
-# domain, operations) and the tests/it consolidation are still missing.
+# Enforced: the docs tree and the tests/it consolidation are in place.
 [migration]
-enforce = false
+enforce = true
 
 [policy]
 version = 1

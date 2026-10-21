@@ -1,3 +1,7 @@
+//! Defer CRD and operator render conformance.
+//!
+//! isolation: needs `--features operator`; CI runs this binary by name with
+//! `cargo test -p defer --features operator --test operator`.
 #![cfg(feature = "operator")]
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:defer-operator" tracker="#766" reason="Pure CRD/operator render conformance for stateful HA, security, and scheduled backups."
 use defer::operator::{self, Defer};

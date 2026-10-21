@@ -7,6 +7,10 @@ future outcomes are [`ROADMAP.md`](../ROADMAP.md), and contributor rules live in
 
 | Document | What it answers |
 |----------|-----------------|
+| [architecture.md](architecture.md) | How the crates are cut and what may depend on what. |
+| [glossary.md](glossary.md) | The terms defer's code, API and docs use. |
+| [domain/](domain/README.md) | What each part of the model owns. |
+| [operations/](operations/README.md) | How to run, configure, and test defer. |
 | [product/](product/README.md) | What defer promises per capability area, one section per shipped capability or ROADMAP outcome. |
 | [adr/](adr/) | Architecture decisions and the reasons behind them. |
 

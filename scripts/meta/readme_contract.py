@@ -253,6 +253,11 @@ def cargo_index(repo: Path) -> dict[str, set[str]]:
         }
         if package.get("autotests") is not False:
             targets.update(path.stem for path in manifest_path.parent.glob("tests/*.rs"))
+            # Cargo also builds each tests/<dir>/main.rs as test target <dir>.
+            targets.update(
+                path.parent.name
+                for path in manifest_path.parent.glob("tests/*/main.rs")
+            )
         index[package["name"]] = targets
     return index
 

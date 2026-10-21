@@ -17,7 +17,7 @@ const BATCHES: usize = 10;
 const BATCH_SIZE: usize = 100;
 const PAYLOAD_BYTES: usize = 128;
 const MIN_DEFER_TO_RELAY_RATIO: f64 = 0.80;
-const CONTRACT: &str = include_str!("../../../benchmarks/relay-performance-ceiling.md");
+const CONTRACT: &str = include_str!("../../../../benchmarks/relay-performance-ceiling.md");
 
 fn sole_voter() -> Membership {
     Membership {

@@ -1,7 +1,7 @@
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:defer-competitor-feature-matrix" tracker="#2216" reason="Machine-check the deliberately scoped Google Cloud Tasks comparison and explicit non-goals without treating prose as runtime behavior proof."
 use std::collections::BTreeMap;
 
-const MATRIX: &str = include_str!("../../../benchmarks/competitor-feature-matrix.md");
+const MATRIX: &str = include_str!("../../../../benchmarks/competitor-feature-matrix.md");
 
 fn rows() -> BTreeMap<&'static str, Vec<&'static str>> {
     let mut rows = BTreeMap::new();

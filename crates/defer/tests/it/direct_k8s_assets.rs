@@ -72,7 +72,7 @@ fn assert_connected_services_and_pdb(resources: &[Value]) {
 
 #[test]
 fn direct_base_is_a_restricted_durable_singleton() {
-    let statefulset = yaml(include_str!("../../../k8s/base/statefulset.yaml"));
+    let statefulset = yaml(include_str!("../../../../k8s/base/statefulset.yaml"));
     assert_eq!(statefulset["kind"], "StatefulSet");
     assert_eq!(statefulset["spec"]["replicas"], 1);
     assert_eq!(statefulset["spec"]["serviceName"], "defer-headless");
@@ -107,7 +107,7 @@ fn direct_base_is_a_restricted_durable_singleton() {
     );
     let env = container["env"].as_sequence().unwrap();
     assert!(env.iter().any(|entry| entry["name"] == "DEFER_LOG_FORMAT"));
-    let config = yaml(include_str!("../../../k8s/base/configmap.yaml"));
+    let config = yaml(include_str!("../../../../k8s/base/configmap.yaml"));
     assert_eq!(config["data"]["DEFER_LOG_FORMAT"], "json");
     for (name, value) in [
         ("SHARD_COUNT", "1"),
@@ -134,7 +134,7 @@ fn direct_base_is_a_restricted_durable_singleton() {
     assert_eq!(claim["metadata"]["name"], "data");
     assert_eq!(claim["spec"]["accessModes"], yaml("[ReadWriteOnce]"));
 
-    let services = yaml_documents(include_str!("../../../k8s/base/service.yaml"));
+    let services = yaml_documents(include_str!("../../../../k8s/base/service.yaml"));
     assert_eq!(services.len(), 2);
     let selector = yaml("{app: defer, role: server}");
     let headless = unique_named(&services, "Service", "defer-headless");
@@ -152,7 +152,7 @@ fn direct_base_is_a_restricted_durable_singleton() {
         yaml("[{name: http, port: 7141, targetPort: http, protocol: TCP}]")
     );
 
-    let pdb = yaml(include_str!("../../../k8s/base/pdb.yaml"));
+    let pdb = yaml(include_str!("../../../../k8s/base/pdb.yaml"));
     assert_eq!(pdb["kind"], "PodDisruptionBudget");
     assert_eq!(pdb["spec"]["maxUnavailable"], 0);
     assert_eq!(&pdb["spec"]["selector"]["matchLabels"], &selector);
@@ -160,7 +160,7 @@ fn direct_base_is_a_restricted_durable_singleton() {
 
 #[test]
 fn prod_profile_uses_security_components_without_voter_hpa() {
-    let prod = include_str!("../../../k8s/overlays/prod/kustomization.yaml");
+    let prod = include_str!("../../../../k8s/overlays/prod/kustomization.yaml");
     assert!(prod.contains("DEFER_TOKEN_REGISTRY_FILE"));
     assert!(prod.contains("secretName: defer-token-registry"));
     assert!(prod.contains("readOnly: true"));
@@ -170,7 +170,7 @@ fn prod_profile_uses_security_components_without_voter_hpa() {
     assert!(!prod.contains("kind: HPA"));
 
     let policy = yaml(include_str!(
-        "../../../k8s/components/network-policy/networkpolicy.yaml"
+        "../../../../k8s/components/network-policy/networkpolicy.yaml"
     ));
     assert_eq!(policy["kind"], "NetworkPolicy");
     assert_eq!(policy["spec"]["podSelector"]["matchLabels"]["app"], "defer");
@@ -250,7 +250,7 @@ fn prod_profile_renders_the_connected_security_boundary() {
 
 #[test]
 fn operator_deployment_uses_a_restricted_security_context() {
-    let operator = yaml(include_str!("../../../k8s/operator/deployment.yaml"));
+    let operator = yaml(include_str!("../../../../k8s/operator/deployment.yaml"));
     let pod_security = &operator["spec"]["template"]["spec"]["securityContext"];
     assert_eq!(pod_security["runAsNonRoot"], true);
     assert_eq!(pod_security["seccompProfile"]["type"], "RuntimeDefault");
