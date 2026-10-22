@@ -24,6 +24,7 @@ defer-operator = { path = "crates/defer-operator" }
 defer-queue = { path = "crates/defer-queue" }
 defer-replication = { path = "crates/defer-replication" }
 defer-shared-kernel = { path = "crates/defer-shared-kernel" }
+defer-storage = { path = "crates/defer-storage" }
 
 # faberline/core building blocks.
 build-stamp = { git = "https://github.com/faberline/core", tag = "v0.4.14" }

@@ -16,8 +16,8 @@ use defer_shared_kernel::{
     QueuePolicy, QueueSnapshot, SettlementOutcome,
 };
 use raft_runtime::{
-    ClusterTopology, FsyncPolicy as RaftFsyncPolicy, HostConfig, Index, Membership, NodeId,
-    PeerTransport, RaftHost, RaftStateMachine, RaftStore, SnapshotPolicy,
+    ClusterTopology, HostConfig, Index, Membership, NodeId, PeerTransport, RaftHost,
+    RaftStateMachine, SnapshotPolicy,
 };
 
 use super::command::{DeferCommand, DeferEnvelope, DeferOutcome, ProposalId};
@@ -75,14 +75,7 @@ impl DeferRaft {
         config: HostConfig,
         transport: Option<PeerTransport>,
     ) -> Result<Self> {
-        std::fs::create_dir_all(raft_dir)?;
-        let store = RaftStore::open(
-            raft_dir
-                .to_str()
-                .context("raft data dir is not valid UTF-8")?,
-            node_id,
-            RaftFsyncPolicy::Always,
-        )?;
+        let store = defer_storage::open_raft_store(raft_dir, node_id)?;
         let sm = DeferStateMachine::new(scheduler, true);
         let host = match transport {
             Some(transport) => RaftHost::spawn_with_peer_transport(
@@ -128,7 +121,7 @@ impl DeferRaft {
     ) -> Result<Self> {
         Self::spawn(
             scheduler,
-            &data_dir.join("raft"),
+            &defer_storage::raft_dir(data_dir),
             topology.node_id,
             topology.membership.clone(),
             topology.peers.clone(),
@@ -145,7 +138,7 @@ impl DeferRaft {
     ) -> Result<Self> {
         Self::spawn_with_peer_transport(
             scheduler,
-            &data_dir.join("raft"),
+            &defer_storage::raft_dir(data_dir),
             topology.node_id,
             topology.membership.clone(),
             topology.peers.clone(),

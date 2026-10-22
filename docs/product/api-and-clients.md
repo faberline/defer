@@ -16,6 +16,8 @@ from it. This area is the README capability `api-cli-clients`.
   `upgrade`, and `issue` plus the queue, task, dispatch, backup, k8s, and
   dockerfile verbs under the shared conventions, and the offline verbs stay
   within the release-mode latency and resource ceilings.
+- Contract snapshot: [`clients/openapi.json`](../../clients/README.md) is
+  committed; a unit test in `defer-queue` refuses drift from the live document.
 - Limits today: clients are generated, not committed; the dispatch response
   schema is published under the `crate.DispatchReport` name; the efficiency
   and stability gates are release-mode and ignored by default.

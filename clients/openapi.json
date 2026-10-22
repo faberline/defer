@@ -1,0 +1,753 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Defer HTTP API",
+    "description": "Raft-backed delayed HTTP push queue over HTTP/1.1 and h2c.",
+    "contact": {
+      "name": "Chris Cheng",
+      "email": "chris.cheng.c4@gmail.com"
+    },
+    "license": {
+      "name": "MIT"
+    },
+    "version": "snapshot"
+  },
+  "paths": {
+    "/admin/backup": {
+      "get": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "admin_backup",
+        "responses": {
+          "200": {
+            "description": "Exact Defer state-machine snapshot bytes"
+          }
+        }
+      }
+    },
+    "/v1/queues/{queue}": {
+      "get": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "queue_get",
+        "parameters": [
+          {
+            "name": "queue",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueSnapshot"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "queue_put",
+        "parameters": [
+          {
+            "name": "queue",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueuePolicy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/queues/{queue}/control": {
+      "post": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "queue_control",
+        "parameters": [
+          {
+            "name": "queue",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueControlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueSnapshot"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/queues/{queue}/dispatch": {
+      "post": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "dispatch_one",
+        "parameters": [
+          {
+            "name": "queue",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/crate.DispatchReport"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/v1/queues/{queue}/tasks": {
+      "post": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "task_create",
+        "parameters": [
+          {
+            "name": "queue",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTask"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/queues/{queue}/tasks/{task_id}": {
+      "get": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "task_status",
+        "parameters": [
+          {
+            "name": "queue",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "task_id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskStatusResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "task_cancel",
+        "parameters": [
+          {
+            "name": "queue",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "task_id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/queues/{queue}/tasks:batch": {
+      "post": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "task_create_batch",
+        "parameters": [
+          {
+            "name": "queue",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTasksRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateTasksResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreateTask": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "target",
+          "schedule_at"
+        ],
+        "properties": {
+          "max_attempts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "payload": {},
+          "priority": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "schedule_at": {
+            "$ref": "#/components/schemas/DateTime"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          },
+          "task_id": {
+            "$ref": "#/components/schemas/TaskId"
+          }
+        }
+      },
+      "CreateTasksRequest": {
+        "type": "object",
+        "required": [
+          "tasks"
+        ],
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreateTask"
+            }
+          }
+        }
+      },
+      "CreateTasksResponse": {
+        "type": "object",
+        "required": [
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "DispatchDisposition": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "Acked"
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "Retried"
+            ],
+            "properties": {
+              "Retried": {
+                "type": "object",
+                "required": [
+                  "next_at"
+                ],
+                "properties": {
+                  "next_at": {
+                    "$ref": "#/components/schemas/DateTime"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "string",
+            "enum": [
+              "DeadLettered"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "LostOwnership"
+            ]
+          }
+        ]
+      },
+      "DispatchReport": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "attempt_id",
+          "disposition"
+        ],
+        "properties": {
+          "attempt_id": {
+            "type": "string"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/DispatchDisposition"
+          },
+          "target_status": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "minimum": 0
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "transport_error": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "description": "The `{error, message}` JSON body every ecosystem HTTP error response\nrenders. `error` is a short machine-stable classification\n(`\"not_found\"`, `\"bad_request\"`, ...); `message` is the human-readable\ndetail.",
+        "required": [
+          "error",
+          "message"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "QueueControlRequest": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/QueueControlState"
+          }
+        }
+      },
+      "QueueControlState": {
+        "type": "string",
+        "enum": [
+          "Running",
+          "Paused",
+          "Disabled"
+        ]
+      },
+      "QueuePolicy": {
+        "type": "object",
+        "required": [
+          "max_in_flight",
+          "max_dispatch_per_tick",
+          "max_dispatches_per_second",
+          "max_burst_size",
+          "lease_ttl_ms",
+          "retry_backoff_ms"
+        ],
+        "properties": {
+          "lease_ttl_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_burst_size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_dispatch_per_tick": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_dispatches_per_second": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "max_in_flight": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retry_backoff_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "QueueSnapshot": {
+        "type": "object",
+        "required": [
+          "queue",
+          "control_state",
+          "policy",
+          "task_count",
+          "scheduled_count",
+          "in_flight_count",
+          "terminal_count"
+        ],
+        "properties": {
+          "control_state": {
+            "$ref": "#/components/schemas/QueueControlState"
+          },
+          "in_flight_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "policy": {
+            "$ref": "#/components/schemas/QueuePolicy"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/QueueName"
+          },
+          "scheduled_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "task_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "terminal_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "Target": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "method": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "TaskStatus": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "Scheduled"
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "Leased"
+            ],
+            "properties": {
+              "Leased": {
+                "type": "object",
+                "required": [
+                  "attempt_id",
+                  "executor_node",
+                  "epoch",
+                  "expires_at"
+                ],
+                "properties": {
+                  "attempt_id": {
+                    "$ref": "#/components/schemas/AttemptId"
+                  },
+                  "epoch": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
+                  },
+                  "executor_node": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
+                  },
+                  "expires_at": {
+                    "$ref": "#/components/schemas/DateTime"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "string",
+            "enum": [
+              "Succeeded"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "DeadLettered"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "Canceled"
+            ]
+          }
+        ]
+      },
+      "TaskStatusResponse": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
