@@ -7,6 +7,7 @@ mod cli_contract;
 mod cli_efficiency;
 mod cli_stability;
 mod competitor_feature_matrix;
+mod declarative_queues;
 mod direct_k8s_assets;
 mod e2e;
 mod http_api;
