@@ -33,8 +33,12 @@ impl ChildGuard {
                 "--dispatch-tick-ms",
                 "1000",
             ])
-            .stdout(Stdio::from(File::create(stdout_path).expect("create stdout file")))
-            .stderr(Stdio::from(File::create(stderr_path).expect("create stderr file")))
+            .stdout(Stdio::from(
+                File::create(stdout_path).expect("create stdout file"),
+            ))
+            .stderr(Stdio::from(
+                File::create(stderr_path).expect("create stderr file"),
+            ))
             .spawn()
             .expect("spawn defer serve");
 
@@ -248,7 +252,8 @@ async fn defer_serve_domain_state_survives_process_restart() {
         "GET task dropped failed; stderr:\n{}",
         guard1.stderr_content()
     );
-    let dropped_body1: serde_json::Value = dropped_get1.json().await.expect("parse dropped task JSON");
+    let dropped_body1: serde_json::Value =
+        dropped_get1.json().await.expect("parse dropped task JSON");
     assert_eq!(
         dropped_body1["status"],
         "Canceled",
@@ -289,7 +294,10 @@ async fn defer_serve_domain_state_survives_process_restart() {
         "GET /v1/queues/jobs after restart failed; stderr:\n{}",
         guard2.stderr_content()
     );
-    let queue_body2: serde_json::Value = queue_get2.json().await.expect("parse queue JSON after restart");
+    let queue_body2: serde_json::Value = queue_get2
+        .json()
+        .await
+        .expect("parse queue JSON after restart");
     assert_eq!(
         queue_body2["control_state"],
         "Paused",
@@ -308,7 +316,10 @@ async fn defer_serve_domain_state_survives_process_restart() {
         "GET task kept after restart failed; stderr:\n{}",
         guard2.stderr_content()
     );
-    let kept_body2: serde_json::Value = kept_get2.json().await.expect("parse kept task JSON after restart");
+    let kept_body2: serde_json::Value = kept_get2
+        .json()
+        .await
+        .expect("parse kept task JSON after restart");
     assert_eq!(
         kept_body2["status"],
         "Scheduled",
@@ -327,7 +338,10 @@ async fn defer_serve_domain_state_survives_process_restart() {
         "GET task dropped after restart failed; stderr:\n{}",
         guard2.stderr_content()
     );
-    let dropped_body2: serde_json::Value = dropped_get2.json().await.expect("parse dropped task JSON after restart");
+    let dropped_body2: serde_json::Value = dropped_get2
+        .json()
+        .await
+        .expect("parse dropped task JSON after restart");
     assert_eq!(
         dropped_body2["status"],
         "Canceled",
@@ -348,7 +362,8 @@ async fn defer_serve_domain_state_survives_process_restart() {
         post_kept_again.status(),
         guard2.stderr_content()
     );
-    let conflict_body: serde_json::Value = post_kept_again.json().await.expect("parse conflict JSON");
+    let conflict_body: serde_json::Value =
+        post_kept_again.json().await.expect("parse conflict JSON");
     assert_eq!(
         conflict_body["error"],
         "conflict",
