@@ -393,4 +393,147 @@ fn tokens_secret_csi_driver_overrides_the_default_csi_driver_name() {
         "defer-registry-csi"
     );
 }
+
+/// #32: Two declared queues reach the pod env with policy and control translated to the serve shape.
+#[test]
+fn declared_queues_reach_the_pod_env_with_policy_and_control_translated() {
+    let defer: Defer = serde_json::from_value(json!({
+        "apiVersion": "defer.dev/v1alpha1",
+        "kind": "Defer",
+        "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+        "spec": {
+            "image": "registry/defer:1",
+            "replicasPerShard": 3,
+            "voterCount": 3,
+            "queues": [
+                {
+                    "name": "high-priority",
+                    "policy": {
+                        "maxInFlight": 50,
+                        "leaseTtlMs": 10000
+                    },
+                    "control": "Running"
+                },
+                {
+                    "name": "background",
+                    "policy": {
+                        "maxBurstSize": 200,
+                        "retryBackoffMs": 5000
+                    },
+                    "control": "Paused"
+                }
+            ]
+        }
+    }))
+    .unwrap();
+    let objects = operator::render::render(&defer);
+    let stateful = object(&objects, "StatefulSet", "jobs");
+    let env = &stateful["spec"]["template"]["spec"]["containers"][0]["env"];
+    let env_entry = named(env, "DEFER_DECLARED_QUEUES");
+    let val: serde_json::Value =
+        serde_json::from_str(env_entry["value"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        val,
+        json!([
+            {
+                "name": "high-priority",
+                "policy": {
+                    "max_in_flight": 50,
+                    "lease_ttl_ms": 10000
+                },
+                "control": "Running"
+            },
+            {
+                "name": "background",
+                "policy": {
+                    "max_burst_size": 200,
+                    "retry_backoff_ms": 5000
+                },
+                "control": "Paused"
+            }
+        ])
+    );
+}
+
+/// #32: An empty or omitted `queues` adds no `DEFER_DECLARED_QUEUES` env var.
+#[test]
+fn empty_or_omitted_queues_adds_no_env_var() {
+    let defer_omitted: Defer = serde_json::from_value(json!({
+        "apiVersion": "defer.dev/v1alpha1",
+        "kind": "Defer",
+        "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+        "spec": {
+            "image": "registry/defer:1",
+            "replicasPerShard": 3,
+            "voterCount": 3
+        }
+    }))
+    .unwrap();
+    let objects_omitted = operator::render::render(&defer_omitted);
+    let stateful_omitted = object(&objects_omitted, "StatefulSet", "jobs");
+    let env_omitted = &stateful_omitted["spec"]["template"]["spec"]["containers"][0]["env"];
+    assert!(env_omitted
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["name"] != "DEFER_DECLARED_QUEUES"));
+
+    let defer_empty: Defer = serde_json::from_value(json!({
+        "apiVersion": "defer.dev/v1alpha1",
+        "kind": "Defer",
+        "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+        "spec": {
+            "image": "registry/defer:1",
+            "replicasPerShard": 3,
+            "voterCount": 3,
+            "queues": []
+        }
+    }))
+    .unwrap();
+    let objects_empty = operator::render::render(&defer_empty);
+    let stateful_empty = object(&objects_empty, "StatefulSet", "jobs");
+    let env_empty = &stateful_empty["spec"]["template"]["spec"]["containers"][0]["env"];
+    assert!(env_empty
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["name"] != "DEFER_DECLARED_QUEUES"));
+}
+
+/// #32: A CR fixture without `queues` still deserializes.
+#[test]
+fn cr_fixture_without_queues_still_deserializes() {
+    let defer: Defer = serde_json::from_value(json!({
+        "apiVersion": "defer.dev/v1alpha1",
+        "kind": "Defer",
+        "metadata": {"name": "legacy", "namespace": "default"},
+        "spec": {
+            "image": "registry/defer:1",
+            "replicasPerShard": 1,
+            "voterCount": 1
+        }
+    }))
+    .expect("CR fixture without queues must deserialize");
+    assert!(defer.spec.queues.is_empty());
+}
+
+/// #32: The generated CRD carries the schema for `spec.queues`.
+#[test]
+fn generated_crd_carries_declared_queues_schema() {
+    let yaml = operator::crd_yaml();
+    for field in [
+        "queues:",
+        "maxInFlight:",
+        "maxDispatchPerTick:",
+        "maxDispatchesPerSecond:",
+        "maxBurstSize:",
+        "leaseTtlMs:",
+        "retryBackoffMs:",
+        "Running",
+        "Paused",
+        "Disabled",
+    ] {
+        assert!(yaml.contains(field), "CRD is missing {field}");
+    }
+}
 // HANDWRITE-END
