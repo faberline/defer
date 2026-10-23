@@ -154,7 +154,7 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
         }
         Arc::new(DeferRaft::spawn(
             scheduler,
-            &args.data_dir.join("raft"),
+            &defer::storage::raft_dir(&args.data_dir),
             0,
             Membership {
                 voters: vec![0],

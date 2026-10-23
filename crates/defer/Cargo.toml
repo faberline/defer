@@ -27,6 +27,7 @@ defer-dispatch.workspace = true
 defer-queue.workspace = true
 defer-replication.workspace = true
 defer-shared-kernel.workspace = true
+defer-storage.workspace = true
 openapi-codegen.workspace = true
 peer-tls.workspace = true
 raft-runtime.workspace = true

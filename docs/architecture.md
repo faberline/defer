@@ -1,6 +1,6 @@
 # Architecture
 
-defer is a Cargo virtual workspace of seven crates under `crates/`. Five hold
+defer is a Cargo virtual workspace of eight crates under `crates/`. Six hold
 defer's bounded contexts, one is the shared kernel, and one is the assembly
 crate that wires them into the `defer` library and binary. This page says how
 the crates are cut and what may depend on what. The machine-checked form is
@@ -17,14 +17,16 @@ operator kit, the standard CLI commands — comes from
 | Crate | Role | Internal dependencies | What it owns |
 |-------|------|-----------------------|--------------|
 | `defer-shared-kernel` | shared kernel (pure) | — | `DeferScheduler` and the task, queue, lease and settlement types |
-| `defer-replication` | context `replication` (infrastructure) | shared kernel | the raft state machine (`DeferStateMachine`), its host (`DeferRaft`), bootstrap seeding, and the `DEFER_PEER` TLS adapter |
+| `defer-storage` | context `storage` (infrastructure) | — | the data directory on disk: the raft log and durable snapshots in `<data_dir>/raft`, opened with fsync on every write, and the empty-directory check for a cold-start seed |
+| `defer-replication` | context `replication` (infrastructure) | shared kernel, storage | the raft state machine (`DeferStateMachine`), its host (`DeferRaft`), bootstrap seeding, and the `DEFER_PEER` TLS adapter |
 | `defer-dispatch` | context `dispatch` (infrastructure) | shared kernel, replication | `HttpDispatcher`: the committed-lease HTTP target executor and HMAC target signing |
 | `defer-access` | context `access` (application) | — | the token modes and per-queue authorization over `service-auth` |
 | `defer-queue` | context `queue` (interfaces) | shared kernel, access, dispatch, replication | the HTTP API (`server`), its OpenAPI document, and the metric names |
 | `defer-operator` | context `operator` (infrastructure) | — | the `Defer` custom resource, the renderer, and the reconcile loop |
 | `defer` | assembly | all of the above; `defer-operator` behind feature `operator` | the `defer` library re-exports, the `defer` binary, and the integration tests |
 
-Dependencies point one way: `shared-kernel ← replication ← dispatch ← queue`.
+Dependencies point one way: `shared-kernel ← replication ← dispatch ← queue`,
+and `storage ← replication`.
 `access` and `operator` are independent leaves. `server` and `openapi`
 reference each other, so they share the `defer-queue` crate.
 
@@ -35,6 +37,7 @@ Cargo.toml                      virtual workspace: [workspace.package],
                                 [workspace.dependencies], [workspace.lints]
 crates/
   defer-shared-kernel/src/      scheduler.rs + scheduler/, types.rs
+  defer-storage/src/            data_dir.rs
   defer-replication/src/        raft.rs + raft/, peer_tls.rs
   defer-dispatch/src/           dispatcher.rs
   defer-access/src/             policy.rs

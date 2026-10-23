@@ -124,7 +124,7 @@ snapshot. Both require the admin role when auth is on.
 | CLI surface | `defer --help`; `defer llm` prints the agent-facing topic index. |
 | Support state per Cloud Tasks surface | [STATUS.md](STATUS.md) |
 | Future outcomes and non-goals | [ROADMAP.md](ROADMAP.md) |
-| Typed clients | `defer spec gen --lang ts|py|rust --out <dir>`; clients are generated, not committed. |
+| Typed clients | `defer spec gen --lang ts|py|rust --out <dir>`; clients are generated, not committed. The contract snapshot is [`clients/openapi.json`](clients/README.md). |
 | Serve flags, environment, ports | `defer serve --help`; `DEFER_BIND`, `DEFER_DATA_DIR`, `DEFER_PEERS`, `DEFER_AUTH`, `DEFER_BODY_LIMIT_BYTES`, and the `DEFER_PEER_*` and `DEFER_ADMISSION_*` families. |
 | Kubernetes custom resource | `defer k8s crd render`; the operator and instance layers come from `defer k8s operator render` and `defer k8s instance render --profile <dev\|staging\|prod\|template>`. |
 | Direct-install manifests | [`k8s/`](k8s/): `base`, `overlays/`, and the `network-policy` and `observability` components. |
@@ -150,8 +150,8 @@ its direct contribution.
 | Scheduled task lifecycle | `scheduled-task-lifecycle` | Schedule a task by ETA and priority, bound its attempts, and read every state it passes through until a terminal outcome. | `crates/defer-shared-kernel`, `crates/defer-queue` |
 | Committed HTTP dispatch | `committed-http-dispatch` | Deliver each due task to its target only after the lease is committed, with a stable idempotency key, bounded retry, and optional HMAC signing. | `crates/defer-dispatch`, `crates/defer-shared-kernel`, `core/service-executor` |
 | Queue controls and limits | `queue-controls-and-limits` | Pause, resume, and disable a queue, and hold its rate, burst, and in-flight limits as committed state across every replica. | `crates/defer-shared-kernel`, `crates/defer-queue` |
-| Replicated availability | `replicated-availability` | Run a Raft group whose members replicate every scheduler mutation, fence stale executors, fail over, and rejoin over mutually authenticated peer links. | `crates/defer-replication`, `core/raft-runtime`, `core/peer-tls` |
-| Backup and seed | `backup-and-seed` | Export the state snapshot to a sink and restore it into an empty node. | `crates/defer-replication`, `crates/defer-queue`, `crates/defer`, `core/service-backup` |
+| Replicated availability | `replicated-availability` | Run a Raft group whose members replicate every scheduler mutation, fence stale executors, fail over, and rejoin over mutually authenticated peer links. | `crates/defer-replication`, `crates/defer-storage`, `core/raft-runtime`, `core/peer-tls` |
+| Backup and seed | `backup-and-seed` | Export the state snapshot to a sink and restore it into an empty node. | `crates/defer-replication`, `crates/defer-storage`, `crates/defer-queue`, `crates/defer`, `core/service-backup` |
 | Security hardening | `security-hardening` | Gate data-plane routes by per-queue grants, bound request admission and body size, and keep the Raft routes off the public port. | `crates/defer-access`, `crates/defer-queue`, `core/service-auth`, `core/service-http` |
 | Kubernetes-native deployment | `kubernetes-native-deployment` | Reconcile a `Defer` custom resource, or apply the direct-install base, into stable Kubernetes workloads. | `crates/defer-operator`, `crates/defer`, `core/service-k8s`, `external:kubernetes` |
 | Operations and observability | `operations-observability` | Expose health, readiness, metrics, traces, and graceful drain on one port, and hold a fixed task keyspace flat under sustained retry load. | `crates/defer-queue`, `crates/defer`, `core/service-http`, `core/server-lifecycle`, `core/metrics-prometheus` |
@@ -230,6 +230,8 @@ its direct contribution.
   - [`crates/defer-replication`](crates/defer-replication) defines the
     replicated command set, the state machine and its snapshot, the host, and
     the `DEFER_PEER` TLS adapter.
+  - [`crates/defer-storage`](crates/defer-storage) opens the Raft log and the
+    durable snapshots in `<data_dir>/raft`, fsynced on every write.
   - [`core/raft-runtime`](https://github.com/faberline/core/blob/v0.4.14/crates/raft-runtime/README.md)
     hosts the group, the log, snapshots, and the fence value types.
   - [`core/peer-tls`](https://github.com/faberline/core/blob/v0.4.14/crates/peer-tls/README.md)
@@ -247,6 +249,8 @@ its direct contribution.
 - Sources:
   - [`crates/defer-replication`](crates/defer-replication) defines the
     snapshot shape and the seed-only-into-empty bootstrap.
+  - [`crates/defer-storage`](crates/defer-storage) refuses a data directory
+    that already holds state.
   - [`crates/defer-queue`](crates/defer-queue) defines the admin backup route
     and its admin-role requirement.
   - [`crates/defer`](crates/defer) defines the `backup` verb and the serve
@@ -370,6 +374,7 @@ its direct contribution.
 | [STATUS.md](STATUS.md) | Current support per Cloud Tasks surface and operational surface, with limits and gates |
 | [ROADMAP.md](ROADMAP.md) | Future outcomes and explicit non-goals |
 | [Docs index](docs/README.md) | Every document under `docs/` and what it answers |
+| [Generated clients](clients/README.md) | The committed OpenAPI snapshot, client generation, and the language matrix |
 | [Architecture decisions](docs/adr/) | The decisions behind the workspace cut, the commit-before-side-effect rule, fencing, signing, and the relay boundary |
 | [Competitor feature matrix](benchmarks/competitor-feature-matrix.md) | The Cloud Tasks checklist and each row's product decision |
 | [Relay performance ceiling](benchmarks/relay-performance-ceiling.md) | The declared workload and the latest recorded ceiling run |

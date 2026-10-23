@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use raft_runtime::{FsyncPolicy as RaftFsyncPolicy, NodeId, RaftStore};
+use raft_runtime::NodeId;
 
 use super::command::SchedulerSnapshot;
 
@@ -14,25 +14,8 @@ use super::command::SchedulerSnapshot;
 pub fn prepare_bootstrap_seed(data_dir: &Path, node_id: NodeId, bytes: &[u8]) -> Result<()> {
     let snapshot: SchedulerSnapshot =
         serde_json::from_slice(bytes).context("decode Defer scheduler snapshot")?;
-    if data_dir.exists() {
-        let mut entries = std::fs::read_dir(data_dir)
-            .with_context(|| format!("read bootstrap data dir {}", data_dir.display()))?;
-        anyhow::ensure!(
-            entries.next().transpose()?.is_none(),
-            "bootstrap seed requires an empty data directory {}",
-            data_dir.display()
-        );
-    } else {
-        std::fs::create_dir_all(data_dir)?;
-    }
-    let raft_dir = data_dir.join("raft");
-    let store = RaftStore::open(
-        raft_dir
-            .to_str()
-            .context("raft data dir is not valid UTF-8")?,
-        node_id,
-        RaftFsyncPolicy::Always,
-    )?;
+    defer_storage::ensure_empty_data_dir(data_dir)?;
+    let store = defer_storage::open_raft_store(&defer_storage::raft_dir(data_dir), node_id)?;
     store.seed_snapshot(snapshot.up_to, 0, bytes.to_vec())?;
     Ok(())
 }

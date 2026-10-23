@@ -130,8 +130,14 @@ path = "crates/defer-shared-kernel/src"
 crates = ["defer"]
 
 [[contexts]]
-name = "replication"
+name = "storage"
 depends_on = []
+[contexts.layers]
+infrastructure = "crates/defer-storage/src"
+
+[[contexts]]
+name = "replication"
+depends_on = ["storage"]
 [contexts.layers]
 infrastructure = "crates/defer-replication/src"
 

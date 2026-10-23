@@ -1348,6 +1348,7 @@ dependencies = [
  "defer-queue",
  "defer-replication",
  "defer-shared-kernel",
+ "defer-storage",
  "hmac 0.12.1",
  "openapi-codegen",
  "peer-tls",
@@ -1437,6 +1438,7 @@ dependencies = [
  "axum 0.8.9",
  "chrono",
  "defer-shared-kernel",
+ "defer-storage",
  "peer-tls",
  "raft-runtime",
  "serde",
@@ -1454,6 +1456,15 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "utoipa",
+]
+
+[[package]]
+name = "defer-storage"
+version = "0.4.13"
+dependencies = [
+ "anyhow",
+ "raft-runtime",
+ "tempfile",
 ]
 
 [[package]]
