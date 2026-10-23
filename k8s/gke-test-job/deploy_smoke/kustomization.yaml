@@ -1,0 +1,16 @@
+# GKE e2e suite `deploy_smoke` (crates/defer/tests/it/e2e/deploy_smoke.rs):
+# dispatch journey and metrics diagnostics against the operator-deployed Defer,
+# reached at http://defer:7141.
+#
+# faberline/aw's run.sh deploys k8s/overlays/gke-test, waits for the operator
+# rollout, sets this folder's namespace and test image, adds the ConfigMap
+# gke-test-env (E2E_EXPECTED_*), applies it, and passes only when Job/defer-e2e
+# completes and its log does not say `running 0 tests`.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: defer
+
+resources:
+  - rbac.yaml
+  - job.yaml

@@ -11,6 +11,7 @@
 # Suites (aw docs/standards/test-cluster.md "Test suites"), one call each, one
 # at a time, each on a fresh deploy:
 #   operator_recovery  k8s/gke-test-job/operator_recovery  operator topology and pod recovery
+#   deploy_smoke       k8s/gke-test-job/deploy_smoke       dispatch journey and metrics diagnostics
 # A pull request runs all of them; a dispatch can pick one.
 #
 # GKE runs linux/amd64 only. aw owns the cluster, both pools, and the
@@ -38,7 +39,7 @@ on:
       suite:
         description: Suite to run; all runs every suite, one at a time.
         type: choice
-        options: [all, operator_recovery]
+        options: [all, operator_recovery, deploy_smoke]
         default: all
 
 permissions:
@@ -183,9 +184,9 @@ jobs:
           [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "no single linux/amd64 digest for $image"
 
           case "$INPUT_SUITE" in
-            all) suites='["operator_recovery"]' ;;
-            operator_recovery) suites="[\"${INPUT_SUITE}\"]" ;;
-            *) die "suite must be all or operator_recovery, got: $INPUT_SUITE" ;;
+            all) suites='["operator_recovery", "deploy_smoke"]' ;;
+            operator_recovery | deploy_smoke) suites="[\"${INPUT_SUITE}\"]" ;;
+            *) die "suite must be all, operator_recovery, or deploy_smoke, got: $INPUT_SUITE" ;;
           esac
 
           {
