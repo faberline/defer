@@ -165,6 +165,15 @@ fn serve_exposes_shared_structured_log_configuration() {
 }
 
 #[test]
+fn serve_exposes_declared_queues_configuration() {
+    let output = defer().args(["serve", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("--declared-queues"));
+    assert!(stdout.contains("DEFER_DECLARED_QUEUES"));
+}
+
+#[test]
 fn deploy_artifacts_render_by_lifecycle_layer() {
     let crd = defer().args(["k8s", "crd", "render"]).output().unwrap();
     assert!(crd.status.success());

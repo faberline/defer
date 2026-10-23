@@ -57,6 +57,9 @@ pub(crate) struct ServeArgs {
     /// are bounded mid-read. Defaults to 8 MiB (`DEFER_BODY_LIMIT_BYTES`).
     #[arg(long, env = "DEFER_BODY_LIMIT_BYTES", default_value_t = 8 * 1024 * 1024)]
     body_limit_bytes: usize,
+    /// JSON array of declared queues to provision at start-up on the Raft leader.
+    #[arg(long, env = "DEFER_DECLARED_QUEUES")]
+    declared_queues: Option<String>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -66,6 +69,8 @@ enum LogFormat {
 }
 
 pub(crate) async fn run(args: ServeArgs) -> Result<()> {
+    let declared_queues =
+        defer::parse_declared_queues(args.declared_queues.as_deref().unwrap_or(""))?;
     let log_format = match args.log_format {
         LogFormat::Pretty => service_http::LogFormat::Pretty,
         LogFormat::Json => service_http::LogFormat::Json,
@@ -222,6 +227,38 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
             }
         },
     )?;
+
+    if !declared_queues.is_empty() {
+        let declared_raft = raft.clone();
+        let mut declared_drain = state.drain_signal();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(50));
+            loop {
+                tokio::select! {
+                    _ = declared_drain.changed() => break,
+                    _ = interval.tick() => {
+                        if declared_raft.is_leader().await {
+                            match defer::ensure_declared_queues(&declared_raft, &declared_queues).await {
+                                Ok(outcomes) => {
+                                    for outcome in outcomes {
+                                        tracing::info!(
+                                            queue = %outcome.name,
+                                            decision = ?outcome.decision,
+                                            "declared queue provisioned"
+                                        );
+                                    }
+                                }
+                                Err(error) => {
+                                    tracing::error!(error = %error, "failed to provision declared queues");
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+    }
 
     let listener = tokio::net::TcpListener::bind(&args.bind).await?;
     tracing::info!(
