@@ -18,4 +18,5 @@ mod rate_limits;
 mod relay_performance_ceiling;
 mod service_admission;
 mod service_auth;
+mod soak_script;
 mod task_lifecycle;
