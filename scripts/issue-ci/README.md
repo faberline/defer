@@ -1,51 +1,73 @@
 # CI lifecycle handoff
 
-`handoff.py` is vendored unchanged from faberline/aw commit `67af8d020df3ca2ec4b064289408cfb0c2f8b299`,
-`plugins/faberline/skills/issue-ci/scripts/handoff.py`. SHA-256: `c67533b39d45ad62d407af3748856be396941647c349b63464424fa6aff1c198`.
+`issue-ci.yml` uses the shared immutable action:
+`faberline/aw/.github/actions/issue-ci@693e45bded9a4ec8167573e82b423c823c193ec0`
+(pinned from `faberline/aw#73` merged via `faberline/aw#74`).
 
-The privileged workflow checks out only the trusted default branch with no persisted
-credentials. It reads the trusted manifest and GitHub metadata, never PR code or
-artifacts. One repository concurrency group serializes all reconciliations.
-AGY owns only todo → doing; after submission CI alone may set done/todo. A fresh
-review checks the same current head after qualification; no automatic merge.
+Shared qualification contract:
+https://github.com/faberline/aw/blob/693e45bded9a4ec8167573e82b423c823c193ec0/plugins/faberline/skills/issue-ci/QUALIFICATION.md
 
-## Failure handoff enabled after merge; done remains blocked
+The privileged default-branch workflow checks out only the default branch with no
+persisted credentials. It reads the trusted manifest and GitHub metadata, never PR code
+or artifacts. One repository concurrency group (`issue-ci-handoff`) serializes all
+reconciliations. AGY owns only todo → doing; after submission CI alone may set done/todo.
+A fresh review independently checks the same current head after qualification; no automatic merge.
+
+## Staged pilot qualification contract
+
+Defer owns affected-test mapping and thin pinned CI integration. Defer does not fork or
+duplicate the shared controller/evaluator into a new local implementation.
+
+### Defer affected-test mapping by change category
+
+1. **Documentation-only** (`docs/**`, `*.md`, `STATUS.md`, `ROADMAP.md`):
+   - Local validation: zero local unit, CLI-contract, integration or e2e test binaries.
+     Run `python3 -B scripts/meta/project_docs_contract.py check .` and `git diff --check`.
+   - Cloud CI gate: `defer-ci` / `fmt, clippy, tests, release contract` (runs doc contract).
+     GKE is path-filtered and does not run. GKE exemption requires reviewed trusted policy;
+     missing GKE never silently passes.
+2. **Workflow / controller** (`.github/workflows/**`, `.github/issue-ci-required-gates.json`, `scripts/issue-ci/**`):
+   - Local validation: `python3 -B -m unittest discover -s scripts/issue-ci -p 'test_*.py'`,
+     `actionlint .github/workflows/issue-ci.yml`.
+   - Cloud CI gate: `defer-ci` / `fmt, clippy, tests, release contract`.
+3. **Runtime** (`crates/defer-queue/**`, `crates/defer-replication/**`, `crates/defer-storage/**`, `crates/defer/src/**`, `Cargo.toml`, `Cargo.lock`):
+   - Local validation: affected isolated unit tests only (`cargo test --lib -p <crate>`).
+     No local server/network/Raft/cluster execution.
+   - Cloud CI gate: `defer-ci` (fmt, clippy, workspace tests, release contract).
+4. **Deployment / storage / topology** (`k8s/**`, `Dockerfile*`, `crates/defer-operator/**`, `crates/defer/tests/operator.rs`):
+   - Local validation: affected isolated operator unit tests only.
+   - Cloud CI gate: `defer-ci` (operator test feature) and `gke-test`
+     (`operator_recovery` suite on shared GKE cluster).
+5. **Performance-relevant** (benchmarks, hot paths, storage engine):
+   - Current status: blocked by qualification blocker.
+   - Cloud CI gate: requires an automated measured PR performance regression gate.
+
+### Failure-only baseline and qualification blockers preserved
 
 The manifest inventories every existing ordinary PR CI job and all four exact GKE
-job identities (including nested reusable-workflow names). GKE names were verified
-from a historical Actions run, not inferred from green checks. All configured
-workflows/jobs must succeed for the current PR head and latest run attempt. Missing,
-skipped, cancelled and pending gates never pass. Failures retain exact run/job links;
-the controller journals/deduplicates handoffs and preserves other issue labels.
+job identities:
+- `defer-ci`: `fmt, clippy, tests, release contract`
+- `gke-test`: `build server image / build + publish ghcr test image`,
+  `build test-client image`, `resolve image identity`,
+  `GKE e2e (operator_recovery) / deploy + test on shared GKE`
 
-The explicit `lifecycle_mode: failure-only` permits a genuine failure of any
-configured current-head gate to return an open `doing` issue to `todo`, with
-concise failure and exact run/job links. Other labels and existing `done` or
-unclaimed `todo` issues are preserved. Success, missing, pending, cancelled or
-skipped evidence produces no issue mutation. All-green evidence still cannot
-produce `done`, even if someone accidentally clears blockers. The policy guard
-imports the shared `load_config` and `evaluate_policy` APIs, refuses old controllers
-and full activation, and requires an explicit nonempty blockers list.
+The explicit `lifecycle_mode: failure-only` is preserved. A genuine failure of any
+configured current-head gate returns an open `doing` issue to `todo` with exact run/job
+links. Success, missing, pending, cancelled or skipped evidence produces no lifecycle mutation.
+All-green evidence cannot produce `done`.
 
-The nonempty `qualification_blockers` retain the incomplete qualification decision.
-The current `defer-ci` runs format/lint, workspace unit/integration tests and
-release-contract checks. Path-filtered GKE covers only one e2e suite; it does not
-prove all affected functional/e2e or performance qualification. No automatic
-measured performance gate exists. Wiring-only PRs do not trigger GKE. No missing
-coverage is treated as passing and no existing test triggers are expanded.
+The nonempty `qualification_blockers` are preserved:
+1. "No automatically enforced affected performance PR qualification gate exists."
+2. "The existing path-filtered GKE suite is partial e2e coverage; affected functional/e2e selection and docs-only applicability require a reviewed policy. Missing or skipped GKE runs cannot qualify done."
 
-Resolving blockers requires a separately reviewed policy/coverage decision; do not
-clear them merely because the inventoried jobs are green. Product releases still
-need their complete declared functional/performance qualification. No release or
-manual dispatch is part of this change.
+Clearing blockers and activating live full mode requires a separate reviewed change backed
+by real current-head pilot execution evidence, trusted source binding, and negative cases.
 
-Managed PRs must use `issue/N` or `agy/issue-N` and an exact `Closes #N` line.
-This installation PR uses a maintenance branch and is deliberately unmanaged.
-The default-branch workflow only becomes available after review and merge; this
-PR does not assert that deployed lifecycle handoff already ran.
+## Validation
 
 Run only affected offline tests locally:
 
 ```sh
 python3 -B -m unittest discover -s scripts/issue-ci -p 'test_*.py'
+actionlint .github/workflows/issue-ci.yml
 ```

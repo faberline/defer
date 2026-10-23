@@ -22,10 +22,13 @@ class ConsumerPolicyTests(unittest.TestCase):
         self.assertEqual(self.config['workflows'], expected)
         workflow = (ROOT / '.github/workflows/issue-ci.yml').read_text()
         self.assertIn('workflows: ["defer-ci", "gke-test"]', workflow)
-        self.assertLess(workflow.index('python3 scripts/issue-ci/check-policy.py'), workflow.index('python3 scripts/issue-ci/handoff.py'))
+        self.assertLess(workflow.index('python3 scripts/issue-ci/check-policy.py'), workflow.index('uses: faberline/aw/.github/actions/issue-ci@693e45bded9a4ec8167573e82b423c823c193ec0'))
         self.assertIn('ref: ${{ github.event.repository.default_branch }}', workflow)
         self.assertNotIn('pull_request_target', workflow)
         self.assertNotIn('download-artifact', workflow)
+
+    def test_aw_revision_pinned_to_pilot_commit(self):
+        self.assertEqual(self.config.get('aw_revision'), '693e45bded9a4ec8167573e82b423c823c193ec0')
 
     def test_every_real_workflow_and_job_is_required(self):
         gates = self.config['workflows']
