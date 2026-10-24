@@ -5,11 +5,37 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use super::{endpoint, evidence, wait_for};
+use super::{endpoint, evidence, try_kubectl, wait_for};
 
 const SUITE: &str = "deploy_smoke";
 const QUEUE: &str = "deploy-smoke";
+const POD: &str = "defer-0";
+const FIRST_POD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const API_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+
+/// Waits until defer-0 exists and is Ready.
+fn wait_for_ready_pod(timeout: Duration) -> String {
+    wait_for("pod defer-0 Ready", timeout, || {
+        let out = try_kubectl(&["get", "pod", POD, "-o", "json"])?;
+        let pod: Value = serde_json::from_str(&out).map_err(|err| err.to_string())?;
+        let uid = pod["metadata"]["uid"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let ready = pod["status"]["conditions"].as_array().is_some_and(|all| {
+            all.iter()
+                .any(|c| c["type"] == "Ready" && c["status"] == "True")
+        });
+        if !uid.is_empty() && ready {
+            Ok(uid)
+        } else {
+            Err(format!(
+                "uid {uid:?} ready {ready} phase {}",
+                pod["status"]["phase"]
+            ))
+        }
+    })
+}
 
 /// Sends an HTTP request that must succeed and returns its JSON body.
 async fn send(request: reqwest::RequestBuilder) -> Value {
@@ -23,7 +49,7 @@ async fn send(request: reqwest::RequestBuilder) -> Value {
 
 /// Waits until `GET /healthz` answers 2xx.
 async fn wait_healthy(http: &reqwest::Client, base: &str) {
-    let deadline = tokio::time::Instant::now() + API_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + FIRST_POD_TIMEOUT;
     loop {
         let last = match http.get(format!("{base}/healthz")).send().await {
             Ok(response) if response.status().is_success() => return,
@@ -32,7 +58,7 @@ async fn wait_healthy(http: &reqwest::Client, base: &str) {
         };
         assert!(
             tokio::time::Instant::now() < deadline,
-            "{base}/healthz: not healthy within {API_TIMEOUT:?}; last saw: {last}"
+            "{base}/healthz: not healthy within {FIRST_POD_TIMEOUT:?}; last saw: {last}"
         );
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
@@ -111,6 +137,7 @@ async fn test_1_dispatch_acked_on_2xx() {
         .build()
         .unwrap();
 
+    wait_for_ready_pod(FIRST_POD_TIMEOUT);
     wait_healthy(&http, &base).await;
 
     let queue = send(http.put(format!("{base}/v1/queues/{QUEUE}")).json(&json!({
@@ -127,23 +154,24 @@ async fn test_1_dispatch_acked_on_2xx() {
 
     let task_id = "deploy-smoke-ack";
     let target_url = format!("{base}/healthz");
-    let created = send(
-        http.post(format!("{base}/v1/queues/{QUEUE}/tasks"))
-            .json(&json!({
-                "task_id": task_id,
-                "target": {
-                    "url": target_url,
-                    "method": "GET",
-                    "headers": {}
-                },
-                "payload": { "suite": SUITE },
-                "schedule_at": "2020-01-01T00:00:00Z",
-                "priority": 10,
-                "max_attempts": 3
-            })),
-    )
-    .await;
-    assert_eq!(created["created"], 1, "{created}");
+    let resp = http
+        .post(format!("{base}/v1/queues/{QUEUE}/tasks"))
+        .json(&json!({
+            "task_id": task_id,
+            "target": {
+                "url": target_url,
+                "method": "GET",
+                "headers": {}
+            },
+            "payload": { "suite": SUITE },
+            "schedule_at": "2020-01-01T00:00:00Z",
+            "priority": 10,
+            "max_attempts": 3
+        }))
+        .send()
+        .await
+        .expect("create task request");
+    assert_eq!(resp.status().as_u16(), 201, "create task status");
 
     let task = wait_for_task_status(&http, &base, QUEUE, task_id, "Succeeded", API_TIMEOUT);
     assert_eq!(task["task_id"], task_id);
@@ -188,23 +216,24 @@ async fn test_2_dispatch_dead_lettered_on_non_2xx() {
 
     let task_id = "deploy-smoke-dead-letter";
     let target_url = format!("{base}/nonexistent");
-    let created = send(
-        http.post(format!("{base}/v1/queues/{QUEUE}/tasks"))
-            .json(&json!({
-                "task_id": task_id,
-                "target": {
-                    "url": target_url,
-                    "method": "GET",
-                    "headers": {}
-                },
-                "payload": { "suite": SUITE },
-                "schedule_at": "2020-01-01T00:00:00Z",
-                "priority": 10,
-                "max_attempts": 2
-            })),
-    )
-    .await;
-    assert_eq!(created["created"], 1, "{created}");
+    let resp = http
+        .post(format!("{base}/v1/queues/{QUEUE}/tasks"))
+        .json(&json!({
+            "task_id": task_id,
+            "target": {
+                "url": target_url,
+                "method": "GET",
+                "headers": {}
+            },
+            "payload": { "suite": SUITE },
+            "schedule_at": "2020-01-01T00:00:00Z",
+            "priority": 10,
+            "max_attempts": 2
+        }))
+        .send()
+        .await
+        .expect("create task request");
+    assert_eq!(resp.status().as_u16(), 201, "create task status");
 
     let task = wait_for_task_status(&http, &base, QUEUE, task_id, "DeadLettered", API_TIMEOUT);
     assert_eq!(task["task_id"], task_id);
