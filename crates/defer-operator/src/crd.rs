@@ -72,6 +72,23 @@ pub struct DeferSpec {
     /// dedicated node pool at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<DeferPlacement>,
+    /// Container resource limits for the serving StatefulSet container.
+    /// Unset leaves the container unbounded (requests only), the previous
+    /// behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<DeferResourceLimits>,
+}
+
+/// Container resource limits for the serving StatefulSet container.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeferResourceLimits {
+    /// Maximum CPU quantity (e.g. `500m`, `2`). Unset leaves CPU unbounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<String>,
+    /// Maximum memory quantity (e.g. `512Mi`, `4Gi`). Unset leaves memory unbounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<String>,
 }
 
 /// Node placement for the operator-rendered pods: the serving StatefulSet
