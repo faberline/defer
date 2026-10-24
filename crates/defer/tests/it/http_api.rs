@@ -79,6 +79,7 @@ fn http1_client() -> reqwest::Client {
 }
 
 const EXPECTED_DOMAIN_OPERATIONS: &[&str] = &[
+    "DELETE /v1/queues/{queue}",
     "DELETE /v1/queues/{queue}/tasks/{task_id}",
     "GET /admin/backup",
     "GET /v1/queues/{queue}",
@@ -328,6 +329,54 @@ async fn h2c_routes_probes_openapi_metrics_dispatch_and_auth_are_live() {
         recovered.lock().unwrap().status("jobs", "hello").unwrap(),
         Some(defer::TaskStatus::Succeeded)
     ));
+
+    assert_eq!(
+        client
+            .delete(format!("{url}/v1/queues/jobs"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        http1
+            .get(format!("{url}/v1/queues/jobs"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        client
+            .delete(format!("{url}/v1/queues/jobs"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        client
+            .put(format!("{url}/v1/queues/jobs"))
+            .json(&QueuePolicy::default())
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        http1
+            .get(format!("{url}/v1/queues/jobs"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+
     open_server.abort();
 
     let registry = serde_json::json!({
@@ -409,6 +458,16 @@ async fn h2c_routes_probes_openapi_metrics_dispatch_and_auth_are_live() {
             .put(format!("{auth_url}/v1/queues/jobs"))
             .bearer_auth("reader")
             .json(&QueuePolicy::default())
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .delete(format!("{auth_url}/v1/queues/jobs"))
+            .bearer_auth("reader")
             .send()
             .await
             .unwrap()
