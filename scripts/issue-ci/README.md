@@ -27,57 +27,48 @@ A fresh review independently checks the same current head after qualification; n
 - `run-id`: passes `github.event.workflow_run.id` in the `workflow_run` event context.
 - `policy`: specifies `.github/issue-ci-required-gates.json` on the consumer default branch.
 
-## Staged pilot qualification contract (v1)
+## Live failure-only policy preservation
 
-Defer owns affected-test mapping and thin pinned CI integration. Defer does not fork or
-duplicate the shared controller/evaluator into a local implementation.
+`.github/issue-ci-required-gates.json` is the LIVE policy consumed by the shared action.
+It preserves the complete original gate inventory:
+- `defer-ci`: `fmt, clippy, tests, release contract`
+- `gke-test`: `build server image / build + publish ghcr test image`,
+  `build test-client image`, `resolve image identity`,
+  `GKE e2e (operator_recovery) / deploy + test on shared GKE`
 
-### Trusted workflow bindings
+Crucially, the live policy omits the live `qualification` key to prevent the shared evaluator
+from narrowing the workflow inventory during unfinished qualification. A failure in either
+`defer-ci` or `gke-test` (including operator recovery tests) correctly transitions an open
+`doing` issue to `todo` with exact failure links. All-green evidence in `failure-only` mode
+evaluates to `pending` and never produces `done`.
 
-Allowlisted workflows and their immutable definitions:
-- `.github/workflows/defer-ci.yml`: ID `381777738`, blob SHA `35065bbbf26d435098490a835ef9393c8847b309`
-- `.github/workflows/gke-test.yml`: ID `389390520`, blob SHA `b8cb109f019b6e360c7e4ad1de7c961784507cd3`
+## Non-live candidate qualification policy (v1)
 
-### Check mappings
+Incomplete v1 qualification mapping is staged in `.github/issue-ci-qualification-candidate.json`
+as an explicitly NON-LIVE candidate document. It defines the candidate v1 structure:
+- Trusted workflow bindings (`defer-ci` ID `381777738`, `gke-test` ID `389390520`).
+- Check allowlists and `always: ["policy"]`.
+- Protected paths including gate infrastructure and selection job manifests.
+- Trigger-path coverage across all GKE and unit paths.
 
-- `policy`: `defer-ci` / `fmt, clippy, tests, release contract` (kind: `policy`, required in `always`)
-- `unit`: `defer-ci` / `fmt, clippy, tests, release contract` (kind: `unit`)
-- `gke_server_image`: `gke-test` / `build server image / build + publish ghcr test image` (kind: `functional_e2e`)
-- `gke_client_image`: `gke-test` / `build test-client image` (kind: `functional_e2e`)
-- `gke_resolve`: `gke-test` / `resolve image identity` (kind: `functional_e2e`)
-- `gke_e2e`: `gke-test` / `GKE e2e (operator_recovery) / deploy + test on shared GKE` (kind: `functional_e2e`)
+## Explicit deferred full-activation blockers
 
-### Applicability rules by change category
+Activating full qualification mode (`lifecycle_mode: full`) and removing blockers requires
+a separately reviewed change backed by real execution evidence. The following real blockers
+remain unresolved:
 
-1. **Runtime & clients** (`crates/**`, `clients/**`, `Cargo.toml`, `Cargo.lock`, `build.sh`, `ddd.toml`):
-   - Require: `unit`
-   - Exempt: `functional_e2e` (covered by unit/workspace integration tests; cluster e2e applies to deployment/operator paths), `performance` (blocked by explicit qualification blocker)
-2. **Deployment & operator** (`k8s/**`, `crates/defer-operator/**`, `crates/defer/tests/operator.rs`, `Dockerfile*`):
-   - Require: `unit`, `gke_server_image`, `gke_client_image`, `gke_resolve`, `gke_e2e`
-   - Exempt: `performance` (blocked by explicit qualification blocker)
-3. **Documentation & non-executable** (`docs/**`, `*.md`, `aw.toml`, `.claude/**`, `benchmarks/**`):
-   - Require: none (always-required `policy` check runs)
-   - Exempt: `unit`, `functional_e2e`, `performance` (reviewed non-executable paths)
-4. **Tooling & workflow maintenance** (`.github/**`, `scripts/**`):
-   - Require: `unit`
-   - Exempt: `functional_e2e`, `performance`
+1. **Real performance applicability**: Stating "no gate exists" is NOT an exemption under qualification v1; an actual automated measured PR performance regression gate must be implemented and verified.
+2. **GKE reusable workflow transitive pin**: In `.github/workflows/gke-test.yml`, the reusable workflow is referenced via mutable `uses: faberline/aw/.github/workflows/gke-test.yml@main`. It must be pinned to an immutable 40-hex commit hash.
+3. **Protected roots**: Gate infrastructure must declare all local test selection roots as protected paths, including `k8s/gke-test-job/operator_recovery/job.yaml` (which selects the test binary and `--operator_recovery` filter).
+4. **GKE trigger path alignment**: All repository paths that trigger `gke-test` (`crates/defer/tests/it/**`, `.github/workflows/defer-test-image.yml`, `Dockerfile*`, `k8s/**`, `crates/defer-operator/**`) must be aligned in qualification rules so GKE is never dropped.
+5. **Real current-head provenance & negative cases**: The platform must prove actual tested source and execution head/base binding for current PR and latest attempt, with tested negative cases for missing, skipped, cancelled, stale, rerun, and untrusted evidence.
+6. **Failure-only baseline**: Live policy remains strictly `failure-only` with nonempty `qualification_blockers`. General CI green is NOT qualification and must not mark done.
 
-### Protected paths
+## Staged PR review boundary
 
-Gate infrastructure paths whose modification requires reviewed policy updates:
-`.github/issue-ci-required-gates.json`, `scripts/issue-ci/**`, `scripts/meta/**`, `scripts/release/**`.
-
-## Baseline preservation & remaining activation requirements
-
-- `lifecycle_mode: failure-only` is preserved. Genuine failures return an open `doing` issue
-  to `todo` with exact links; all-green evidence cannot produce `done`.
-- Nonempty `qualification_blockers` are preserved:
-  1. "No automatically enforced affected performance PR qualification gate exists."
-  2. "The existing path-filtered GKE suite is partial e2e coverage; affected functional/e2e selection and docs-only applicability require a reviewed policy. Missing or skipped GKE runs cannot qualify done."
-- **Remaining requirements before full pilot activation**:
-  - Genuine current-head / latest-attempt execution and source binding proof on PR head.
-  - Automated measured performance PR qualification gate.
-  - Separate reviewed controller activation change backed by verified pilot evidence. Normal CI green is NOT full qualification and will not mark done.
+PR #44 is an intermediate staging draft PR for controller review. It is NOT a managed
+lifecycle-success pilot and references #42 with `References #42` (without `Closes/Fixes/Resolves`).
+General CI success does not authorize marking done or activating full mode.
 
 ## Local validation
 
