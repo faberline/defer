@@ -70,11 +70,33 @@ PR #44 is an intermediate staging draft PR for controller review. It is NOT a ma
 lifecycle-success pilot and references #42 with `References #42` (without `Closes/Fixes/Resolves`).
 General CI success does not authorize marking done or activating full mode.
 
-## Local validation
+## Local validation & pinned evaluator regression
 
-Run only affected offline tests locally:
+Run only affected offline tests locally (network-free):
 
 ```sh
+# Run all issue-ci unit tests (includes consumer policy and pinned evaluator suite):
 python3 -B -m unittest discover -s scripts/issue-ci -p 'test_*.py'
+
+# Static workflow validation:
 actionlint .github/workflows/issue-ci.yml
 ```
+
+### Test suite structure
+
+1. **Pinned Evaluator Regression (`scripts/issue-ci/test_pinned_evaluator.py`)**:
+   - Executes against the ACTUAL pinned shared action modules from `faberline/aw@693e45bded9a4ec8167573e82b423c823c193ec0`.
+   - Verified fixture sources in `scripts/issue-ci/fixtures/pinned_aw/`:
+     - `handoff.py`: SHA256 `8313b8c5bf88a42c4cd8b3131fc576360fb0d2b6d120aa30d1a820f4e5ada773`
+     - `qualification.py`: SHA256 `acc235139940b4e5d8ea1e75b4101ac442ee14a1e77ea01207838a55fdc7eaed`
+     - `action.py`: SHA256 `4a6894fee5a1f56f2b469335c9e061ce39c51d7cb2220ee06fe680e6c3d51ab6`
+   - Dynamically loads and verifies modules from isolated temporary directories during tests.
+   - Proves that live policy (`.github/issue-ci-required-gates.json`) without `qualification` cannot narrow inventory away from GKE, GKE failure yields `todo` with exact failed job URL, missing/in-progress/skipped GKE yields `pending`, and all-green failure-only mode yields `pending`.
+   - Exercises the `action.py` boundary with bounded mocks, verifying `trusted_policy` and `main` dispatch.
+
+2. **Consumer Policy Contracts (`scripts/issue-ci/test_policy.py`)**:
+   - Verifies consumer gate inventory, deployed action interface inputs, pilot commit pin, and candidate qualification schema.
+   - Distinct from pinned evaluator execution to prevent local vendored files from being misrepresented as proof of the shared evaluator.
+
+3. **Consumer Handoff Suite (`scripts/issue-ci/test_handoff.py`)**:
+   - Preserves unit coverage of consumer-local helper functions.

@@ -9,6 +9,9 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Local consumer vendored handoff module used by check-policy.py and consumer tests.
+# For proof of the actual pinned shared evaluator (aw@693e45bded9a4ec8167573e82b423c823c193ec0),
+# see scripts/issue-ci/test_pinned_evaluator.py.
 import handoff
 spec = importlib.util.spec_from_file_location('policy', ROOT / 'scripts/issue-ci/check-policy.py')
 policy = importlib.util.module_from_spec(spec)
@@ -45,88 +48,6 @@ class ConsumerPolicyTests(unittest.TestCase):
         self.assertEqual(self.config.get('lifecycle_mode'), 'failure-only')
         self.assertTrue(self.config.get('qualification_blockers'))
         self.assertEqual(len(self.config['workflows']), 2)
-
-    def test_shared_evaluator_regression_defer_ci_success_and_gke_failure_returns_todo(self):
-        # PINNED shared evaluator regression: operator_recovery.rs-only case with
-        # defer-ci success + GKE failure MUST yield state 'todo' and error evidence with job URL.
-        snapshots = {
-            '.github/workflows/defer-ci.yml': (
-                {'id': 101, 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/101'},
-                [{'name': 'fmt, clippy, tests, release contract', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/101/job/1'}]
-            ),
-            '.github/workflows/gke-test.yml': (
-                {'id': 102, 'status': 'completed', 'conclusion': 'failure', 'html_url': 'https://github.com/o/r/actions/runs/102'},
-                [
-                    {'name': 'build server image / build + publish ghcr test image', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/102/job/1'},
-                    {'name': 'build test-client image', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/102/job/2'},
-                    {'name': 'resolve image identity', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/102/job/3'},
-                    {'name': 'GKE e2e (operator_recovery) / deploy + test on shared GKE', 'status': 'completed', 'conclusion': 'failure', 'html_url': 'https://github.com/o/r/actions/runs/102/job/4'}
-                ]
-            )
-        }
-        state, reasons, evidence = handoff.evaluate_policy(self.config, snapshots)
-        self.assertEqual(state, 'todo')
-        self.assertTrue(any('operator_recovery' in r and 'https://github.com/o/r/actions/runs/102/job/4' in r for r in reasons))
-
-    def test_shared_evaluator_regression_gke_missing_or_pending_never_done(self):
-        # Missing GKE run stays pending
-        snapshots_missing = {
-            '.github/workflows/defer-ci.yml': (
-                {'id': 101, 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/101'},
-                [{'name': 'fmt, clippy, tests, release contract', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/101/job/1'}]
-            )
-        }
-        self.assertEqual(handoff.evaluate_policy(self.config, snapshots_missing)[0], 'pending')
-
-        # In-progress GKE run stays pending
-        snapshots_in_progress = {
-            '.github/workflows/defer-ci.yml': snapshots_missing['.github/workflows/defer-ci.yml'],
-            '.github/workflows/gke-test.yml': (
-                {'id': 102, 'status': 'in_progress', 'conclusion': None, 'html_url': 'https://github.com/o/r/actions/runs/102'},
-                [
-                    {'name': 'build server image / build + publish ghcr test image', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/102/job/1'},
-                    {'name': 'build test-client image', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/102/job/2'},
-                    {'name': 'resolve image identity', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/102/job/3'},
-                    {'name': 'GKE e2e (operator_recovery) / deploy + test on shared GKE', 'status': 'in_progress', 'conclusion': None, 'html_url': 'https://github.com/o/r/actions/runs/102/job/4'}
-                ]
-            )
-        }
-        self.assertEqual(handoff.evaluate_policy(self.config, snapshots_in_progress)[0], 'pending')
-
-        # Skipped GKE run stays pending
-        snapshots_skipped = {
-            '.github/workflows/defer-ci.yml': snapshots_missing['.github/workflows/defer-ci.yml'],
-            '.github/workflows/gke-test.yml': (
-                {'id': 102, 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/102'},
-                [
-                    {'name': 'build server image / build + publish ghcr test image', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/102/job/1'},
-                    {'name': 'build test-client image', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/102/job/2'},
-                    {'name': 'resolve image identity', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/102/job/3'},
-                    {'name': 'GKE e2e (operator_recovery) / deploy + test on shared GKE', 'status': 'completed', 'conclusion': 'skipped', 'html_url': 'https://github.com/o/r/actions/runs/102/job/4'}
-                ]
-            )
-        }
-        self.assertEqual(handoff.evaluate_policy(self.config, snapshots_skipped)[0], 'pending')
-
-    def test_shared_evaluator_regression_all_green_in_failure_only_never_done(self):
-        snapshots_all_success = {
-            '.github/workflows/defer-ci.yml': (
-                {'id': 101, 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/101'},
-                [{'name': 'fmt, clippy, tests, release contract', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/101/job/1'}]
-            ),
-            '.github/workflows/gke-test.yml': (
-                {'id': 102, 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/102'},
-                [
-                    {'name': 'build server image / build + publish ghcr test image', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/102/job/1'},
-                    {'name': 'build test-client image', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/102/job/2'},
-                    {'name': 'resolve image identity', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/102/job/3'},
-                    {'name': 'GKE e2e (operator_recovery) / deploy + test on shared GKE', 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/o/r/actions/runs/102/job/4'}
-                ]
-            )
-        }
-        state, reasons, _ = handoff.evaluate_policy(self.config, snapshots_all_success)
-        self.assertEqual(state, 'pending')
-        self.assertIn('failure-only mode does not authorize done', reasons)
 
     def test_candidate_qualification_v1_policy_schema(self):
         candidate_path = ROOT / '.github/issue-ci-qualification-candidate.json'
