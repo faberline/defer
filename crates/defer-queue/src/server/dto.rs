@@ -20,9 +20,15 @@ pub struct CreateTasksResponse {
     pub created: usize,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct TaskStatusResponse {
     pub task_id: String,
     pub status: TaskStatus,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct TaskListResponse {
+    pub tasks: Vec<TaskStatusResponse>,
+    pub next_cursor: Option<String>,
 }
 // HANDWRITE-END
