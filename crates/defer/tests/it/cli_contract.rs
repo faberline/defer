@@ -17,6 +17,7 @@ const EXPECTED_DOMAIN_OPERATIONS: &[&str] = &[
     "GET /v1/queues/{queue}/tasks/{task_id}",
     "POST /v1/queues/{queue}/control",
     "POST /v1/queues/{queue}/dispatch",
+    "POST /v1/queues/{queue}/purge",
     "POST /v1/queues/{queue}/tasks",
     "POST /v1/queues/{queue}/tasks:batch",
     "PUT /v1/queues/{queue}",

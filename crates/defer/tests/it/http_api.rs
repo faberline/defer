@@ -85,6 +85,7 @@ const EXPECTED_DOMAIN_OPERATIONS: &[&str] = &[
     "GET /v1/queues/{queue}/tasks/{task_id}",
     "POST /v1/queues/{queue}/control",
     "POST /v1/queues/{queue}/dispatch",
+    "POST /v1/queues/{queue}/purge",
     "POST /v1/queues/{queue}/tasks",
     "POST /v1/queues/{queue}/tasks:batch",
     "PUT /v1/queues/{queue}",
@@ -328,6 +329,47 @@ async fn h2c_routes_probes_openapi_metrics_dispatch_and_auth_are_live() {
         recovered.lock().unwrap().status("jobs", "hello").unwrap(),
         Some(defer::TaskStatus::Succeeded)
     ));
+
+    let purge_res: serde_json::Value = client
+        .post(format!("{url}/v1/queues/jobs/purge"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(purge_res["purged"], 1);
+
+    assert_eq!(
+        http1
+            .get(format!("{url}/v1/queues/jobs/tasks/hello"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let second_purge: serde_json::Value = client
+        .post(format!("{url}/v1/queues/jobs/purge"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(second_purge["purged"], 0);
+
+    assert_eq!(
+        client
+            .post(format!("{url}/v1/queues/missing-queue/purge"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
     open_server.abort();
 
     let registry = serde_json::json!({
@@ -397,6 +439,16 @@ async fn h2c_routes_probes_openapi_metrics_dispatch_and_auth_are_live() {
     assert_eq!(
         client
             .get(format!("{auth_url}/admin/backup"))
+            .bearer_auth("reader")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .post(format!("{auth_url}/v1/queues/jobs/purge"))
             .bearer_auth("reader")
             .send()
             .await
