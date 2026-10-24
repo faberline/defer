@@ -603,5 +603,99 @@ async fn dead_letter_terminal_state_converges_and_survives_restart() {
 
     cluster.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn queue_delete_converges_on_followers_and_survives_restart() {
+    let now = Utc.timestamp_millis_opt(30_000).unwrap();
+    let mut cluster = Cluster::new(3).await;
+    cluster.start_all();
+    let leader = cluster.wait_leader().await;
+    let follower = cluster
+        .live()
+        .map(|(id, _)| id)
+        .find(|id| *id != leader)
+        .unwrap();
+
+    cluster
+        .raft(leader)
+        .configure_queue("jobs".into(), QueuePolicy::default())
+        .await
+        .unwrap();
+    cluster
+        .raft(leader)
+        .create_task("jobs".into(), task("task-one", now))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        cluster
+            .raft(follower)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot("jobs")
+            .unwrap()
+            .task_count,
+        1
+    );
+
+    cluster
+        .raft(leader)
+        .delete_queue("jobs".into())
+        .await
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let exists = cluster
+            .raft(follower)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot("jobs")
+            .is_ok();
+        if !exists {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "queue did not disappear on follower"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let restart_id = follower;
+    cluster.kill(restart_id).await;
+    cluster.start_node(restart_id);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let exists = cluster
+            .raft(restart_id)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot("jobs")
+            .is_ok();
+        if !exists {
+            break;
+        }
+        assert!(Instant::now() < deadline, "queue reappeared after restart");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    for (_, node) in cluster.live() {
+        assert!(
+            node.raft
+                .scheduler()
+                .lock()
+                .unwrap()
+                .queue_snapshot("jobs")
+                .is_err(),
+            "deleted queue must be gone on all live nodes"
+        );
+    }
+
+    cluster.shutdown().await;
+}
 // </HANDWRITE>
 // HANDWRITE-END

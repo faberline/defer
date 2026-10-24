@@ -114,6 +114,38 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "queue_delete",
+        "parameters": [
+          {
+            "name": "queue",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/queues/{queue}/control": {

@@ -55,7 +55,10 @@ fn router_inner(
     let verifier = state.verifier.clone();
     let body_limit = state.body_limit_bytes();
     let data = Router::new()
-        .route("/v1/queues/{queue}", get(queue_get).put(queue_put))
+        .route(
+            "/v1/queues/{queue}",
+            get(queue_get).put(queue_put).delete(queue_delete),
+        )
         .route("/v1/queues/{queue}/control", post(queue_control))
         .route("/v1/queues/{queue}/tasks", post(task_create))
         .route("/v1/queues/{queue}/tasks:batch", post(task_create_batch))
@@ -198,6 +201,27 @@ pub async fn queue_put(
     state.metrics.requests.incr();
     match state.raft.configure_queue(queue, policy).await {
         Ok(snapshot) => Json(snapshot).into_response(),
+        Err(error) => propose_error(error),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/queues/{queue}",
+    params(("queue" = String, Path, description = "Queue name")),
+    responses((status = 204), (status = 404, body = service_http::ErrorEnvelope))
+)]
+pub async fn queue_delete(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Path(queue): Path<String>,
+) -> Response {
+    if let Err(error) = authorize(&principal, &queue, Role::Write) {
+        return error.into_response();
+    }
+    state.metrics.requests.incr();
+    match state.raft.delete_queue(queue).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => propose_error(error),
     }
 }
