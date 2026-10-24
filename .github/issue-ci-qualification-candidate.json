@@ -1,0 +1,150 @@
+{
+  "aw_revision": "693e45bded9a4ec8167573e82b423c823c193ec0",
+  "qualification_blockers": [
+    "Candidate only: replace every workflow/job identity and applicability rule with reviewed real pilot evidence before separately activating full mode.",
+    "No automatically enforced affected performance PR qualification gate exists.",
+    "The existing path-filtered GKE suite is partial e2e coverage; affected functional/e2e selection and docs-only applicability require a reviewed policy. Missing or skipped GKE runs cannot qualify done.",
+    "Transitive pins and protected roots incomplete: k8s/gke-test-job/operator_recovery/job.yaml, reusable workflow @main, and real current-head/base binding remain unpinned."
+  ],
+  "workflows": [
+    {
+      "path": ".github/workflows/defer-ci.yml",
+      "jobs": [
+        "fmt, clippy, tests, release contract"
+      ]
+    },
+    {
+      "path": ".github/workflows/gke-test.yml",
+      "jobs": [
+        "build server image / build + publish ghcr test image",
+        "build test-client image",
+        "resolve image identity",
+        "GKE e2e (operator_recovery) / deploy + test on shared GKE"
+      ]
+    }
+  ],
+  "qualification": {
+    "version": 1,
+    "trusted_workflows": {
+      ".github/workflows/defer-ci.yml": {
+        "id": 381777738,
+        "definition_sha": "35065bbbf26d435098490a835ef9393c8847b309"
+      },
+      ".github/workflows/gke-test.yml": {
+        "id": 389390520,
+        "definition_sha": "b8cb109f019b6e360c7e4ad1de7c961784507cd3"
+      }
+    },
+    "checks": {
+      "policy": {
+        "workflow": ".github/workflows/defer-ci.yml",
+        "job": "fmt, clippy, tests, release contract",
+        "kind": "policy"
+      },
+      "unit": {
+        "workflow": ".github/workflows/defer-ci.yml",
+        "job": "fmt, clippy, tests, release contract",
+        "kind": "unit"
+      },
+      "gke_server_image": {
+        "workflow": ".github/workflows/gke-test.yml",
+        "job": "build server image / build + publish ghcr test image",
+        "kind": "functional_e2e"
+      },
+      "gke_client_image": {
+        "workflow": ".github/workflows/gke-test.yml",
+        "job": "build test-client image",
+        "kind": "functional_e2e"
+      },
+      "gke_resolve": {
+        "workflow": ".github/workflows/gke-test.yml",
+        "job": "resolve image identity",
+        "kind": "functional_e2e"
+      },
+      "gke_e2e": {
+        "workflow": ".github/workflows/gke-test.yml",
+        "job": "GKE e2e (operator_recovery) / deploy + test on shared GKE",
+        "kind": "functional_e2e"
+      }
+    },
+    "always": [
+      "policy"
+    ],
+    "protected_paths": [
+      ".github/issue-ci-required-gates.json",
+      ".github/issue-ci-qualification-candidate.json",
+      "k8s/gke-test-job/operator_recovery/job.yaml",
+      "scripts/issue-ci/**",
+      "scripts/meta/**",
+      "scripts/release/**"
+    ],
+    "rules": [
+      {
+        "paths": [
+          "crates/defer/tests/it/**",
+          ".github/workflows/defer-test-image.yml",
+          "Dockerfile*",
+          "k8s/**",
+          "crates/defer-operator/**",
+          "crates/defer/tests/operator.rs"
+        ],
+        "require": [
+          "unit",
+          "gke_server_image",
+          "gke_client_image",
+          "gke_resolve",
+          "gke_e2e"
+        ],
+        "exempt": {
+          "performance": "No automatically enforced affected performance PR qualification gate exists; cluster performance regression checks remain separate."
+        }
+      },
+      {
+        "paths": [
+          "crates/**",
+          "clients/**",
+          "Cargo.toml",
+          "Cargo.lock",
+          "build.sh",
+          "ddd.toml"
+        ],
+        "require": [
+          "unit"
+        ],
+        "exempt": {
+          "functional_e2e": "Core runtime crates and clients are validated through isolated unit and workspace integration tests; cluster e2e applies to deployment/operator paths.",
+          "performance": "No automatically enforced affected performance PR qualification gate exists; workload benchmarks remain separate."
+        }
+      },
+      {
+        "paths": [
+          "docs/**",
+          "*.md",
+          "aw.toml",
+          ".claude/**",
+          "benchmarks/**"
+        ],
+        "require": [],
+        "exempt": {
+          "unit": "Documentation, benchmark descriptions, and agent configs do not change executable build or test behavior.",
+          "functional_e2e": "Documentation, benchmark descriptions, and agent configs do not change deployed cluster behavior.",
+          "performance": "Documentation, benchmark descriptions, and agent configs do not alter runtime performance."
+        }
+      },
+      {
+        "paths": [
+          ".github/**",
+          "scripts/**"
+        ],
+        "require": [
+          "unit"
+        ],
+        "exempt": {
+          "functional_e2e": "Workflow, action, and tooling maintenance paths are validated by policy and unit checks; GKE e2e is exempt unless operator/test-image artifacts are touched.",
+          "performance": "No automatically enforced affected performance PR qualification gate exists for workflow/tooling changes."
+        }
+      }
+    ]
+  },
+  "lifecycle_mode": "failure-only"
+}

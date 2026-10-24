@@ -1,5 +1,5 @@
 {
-  "aw_revision": "67af8d020df3ca2ec4b064289408cfb0c2f8b299",
+  "aw_revision": "693e45bded9a4ec8167573e82b423c823c193ec0",
   "qualification_blockers": [
     "No automatically enforced affected performance PR qualification gate exists.",
     "The existing path-filtered GKE suite is partial e2e coverage; affected functional/e2e selection and docs-only applicability require a reviewed policy. Missing or skipped GKE runs cannot qualify done."
