@@ -338,7 +338,7 @@ async fn h2c_routes_probes_openapi_metrics_dispatch_and_auth_are_live() {
         .json()
         .await
         .unwrap();
-    assert_eq!(purge_res["purged"], 1);
+    assert_eq!(purge_res["purged"], 2);
 
     assert_eq!(
         http1
