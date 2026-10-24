@@ -8,6 +8,7 @@ use utoipa::OpenApi;
         description = "Raft-backed delayed HTTP push queue over HTTP/1.1 and h2c."
     ),
     paths(
+        crate::server::queue_list,
         crate::server::queue_get,
         crate::server::queue_put,
         crate::server::queue_control,
@@ -30,6 +31,7 @@ use utoipa::OpenApi;
         crate::server::QueueControlRequest,
         crate::server::CreateTasksRequest,
         crate::server::CreateTasksResponse,
+        crate::server::QueueListResponse,
         crate::server::TaskStatusResponse,
         service_http::ErrorEnvelope,
     ))

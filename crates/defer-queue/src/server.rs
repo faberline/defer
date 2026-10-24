@@ -8,7 +8,7 @@ mod state;
 
 use std::sync::Arc;
 
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::{header, Method, StatusCode};
 use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
@@ -22,7 +22,10 @@ use defer_dispatch::DispatchDisposition;
 use defer_replication::ProposeError;
 use defer_shared_kernel::{CreateTask, QueuePolicy, SchedulerError};
 
-pub use dto::{CreateTasksRequest, CreateTasksResponse, QueueControlRequest, TaskStatusResponse};
+pub use dto::{
+    CreateTasksRequest, CreateTasksResponse, QueueControlRequest, QueueListResponse,
+    TaskStatusResponse,
+};
 pub use state::AppState;
 
 pub fn router(state: AppState) -> Router {
@@ -55,6 +58,7 @@ fn router_inner(
     let verifier = state.verifier.clone();
     let body_limit = state.body_limit_bytes();
     let data = Router::new()
+        .route("/v1/queues", get(queue_list))
         .route("/v1/queues/{queue}", get(queue_get).put(queue_put))
         .route("/v1/queues/{queue}/control", post(queue_control))
         .route("/v1/queues/{queue}/tasks", post(task_create))
@@ -149,6 +153,87 @@ fn internal(error: impl std::fmt::Display) -> Response {
         "internal",
         error.to_string(),
     )
+    .into_response()
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct QueueListQuery {
+    pub page_size: Option<String>,
+    pub page_token: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/queues",
+    params(
+        ("page_size" = Option<usize>, Query, description = "Maximum number of queues to return (1..=1000, default 100)"),
+        ("page_token" = Option<String>, Query, description = "Page token of previous page"),
+    ),
+    responses(
+        (status = 200, body = QueueListResponse),
+        (status = 400, body = service_http::ErrorEnvelope)
+    )
+)]
+pub async fn queue_list(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Query(query): Query<QueueListQuery>,
+) -> Response {
+    let page_size = match query.page_size.as_deref() {
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(size) if (1..=1000).contains(&size) => size as usize,
+            _ => {
+                return ApiErr::new(
+                    StatusCode::BAD_REQUEST,
+                    "bad_request",
+                    "page_size must be in range 1..=1000",
+                )
+                .into_response();
+            }
+        },
+        None => 100,
+    };
+
+    state.metrics.requests.incr();
+
+    let principal_inner = principal.into_inner();
+    let scheduler_arc = state.raft.scheduler();
+    let scheduler = scheduler_arc.lock().unwrap();
+    let all_queues = scheduler.queue_names();
+    let visible_queues: Vec<_> = all_queues
+        .into_iter()
+        .filter(|q| principal_inner.ensure(q, Role::Read).is_ok())
+        .collect();
+
+    let start_idx = match query.page_token.as_deref() {
+        Some(token) if !token.is_empty() => visible_queues
+            .iter()
+            .position(|q| q.as_str() > token)
+            .unwrap_or(visible_queues.len()),
+        _ => 0,
+    };
+
+    let remaining = &visible_queues[start_idx..];
+    let (page_queues, next_page_token) = if remaining.len() > page_size {
+        (
+            &remaining[..page_size],
+            Some(remaining[page_size - 1].clone()),
+        )
+    } else {
+        (remaining, None)
+    };
+
+    let mut queues = Vec::with_capacity(page_queues.len());
+    for name in page_queues {
+        if let Ok(snapshot) = scheduler.queue_snapshot(name) {
+            queues.push(snapshot);
+        }
+    }
+
+    Json(QueueListResponse {
+        queues,
+        next_page_token,
+    })
     .into_response()
 }
 
@@ -398,6 +483,22 @@ mod tests {
         assert_eq!(disabled.status(), StatusCode::CONFLICT);
         let infra = propose_error(anyhow::anyhow!("commit timed out").into());
         assert_eq!(infra.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn queue_list_response_construction() {
+        let response = QueueListResponse {
+            queues: vec![],
+            next_page_token: None,
+        };
+        assert!(response.queues.is_empty());
+        assert_eq!(response.next_page_token, None);
+
+        let response_with_token = QueueListResponse {
+            queues: vec![],
+            next_page_token: Some("q2".into()),
+        };
+        assert_eq!(response_with_token.next_page_token.as_deref(), Some("q2"));
     }
 }
 // HANDWRITE-END

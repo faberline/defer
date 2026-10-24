@@ -26,6 +26,59 @@
         }
       }
     },
+    "/v1/queues": {
+      "get": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "queue_list",
+        "parameters": [
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "Maximum number of queues to return (1..=1000, default 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "description": "Page token of previous page",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/queues/{queue}": {
       "get": {
         "tags": [
@@ -570,6 +623,24 @@
           "Paused",
           "Disabled"
         ]
+      },
+      "QueueListResponse": {
+        "type": "object",
+        "required": [
+          "queues"
+        ],
+        "properties": {
+          "next_page_token": {
+            "type": "string",
+            "nullable": true
+          },
+          "queues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueueSnapshot"
+            }
+          }
+        }
       },
       "QueuePolicy": {
         "type": "object",

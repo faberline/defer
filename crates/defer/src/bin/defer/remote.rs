@@ -19,6 +19,17 @@ enum QueueCommand {
     Get(RemoteQueue),
     Put(QueuePutArgs),
     Control(QueueControlArgs),
+    List(QueueListArgs),
+}
+
+#[derive(clap::Args)]
+struct QueueListArgs {
+    #[arg(long)]
+    page_size: Option<usize>,
+    #[arg(long)]
+    page_token: Option<String>,
+    #[command(flatten)]
+    remote: Remote,
 }
 
 #[derive(clap::Args)]
@@ -191,6 +202,17 @@ pub(crate) async fn queue(args: QueueArgs) -> Result<()> {
                 .json(&json!({"state": state}))
                 .send()
                 .await?;
+            print_response(response, "done").await
+        }
+        QueueCommand::List(args) => {
+            let mut req = client(&args.remote)?.get(format!("{}/v1/queues", args.remote.url));
+            if let Some(page_size) = args.page_size {
+                req = req.query(&[("page_size", page_size)]);
+            }
+            if let Some(page_token) = &args.page_token {
+                req = req.query(&[("page_token", page_token)]);
+            }
+            let response = req.send().await?;
             print_response(response, "done").await
         }
     }
