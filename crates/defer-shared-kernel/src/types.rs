@@ -52,6 +52,10 @@ pub struct QueuePolicy {
     pub max_burst_size: usize,
     pub lease_ttl_ms: u64,
     pub retry_backoff_ms: u64,
+    #[serde(default)]
+    pub max_backoff_ms: Option<u64>,
+    #[serde(default)]
+    pub max_doublings: Option<u32>,
 }
 
 impl Default for QueuePolicy {
@@ -63,6 +67,8 @@ impl Default for QueuePolicy {
             max_burst_size: 100,
             lease_ttl_ms: 30_000,
             retry_backoff_ms: 1_000,
+            max_backoff_ms: None,
+            max_doublings: None,
         }
     }
 }
@@ -154,4 +160,28 @@ pub enum SchedulerError {
 }
 
 pub type SchedulerResult<T> = Result<T, SchedulerError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn policy_json_without_new_fields_deserializes() {
+        let json = r#"{"max_in_flight":100,"max_dispatch_per_tick":100,"max_dispatches_per_second":100,"max_burst_size":100,"lease_ttl_ms":30000,"retry_backoff_ms":1000}"#;
+        let policy: QueuePolicy =
+            serde_json::from_str(json).expect("deserializes without optional bounds");
+        assert_eq!(policy.max_backoff_ms, None);
+        assert_eq!(policy.max_doublings, None);
+        assert_eq!(policy, QueuePolicy::default());
+    }
+
+    #[test]
+    fn policy_json_with_new_fields_deserializes() {
+        let json = r#"{"max_in_flight":50,"max_dispatch_per_tick":20,"max_dispatches_per_second":10,"max_burst_size":5,"lease_ttl_ms":10000,"retry_backoff_ms":500,"max_backoff_ms":60000,"max_doublings":5}"#;
+        let policy: QueuePolicy =
+            serde_json::from_str(json).expect("deserializes with optional bounds");
+        assert_eq!(policy.max_backoff_ms, Some(60_000));
+        assert_eq!(policy.max_doublings, Some(5));
+    }
+}
 // HANDWRITE-END

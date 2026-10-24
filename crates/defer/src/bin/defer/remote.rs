@@ -17,6 +17,7 @@ pub(crate) struct QueueArgs {
 #[derive(Subcommand)]
 enum QueueCommand {
     Get(RemoteQueue),
+    #[command(alias = "configure")]
     Put(QueuePutArgs),
     Control(QueueControlArgs),
 }
@@ -45,6 +46,10 @@ struct QueuePutArgs {
     lease_ttl_ms: u64,
     #[arg(long, default_value_t = 1_000)]
     retry_backoff_ms: u64,
+    #[arg(long)]
+    max_backoff_ms: Option<u64>,
+    #[arg(long)]
+    max_doublings: Option<u32>,
     #[command(flatten)]
     remote: Remote,
 }
@@ -169,6 +174,8 @@ pub(crate) async fn queue(args: QueueArgs) -> Result<()> {
                 max_burst_size: args.max_burst_size,
                 lease_ttl_ms: args.lease_ttl_ms,
                 retry_backoff_ms: args.retry_backoff_ms,
+                max_backoff_ms: args.max_backoff_ms,
+                max_doublings: args.max_doublings,
             };
             let response = client(&args.remote)?
                 .put(format!("{}/v1/queues/{}", args.remote.url, args.queue))
