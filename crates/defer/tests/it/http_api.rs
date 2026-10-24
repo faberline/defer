@@ -964,14 +964,14 @@ async fn task_list_paged_filtered_and_authorized() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 
-    // Writer token (no read on jobs) -> 403
+    // Writer token (write role implies read) -> 200
     let res = client
         .get(format!("{auth_url}/v1/queues/jobs/tasks"))
         .bearer_auth("writer")
         .send()
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(res.status(), StatusCode::OK);
 
     // Other token (read on different queue) -> 403
     let res = client
