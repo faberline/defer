@@ -34,6 +34,8 @@ pub struct CreateTask {
     pub priority: u8,
     #[serde(default = "default_max_attempts")]
     pub max_attempts: u32,
+    #[serde(default)]
+    pub dispatch_deadline_ms: Option<u64>,
 }
 
 pub fn default_priority() -> u8 {
@@ -115,6 +117,8 @@ pub struct DispatchLease {
     pub epoch: u64,
     pub leased_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    #[serde(default)]
+    pub dispatch_deadline_ms: Option<u64>,
 }
 
 /// One externally observed HTTP result to commit against its fenced lease.
@@ -154,4 +158,67 @@ pub enum SchedulerError {
 }
 
 pub type SchedulerResult<T> = Result<T, SchedulerError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_task_decodes_with_and_without_dispatch_deadline() {
+        let json_without = serde_json::json!({
+            "task_id": "task-1",
+            "target": { "url": "http://127.0.0.1:8080/hook" },
+            "schedule_at": "2026-10-24T00:00:00Z"
+        });
+        let task_without: CreateTask = serde_json::from_value(json_without).unwrap();
+        assert_eq!(task_without.dispatch_deadline_ms, None);
+
+        let json_with = serde_json::json!({
+            "task_id": "task-2",
+            "target": { "url": "http://127.0.0.1:8080/hook" },
+            "schedule_at": "2026-10-24T00:00:00Z",
+            "dispatch_deadline_ms": 2500
+        });
+        let task_with: CreateTask = serde_json::from_value(json_with).unwrap();
+        assert_eq!(task_with.dispatch_deadline_ms, Some(2500));
+    }
+
+    #[test]
+    fn dispatch_lease_decodes_with_and_without_dispatch_deadline() {
+        let json_without = serde_json::json!({
+            "attempt_id": "att-1",
+            "task_id": "task-1",
+            "queue": "jobs",
+            "target": { "url": "http://127.0.0.1:8080/hook", "method": "POST", "headers": {} },
+            "payload": null,
+            "priority": 10,
+            "attempt": 1,
+            "idempotency_key": "jobs/task-1",
+            "executor_node": 1,
+            "epoch": 1,
+            "leased_at": "2026-10-24T00:00:00Z",
+            "expires_at": "2026-10-24T00:00:30Z"
+        });
+        let lease_without: DispatchLease = serde_json::from_value(json_without).unwrap();
+        assert_eq!(lease_without.dispatch_deadline_ms, None);
+
+        let json_with = serde_json::json!({
+            "attempt_id": "att-2",
+            "task_id": "task-2",
+            "queue": "jobs",
+            "target": { "url": "http://127.0.0.1:8080/hook", "method": "POST", "headers": {} },
+            "payload": null,
+            "priority": 10,
+            "attempt": 1,
+            "idempotency_key": "jobs/task-2",
+            "executor_node": 1,
+            "epoch": 1,
+            "leased_at": "2026-10-24T00:00:00Z",
+            "expires_at": "2026-10-24T00:00:30Z",
+            "dispatch_deadline_ms": 1500
+        });
+        let lease_with: DispatchLease = serde_json::from_value(json_with).unwrap();
+        assert_eq!(lease_with.dispatch_deadline_ms, Some(1500));
+    }
+}
 // HANDWRITE-END

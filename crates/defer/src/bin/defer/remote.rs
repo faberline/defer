@@ -97,6 +97,8 @@ struct TaskCreateArgs {
     priority: u8,
     #[arg(long, default_value_t = 3)]
     max_attempts: u32,
+    #[arg(long)]
+    dispatch_deadline_ms: Option<u64>,
     #[command(flatten)]
     remote: Remote,
 }
@@ -211,6 +213,7 @@ pub(crate) async fn task(args: TaskArgs) -> Result<()> {
                 schedule_at: args.schedule_at.unwrap_or_else(Utc::now),
                 priority: args.priority,
                 max_attempts: args.max_attempts,
+                dispatch_deadline_ms: args.dispatch_deadline_ms,
             };
             let response = client(&args.remote)?
                 .post(format!(

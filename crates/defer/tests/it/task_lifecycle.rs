@@ -20,6 +20,7 @@ fn task(id: &str, due_offset_ms: i64, priority: u8, max_attempts: u32) -> Create
         schedule_at: Utc::now() + Duration::milliseconds(due_offset_ms),
         priority,
         max_attempts,
+        dispatch_deadline_ms: None,
     }
 }
 

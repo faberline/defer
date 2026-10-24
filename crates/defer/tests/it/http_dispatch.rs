@@ -141,6 +141,7 @@ async fn dispatches_real_http_and_retries_with_stable_task_idempotency() {
             schedule_at: now,
             priority: 10,
             max_attempts: 2,
+            dispatch_deadline_ms: None,
         },
     )
     .await
@@ -253,6 +254,7 @@ async fn accepted_http_with_lost_fence_is_retried_with_the_stable_key() {
             schedule_at: now,
             priority: 10,
             max_attempts: 3,
+            dispatch_deadline_ms: None,
         },
     )
     .await
@@ -373,6 +375,7 @@ async fn shared_executor_dispatches_concurrently_with_a_hard_bound() {
                 schedule_at: now,
                 priority: 10,
                 max_attempts: 2,
+                dispatch_deadline_ms: None,
             },
         )
         .await
@@ -397,4 +400,195 @@ async fn shared_executor_dispatches_concurrently_with_a_hard_bound() {
     );
     server.abort();
 }
+
+async fn delayed_target(State(delay_ms): State<u64>) -> StatusCode {
+    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+    StatusCode::OK
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dispatch_deadline_below_delay_aborts_and_nacks_while_unset_succeeds() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_url = format!("http://{}/delayed", listener.local_addr().unwrap());
+    let target = Router::new()
+        .route("/delayed", any(delayed_target))
+        .with_state(200u64);
+    let server = tokio::spawn(async move { axum::serve(listener, target).await.unwrap() });
+
+    let dir = tempfile::tempdir().unwrap();
+    let scheduler = Arc::new(Mutex::new(DeferScheduler::new()));
+    let raft = Arc::new(
+        DeferRaft::spawn(
+            scheduler.clone(),
+            &dir.path().join("raft"),
+            0,
+            Membership {
+                voters: vec![0],
+                learners: vec![],
+            },
+            HashMap::new(),
+            DeferRaft::host_config(32),
+        )
+        .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while !raft.is_leader().await {
+        assert!(Instant::now() < deadline, "single node did not elect");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let now = Utc::now();
+    raft.configure_queue("deadline-q".into(), QueuePolicy::default())
+        .await
+        .unwrap();
+
+    // Task 1: deadline 50ms below target delay 200ms -> aborted and nacked
+    raft.create_task(
+        "deadline-q".into(),
+        CreateTask {
+            task_id: "slow-task".into(),
+            target: Target {
+                url: target_url.clone(),
+                method: "POST".into(),
+                headers: Default::default(),
+            },
+            payload: serde_json::json!({}),
+            schedule_at: now,
+            priority: 10,
+            max_attempts: 2,
+            dispatch_deadline_ms: Some(50),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Task 2: deadline unset with 2s process timeout -> succeeds
+    raft.create_task(
+        "deadline-q".into(),
+        CreateTask {
+            task_id: "normal-task".into(),
+            target: Target {
+                url: target_url.clone(),
+                method: "POST".into(),
+                headers: Default::default(),
+            },
+            payload: serde_json::json!({}),
+            schedule_at: now,
+            priority: 5,
+            max_attempts: 2,
+            dispatch_deadline_ms: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let dispatcher = HttpDispatcher::new(Duration::from_secs(2), None).unwrap();
+
+    // Dispatch task 1 (priority 10 leases first)
+    let report1 = dispatcher
+        .dispatch_one(&raft, "deadline-q", now)
+        .await
+        .unwrap()
+        .expect("task 1 must lease");
+    assert_eq!(report1.task_id, "slow-task");
+    assert!(report1.transport_error.is_some());
+    assert!(matches!(
+        report1.disposition,
+        DispatchDisposition::Retried { .. }
+    ));
+
+    // Dispatch task 2 (priority 5 leases next)
+    let report2 = dispatcher
+        .dispatch_one(&raft, "deadline-q", now)
+        .await
+        .unwrap()
+        .expect("task 2 must lease");
+    assert_eq!(report2.task_id, "normal-task");
+    assert_eq!(report2.target_status, Some(200));
+    assert_eq!(report2.disposition, DispatchDisposition::Acked);
+
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dispatch_deadline_above_process_timeout_is_clamped() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_url = format!("http://{}/delayed", listener.local_addr().unwrap());
+    let target = Router::new()
+        .route("/delayed", any(delayed_target))
+        .with_state(250u64);
+    let server = tokio::spawn(async move { axum::serve(listener, target).await.unwrap() });
+
+    let dir = tempfile::tempdir().unwrap();
+    let scheduler = Arc::new(Mutex::new(DeferScheduler::new()));
+    let raft = Arc::new(
+        DeferRaft::spawn(
+            scheduler.clone(),
+            &dir.path().join("raft"),
+            0,
+            Membership {
+                voters: vec![0],
+                learners: vec![],
+            },
+            HashMap::new(),
+            DeferRaft::host_config(32),
+        )
+        .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while !raft.is_leader().await {
+        assert!(Instant::now() < deadline, "single node did not elect");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let now = Utc::now();
+    raft.configure_queue("clamped-q".into(), QueuePolicy::default())
+        .await
+        .unwrap();
+
+    // Task with 5000ms deadline, but dispatcher process timeout is 80ms
+    raft.create_task(
+        "clamped-q".into(),
+        CreateTask {
+            task_id: "clamped-task".into(),
+            target: Target {
+                url: target_url.clone(),
+                method: "POST".into(),
+                headers: Default::default(),
+            },
+            payload: serde_json::json!({}),
+            schedule_at: now,
+            priority: 10,
+            max_attempts: 2,
+            dispatch_deadline_ms: Some(5000),
+        },
+    )
+    .await
+    .unwrap();
+
+    let dispatcher = HttpDispatcher::new(Duration::from_millis(80), None).unwrap();
+    let report = dispatcher
+        .dispatch_one(&raft, "clamped-q", now)
+        .await
+        .unwrap()
+        .expect("clamped task must lease");
+    assert_eq!(report.task_id, "clamped-task");
+    assert!(report.transport_error.is_some());
+    assert!(matches!(
+        report.disposition,
+        DispatchDisposition::Retried { .. }
+    ));
+
+    server.abort();
+}
+
+#[test]
+fn body_without_dispatch_deadline_decodes() {
+    let json = serde_json::json!({
+        "task_id": "legacy-task",
+        "target": { "url": "http://127.0.0.1:8080/task" },
+        "schedule_at": "2026-10-24T12:00:00Z"
+    });
+    let task: CreateTask = serde_json::from_value(json).unwrap();
+    assert_eq!(task.dispatch_deadline_ms, None);
+}
+
 // HANDWRITE-END

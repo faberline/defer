@@ -178,6 +178,7 @@ async fn defer_stays_within_twenty_percent_of_relay_scheduler_ceiling() {
                 schedule_at: now,
                 priority: 10,
                 max_attempts: 3,
+                dispatch_deadline_ms: None,
             })
             .collect();
         assert_eq!(
