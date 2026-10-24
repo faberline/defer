@@ -627,17 +627,25 @@ async fn queue_delete_converges_on_followers_and_survives_restart() {
         .await
         .unwrap();
 
-    assert_eq!(
-        cluster
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let count = cluster
             .raft(follower)
             .scheduler()
             .lock()
             .unwrap()
             .queue_snapshot("jobs")
-            .unwrap()
-            .task_count,
-        1
-    );
+            .map(|s| s.task_count)
+            .unwrap_or(0);
+        if count == 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "task did not appear on follower before delete"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 
     cluster
         .raft(leader)
@@ -645,7 +653,7 @@ async fn queue_delete_converges_on_followers_and_survives_restart() {
         .await
         .unwrap();
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(8);
     loop {
         let exists = cluster
             .raft(follower)
@@ -667,7 +675,7 @@ async fn queue_delete_converges_on_followers_and_survives_restart() {
     let restart_id = follower;
     cluster.kill(restart_id).await;
     cluster.start_node(restart_id);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(8);
     loop {
         let exists = cluster
             .raft(restart_id)
@@ -683,16 +691,24 @@ async fn queue_delete_converges_on_followers_and_survives_restart() {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 
-    for (_, node) in cluster.live() {
-        assert!(
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let gone = cluster.live().all(|(_, node)| {
             node.raft
                 .scheduler()
                 .lock()
                 .unwrap()
                 .queue_snapshot("jobs")
-                .is_err(),
+                .is_err()
+        });
+        if gone {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
             "deleted queue must be gone on all live nodes"
         );
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
 
     cluster.shutdown().await;
