@@ -8,7 +8,7 @@ mod state;
 
 use std::sync::Arc;
 
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::{header, Method, StatusCode};
 use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
@@ -22,7 +22,10 @@ use defer_dispatch::DispatchDisposition;
 use defer_replication::ProposeError;
 use defer_shared_kernel::{CreateTask, QueuePolicy, SchedulerError};
 
-pub use dto::{CreateTasksRequest, CreateTasksResponse, QueueControlRequest, TaskStatusResponse};
+pub use dto::{
+    CreateTasksRequest, CreateTasksResponse, QueueControlRequest, TaskListResponse,
+    TaskStatusResponse,
+};
 pub use state::AppState;
 
 pub fn router(state: AppState) -> Router {
@@ -57,7 +60,7 @@ fn router_inner(
     let data = Router::new()
         .route("/v1/queues/{queue}", get(queue_get).put(queue_put))
         .route("/v1/queues/{queue}/control", post(queue_control))
-        .route("/v1/queues/{queue}/tasks", post(task_create))
+        .route("/v1/queues/{queue}/tasks", get(task_list).post(task_create))
         .route("/v1/queues/{queue}/tasks:batch", post(task_create_batch))
         .route(
             "/v1/queues/{queue}/tasks/{task_id}",
@@ -223,6 +226,99 @@ pub async fn queue_control(
         Ok(snapshot) => Json(snapshot).into_response(),
         Err(error) => propose_error(error),
     }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct TaskListQuery {
+    pub state: Option<String>,
+    pub limit: Option<String>,
+    pub cursor: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/queues/{queue}/tasks",
+    params(
+        ("queue" = String, Path, description = "Queue name"),
+        ("state" = Option<String>, Query, description = "Filter by task state (scheduled, leased, succeeded, dead_lettered, canceled)"),
+        ("limit" = Option<usize>, Query, description = "Maximum number of tasks to return (1..=1000, default 100)"),
+        ("cursor" = Option<String>, Query, description = "Last task_id of previous page"),
+    ),
+    responses(
+        (status = 200, body = TaskListResponse),
+        (status = 400, body = service_http::ErrorEnvelope),
+        (status = 404, body = service_http::ErrorEnvelope)
+    )
+)]
+pub async fn task_list(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Path(queue): Path<String>,
+    Query(query): Query<TaskListQuery>,
+) -> Response {
+    if let Err(error) = authorize(&principal, &queue, Role::Read) {
+        return error.into_response();
+    }
+    state.metrics.requests.incr();
+
+    let limit = match query.limit.as_deref() {
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(limit) if (1..=1000).contains(&limit) => limit as usize,
+            _ => {
+                return ApiErr::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid",
+                    "limit must be between 1 and 1000",
+                )
+                .into_response();
+            }
+        },
+        None => 100,
+    };
+
+    let state_filter = match query.state.as_deref() {
+        Some("scheduled") => Some(defer_shared_kernel::TaskStateFilter::Scheduled),
+        Some("leased") => Some(defer_shared_kernel::TaskStateFilter::Leased),
+        Some("succeeded") => Some(defer_shared_kernel::TaskStateFilter::Succeeded),
+        Some("dead_lettered") => Some(defer_shared_kernel::TaskStateFilter::DeadLettered),
+        Some("canceled") => Some(defer_shared_kernel::TaskStateFilter::Canceled),
+        Some(unknown) => {
+            return ApiErr::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                format!("invalid state filter: {unknown}"),
+            )
+            .into_response();
+        }
+        None => None,
+    };
+
+    let cursor = query.cursor.as_deref().filter(|s| !s.is_empty());
+
+    let (tasks, has_more) =
+        match state
+            .raft
+            .scheduler()
+            .lock()
+            .unwrap()
+            .list_tasks(&queue, state_filter, cursor, limit)
+        {
+            Ok(res) => res,
+            Err(error) => return scheduler_error(error),
+        };
+
+    let next_cursor = if has_more {
+        tasks.last().map(|(id, _)| id.clone())
+    } else {
+        None
+    };
+
+    let tasks = tasks
+        .into_iter()
+        .map(|(task_id, status)| TaskStatusResponse { task_id, status })
+        .collect();
+
+    Json(TaskListResponse { tasks, next_cursor }).into_response()
 }
 
 #[utoipa::path(

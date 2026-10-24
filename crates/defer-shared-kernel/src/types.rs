@@ -100,6 +100,29 @@ pub enum TaskStatus {
     Canceled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStateFilter {
+    Scheduled,
+    Leased,
+    Succeeded,
+    DeadLettered,
+    Canceled,
+}
+
+impl TaskStateFilter {
+    pub fn matches(&self, status: &TaskStatus) -> bool {
+        matches!(
+            (self, status),
+            (Self::Scheduled, TaskStatus::Scheduled)
+                | (Self::Leased, TaskStatus::Leased { .. })
+                | (Self::Succeeded, TaskStatus::Succeeded)
+                | (Self::DeadLettered, TaskStatus::DeadLettered)
+                | (Self::Canceled, TaskStatus::Canceled)
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DispatchLease {
     pub attempt_id: AttemptId,
