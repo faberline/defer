@@ -142,4 +142,122 @@ fn cancel_prevents_dispatch() {
         Some(TaskStatus::Canceled)
     );
 }
+
+#[test]
+fn retry_backoff_bounds_honor_max_doublings_and_max_backoff() {
+    let now = Utc::now();
+    let mut s = scheduler(QueuePolicy {
+        retry_backoff_ms: 1_000,
+        max_backoff_ms: Some(3_000),
+        max_doublings: Some(2),
+        ..QueuePolicy::default()
+    });
+    let mut t = task("bounded-retry", 0, DEFAULT_PRIORITY, 5);
+    t.schedule_at = now;
+    s.create_task("q", t).unwrap();
+
+    // attempt 1: backoff is 1000ms
+    let first = s.lease_due("q", now, 1).unwrap().remove(0);
+    let outcome = s.nack("q", &first.attempt_id, now).unwrap().unwrap();
+    let next_at = match outcome {
+        NackOutcome::Retried { next_at } => next_at,
+        NackOutcome::DeadLettered => panic!("attempt 1 should retry"),
+    };
+    assert_eq!(next_at, now + Duration::milliseconds(1_000));
+
+    // attempt 2: backoff is 2000ms
+    let second = s.lease_due("q", next_at, 1).unwrap().remove(0);
+    let outcome2 = s.nack("q", &second.attempt_id, next_at).unwrap().unwrap();
+    let next_at2 = match outcome2 {
+        NackOutcome::Retried { next_at } => next_at,
+        NackOutcome::DeadLettered => panic!("attempt 2 should retry"),
+    };
+    assert_eq!(next_at2, next_at + Duration::milliseconds(2_000));
+
+    // attempt 3: 1000 * 2^2 = 4000ms, capped at max_backoff_ms (3000ms)
+    let third = s.lease_due("q", next_at2, 1).unwrap().remove(0);
+    let outcome3 = s.nack("q", &third.attempt_id, next_at2).unwrap().unwrap();
+    let next_at3 = match outcome3 {
+        NackOutcome::Retried { next_at } => next_at,
+        NackOutcome::DeadLettered => panic!("attempt 3 should retry"),
+    };
+    assert_eq!(next_at3, next_at2 + Duration::milliseconds(3_000));
+
+    // attempt 4: max_doublings = 2 stops growth, capped at 3000ms
+    let fourth = s.lease_due("q", next_at3, 1).unwrap().remove(0);
+    let outcome4 = s.nack("q", &fourth.attempt_id, next_at3).unwrap().unwrap();
+    let next_at4 = match outcome4 {
+        NackOutcome::Retried { next_at } => next_at,
+        NackOutcome::DeadLettered => panic!("attempt 4 should retry"),
+    };
+    assert_eq!(next_at4, next_at3 + Duration::milliseconds(3_000));
+}
+
+#[test]
+fn retry_backoff_cap_below_base_applied_without_panic() {
+    let now = Utc::now();
+    let mut s = scheduler(QueuePolicy {
+        retry_backoff_ms: 1_000,
+        max_backoff_ms: Some(250),
+        ..QueuePolicy::default()
+    });
+    let mut t = task("low-cap", 0, DEFAULT_PRIORITY, 3);
+    t.schedule_at = now;
+    s.create_task("q", t).unwrap();
+
+    let first = s.lease_due("q", now, 1).unwrap().remove(0);
+    let outcome = s.nack("q", &first.attempt_id, now).unwrap().unwrap();
+    let next_at = match outcome {
+        NackOutcome::Retried { next_at } => next_at,
+        NackOutcome::DeadLettered => panic!("should retry"),
+    };
+    assert_eq!(next_at, now + Duration::milliseconds(250));
+}
+
+#[test]
+fn reclaim_expired_honors_retry_backoff_bounds() {
+    let now = Utc::now();
+    let mut s = scheduler(QueuePolicy {
+        lease_ttl_ms: 1_000,
+        retry_backoff_ms: 1_000,
+        max_backoff_ms: Some(1_500),
+        max_doublings: Some(1),
+        ..QueuePolicy::default()
+    });
+    let mut t = task("expired-task", 0, DEFAULT_PRIORITY, 3);
+    t.schedule_at = now;
+    s.create_task("q", t).unwrap();
+
+    let first = s.lease_due("q", now, 1).unwrap().remove(0);
+    assert_eq!(first.attempt, 1);
+
+    // Expire attempt 1
+    let expire_time = now + Duration::milliseconds(1_001);
+    let reclaimed = s.reclaim_expired("q", expire_time).unwrap();
+    assert_eq!(reclaimed, vec!["expired-task"]);
+
+    // Attempt 1 backoff: 1000ms
+    let scheduled_at = expire_time + Duration::milliseconds(1_000);
+    assert!(s
+        .lease_due("q", scheduled_at - Duration::milliseconds(1), 1)
+        .unwrap()
+        .is_empty());
+
+    let second = s.lease_due("q", scheduled_at, 1).unwrap().remove(0);
+    assert_eq!(second.attempt, 2);
+
+    // Expire attempt 2
+    let expire_time2 = scheduled_at + Duration::milliseconds(1_001);
+    let reclaimed2 = s.reclaim_expired("q", expire_time2).unwrap();
+    assert_eq!(reclaimed2, vec!["expired-task"]);
+
+    // Attempt 2 backoff: 1000 * 2^1 = 2000ms, capped at max_backoff_ms (1500ms)
+    let scheduled_at2 = expire_time2 + Duration::milliseconds(1_500);
+    assert!(s
+        .lease_due("q", scheduled_at2 - Duration::milliseconds(1), 1)
+        .unwrap()
+        .is_empty());
+    let third = s.lease_due("q", scheduled_at2, 1).unwrap().remove(0);
+    assert_eq!(third.attempt, 3);
+}
 // HANDWRITE-END
