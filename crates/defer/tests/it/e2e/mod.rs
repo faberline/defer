@@ -9,6 +9,7 @@
 //! are `kubectl` calls in the Job's namespace; every check is here in Rust,
 //! and each step prints one `E2E_EVIDENCE {json}` line to stdout.
 
+mod deploy_smoke;
 mod operator_recovery;
 
 use std::process::Command;
@@ -20,7 +21,7 @@ use serde_json::{json, Value};
 /// `k8s/gke-test-job/<suite>/` whose filter is `e2e::<suite>::`, and an entry
 /// in `.github/workflows/gke-test.yml`; [`every_suite_has_a_job_with_its_filter`]
 /// checks the Job side.
-const SUITES: &[&str] = &["operator_recovery"];
+const SUITES: &[&str] = &["deploy_smoke", "operator_recovery"];
 
 /// Base URL of the defer under test, without a trailing slash. A missing
 /// endpoint fails the test: an e2e test never passes or skips in silence.
