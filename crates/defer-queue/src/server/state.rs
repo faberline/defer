@@ -117,7 +117,18 @@ impl service_http::ReadinessHook for AppState {
 
 impl MetricsProvider for AppState {
     fn render_metrics(&self) -> String {
-        self.metrics.render()
+        let base = self.metrics.render();
+        let snapshots = {
+            let scheduler = self.raft.scheduler();
+            let guard = scheduler.lock().unwrap();
+            let names = guard.queue_names();
+            names
+                .into_iter()
+                .filter_map(|name| guard.queue_snapshot(&name).ok())
+                .collect::<Vec<_>>()
+        };
+        let gauges = crate::metrics::render_queue_task_gauges(&snapshots);
+        format!("{base}{gauges}")
     }
 }
 // HANDWRITE-END
