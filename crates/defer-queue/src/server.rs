@@ -225,12 +225,27 @@ pub async fn queue_control(
     }
 }
 
+fn validate_dispatch_deadline(deadline_ms: Option<u64>) -> Option<Response> {
+    if deadline_ms == Some(0) {
+        Some(
+            ApiErr::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_argument",
+                "dispatch_deadline_ms must be greater than 0",
+            )
+            .into_response(),
+        )
+    } else {
+        None
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/v1/queues/{queue}/tasks",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = CreateTask,
-    responses((status = 201), (status = 404, body = service_http::ErrorEnvelope), (status = 409, body = service_http::ErrorEnvelope))
+    responses((status = 201), (status = 400, body = service_http::ErrorEnvelope), (status = 404, body = service_http::ErrorEnvelope), (status = 409, body = service_http::ErrorEnvelope))
 )]
 pub async fn task_create(
     State(state): State<AppState>,
@@ -240,6 +255,9 @@ pub async fn task_create(
 ) -> Response {
     if let Err(error) = authorize(&principal, &queue, Role::Write) {
         return error.into_response();
+    }
+    if let Some(response) = validate_dispatch_deadline(task.dispatch_deadline_ms) {
+        return response;
     }
     state.metrics.requests.incr();
     match state.raft.create_task(queue, task).await {
@@ -253,7 +271,7 @@ pub async fn task_create(
     path = "/v1/queues/{queue}/tasks:batch",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = CreateTasksRequest,
-    responses((status = 201, body = CreateTasksResponse), (status = 404, body = service_http::ErrorEnvelope), (status = 409, body = service_http::ErrorEnvelope))
+    responses((status = 201, body = CreateTasksResponse), (status = 400, body = service_http::ErrorEnvelope), (status = 404, body = service_http::ErrorEnvelope), (status = 409, body = service_http::ErrorEnvelope))
 )]
 pub async fn task_create_batch(
     State(state): State<AppState>,
@@ -263,6 +281,11 @@ pub async fn task_create_batch(
 ) -> Response {
     if let Err(error) = authorize(&principal, &queue, Role::Write) {
         return error.into_response();
+    }
+    for task in &request.tasks {
+        if let Some(response) = validate_dispatch_deadline(task.dispatch_deadline_ms) {
+            return response;
+        }
     }
     state.metrics.requests.incr();
     match state.raft.create_tasks(queue, request.tasks).await {
@@ -398,6 +421,14 @@ mod tests {
         assert_eq!(disabled.status(), StatusCode::CONFLICT);
         let infra = propose_error(anyhow::anyhow!("commit timed out").into());
         assert_eq!(infra.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn validate_dispatch_deadline_rejects_zero() {
+        let err = validate_dispatch_deadline(Some(0)).expect("0 must be rejected");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert!(validate_dispatch_deadline(None).is_none());
+        assert!(validate_dispatch_deadline(Some(100)).is_none());
     }
 }
 // HANDWRITE-END

@@ -125,6 +125,7 @@ impl DeferScheduler {
                 epoch: token.epoch,
                 leased_at: now,
                 expires_at,
+                dispatch_deadline_ms: task.create.dispatch_deadline_ms,
             });
         }
         state.consume_dispatch_tokens(out.len());

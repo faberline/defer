@@ -157,6 +157,7 @@ async fn target_oracle_verifies_exact_signature_and_rejects_tampering() {
             schedule_at: now,
             priority: 10,
             max_attempts: 2,
+            dispatch_deadline_ms: None,
         },
     )
     .await
