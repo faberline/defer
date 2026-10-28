@@ -351,6 +351,13 @@ impl DeferRaft {
         }
     }
 
+    pub async fn purge_queue(&self, queue: String) -> ProposeResult<usize> {
+        match self.propose(DeferCommand::PurgeQueue { queue }).await? {
+            DeferOutcome::QueuePurged(result) => Ok(result?),
+            other => Err(mismatch("purge_queue", other)),
+        }
+    }
+
     pub fn scheduler(&self) -> Arc<Mutex<DeferScheduler>> {
         self.sm.scheduler()
     }

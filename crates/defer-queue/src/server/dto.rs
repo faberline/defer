@@ -25,4 +25,9 @@ pub struct TaskStatusResponse {
     pub task_id: String,
     pub status: TaskStatus,
 }
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PurgeQueueResponse {
+    pub purged: usize,
+}
 // HANDWRITE-END
