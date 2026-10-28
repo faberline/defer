@@ -85,6 +85,19 @@ spec:
                   - name
                   type: object
                 type: array
+              limits:
+                description: Container resource limits for the serving StatefulSet container. Unset leaves the container unbounded (requests only), the previous behavior.
+                nullable: true
+                properties:
+                  cpu:
+                    description: Maximum CPU quantity (e.g. `500m`, `2`). Unset leaves CPU unbounded.
+                    nullable: true
+                    type: string
+                  memory:
+                    description: Maximum memory quantity (e.g. `512Mi`, `4Gi`). Unset leaves memory unbounded.
+                    nullable: true
+                    type: string
+                type: object
               logLevel:
                 nullable: true
                 type: string

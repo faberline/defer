@@ -292,6 +292,10 @@ fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
         }),
     });
     set_image_pull_secrets(&mut sts["spec"]["template"]["spec"], defer);
+    apply_limits(
+        &mut sts["spec"]["template"]["spec"]["containers"][0],
+        &defer.spec.limits,
+    );
     sts
 }
 
@@ -336,5 +340,107 @@ fn apply_pod_placement(pod_spec: &mut Value, defer: &Defer) {
         pod_spec["tolerations"] = json!(tolerations);
     }
     set_image_pull_secrets(pod_spec, defer);
+}
+
+/// Parse a CPU quantity to millicores for plain `m` and decimal forms.
+fn parse_cpu_millis(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Some(m) = s.strip_suffix('m') {
+        m.trim().parse::<u64>().ok()
+    } else if let Ok(cores) = s.parse::<u64>() {
+        cores.checked_mul(1000)
+    } else if let Ok(cores) = s.parse::<f64>() {
+        if cores >= 0.0 {
+            Some((cores * 1000.0).round() as u64)
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+/// Parse a memory quantity to bytes for plain `Ki`, `Mi`, `Gi` forms.
+fn parse_memory_bytes(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Some(num) = s.strip_suffix("Gi") {
+        num.trim()
+            .parse::<u64>()
+            .ok()
+            .and_then(|v| v.checked_mul(1024 * 1024 * 1024))
+    } else if let Some(num) = s.strip_suffix("Mi") {
+        num.trim()
+            .parse::<u64>()
+            .ok()
+            .and_then(|v| v.checked_mul(1024 * 1024))
+    } else if let Some(num) = s.strip_suffix("Ki") {
+        num.trim()
+            .parse::<u64>()
+            .ok()
+            .and_then(|v| v.checked_mul(1024))
+    } else {
+        s.parse::<u64>().ok()
+    }
+}
+
+/// Enforce that a set limit is not lower than the matching request.
+/// If lower, the operator raises the limit to the request quantity.
+fn enforce_limit(
+    limit_val: &str,
+    req_val: Option<&str>,
+    parser: fn(&str) -> Option<u64>,
+) -> String {
+    if let Some(req) = req_val {
+        if let (Some(limit_qty), Some(req_qty)) = (parser(limit_val), parser(req)) {
+            if limit_qty < req_qty {
+                return req.to_string();
+            }
+        }
+    }
+    limit_val.to_string()
+}
+
+/// Render `spec.limits` as `resources.limits` on the container.
+///
+/// Unset or empty leaves `resources.limits` omitted. When a limit is lower than
+/// the matching request, the operator raises the limit to the request.
+fn apply_limits(container: &mut Value, limits: &Option<crate::crd::DeferResourceLimits>) {
+    let Some(limits) = limits.as_ref() else {
+        return;
+    };
+    let req_cpu = container["resources"]["requests"]["cpu"]
+        .as_str()
+        .map(str::trim);
+    let req_mem = container["resources"]["requests"]["memory"]
+        .as_str()
+        .map(str::trim);
+
+    let mut map = serde_json::Map::new();
+
+    if let Some(cpu) = &limits.cpu {
+        let cpu_trimmed = cpu.trim();
+        if !cpu_trimmed.is_empty() {
+            let final_cpu = enforce_limit(cpu_trimmed, req_cpu, parse_cpu_millis);
+            map.insert("cpu".into(), json!(final_cpu));
+        }
+    }
+
+    if let Some(mem) = &limits.memory {
+        let mem_trimmed = mem.trim();
+        if !mem_trimmed.is_empty() {
+            let final_mem = enforce_limit(mem_trimmed, req_mem, parse_memory_bytes);
+            map.insert("memory".into(), json!(final_mem));
+        }
+    }
+
+    if !map.is_empty() {
+        container["resources"]["limits"] = Value::Object(map);
+    }
 }
 // HANDWRITE-END
