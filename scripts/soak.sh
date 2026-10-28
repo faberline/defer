@@ -8,7 +8,7 @@
 # The task keyspace stays fixed so RSS, descriptor, thread/task, and p99 growth
 # represent instability rather than expected scheduler-state growth.
 # The default warmup performs at least 2,048 queue-control transitions in
-# addition to the live retry traffic, filling the bounded 1,024-entry proposal
+# addition to the live retry traffic, filling the bounded 4,096-entry proposal
 # cache and crossing the 1,024-entry snapshot cadence before measurement.
 
 set -euo pipefail
@@ -57,9 +57,15 @@ trap 'exit 130' INT TERM
 
 for cmd in curl jq ps; do require "$cmd"; done
 
-healthy() { curl -fsS --max-time 5 "http://${UPSTREAM}/healthz" >/dev/null 2>&1; }
+healthy() { curl -fsS --max-time 2 "http://${UPSTREAM}/healthz" >/dev/null 2>&1; }
 
-if ! healthy && [[ "${DEFER_SOAK_AUTOSTART:-0}" == "1" ]]; then
+if [[ "${DEFER_SOAK_AUTOSTART:-0}" == "1" ]]; then
+  host="${UPSTREAM%:*}"
+  port="${UPSTREAM##*:}"
+  if (: </dev/tcp/"$host"/"$port") >/dev/null 2>&1 || healthy; then
+    echo "!! isolation error: upstream ${UPSTREAM} is already occupied" >&2
+    exit 1
+  fi
   AUTOSTART_DIR="$(mktemp -d "${TMPDIR:-/tmp}/defer-soak.XXXXXX")"
   echo ">> building and launching isolated Defer at http://${UPSTREAM}"
   (cd "$REPO_ROOT" && cargo build -q -p defer --bin defer)
@@ -67,19 +73,33 @@ if ! healthy && [[ "${DEFER_SOAK_AUTOSTART:-0}" == "1" ]]; then
     >"$AUTOSTART_DIR/defer.log" 2>&1 &
   AUTOSTART_PID=$!
   DEFER_PID="$AUTOSTART_PID"
-  for _ in $(seq 1 60); do healthy && break; sleep 1; done
+  for _ in $(seq 1 60); do
+    if healthy; then
+      break
+    fi
+    if ! kill -0 "$AUTOSTART_PID" 2>/dev/null; then
+      echo "!! Defer exited before becoming healthy (log: $AUTOSTART_DIR/defer.log)" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+else
+  if ! healthy; then
+    echo "!! Defer upstream ${UPSTREAM} is not reachable" >&2
+    echo "   set DEFER_UPSTREAM/DEFER_SOAK_PID or DEFER_SOAK_AUTOSTART=1" >&2
+    exit 1
+  fi
+  if [[ -z "$DEFER_PID" ]]; then
+    require pgrep
+    DEFER_PID="$(pgrep -n '^defer$' || true)"
+  fi
 fi
 
 if ! healthy; then
   echo "!! Defer upstream ${UPSTREAM} is not reachable" >&2
-  echo "   set DEFER_UPSTREAM/DEFER_SOAK_PID or DEFER_SOAK_AUTOSTART=1" >&2
   exit 1
 fi
 
-if [[ -z "$DEFER_PID" ]]; then
-  require pgrep
-  DEFER_PID="$(pgrep -n '^defer$' || true)"
-fi
 [[ -n "$DEFER_PID" ]] || { echo "!! cannot determine Defer PID" >&2; exit 1; }
 
 if ! [[ "$DURATION_SECS" =~ ^[0-9]+$ ]] || (( DURATION_SECS < 2 )); then
@@ -176,7 +196,7 @@ run_until() {
   while [[ $(date +%s) -lt "$deadline" ]]; do load_round; done
 }
 
-echo ">> warmup: ${WARMUP_ROUNDS} fixed-task rounds (fills the bounded 1024-entry proposal cache and crosses one snapshot interval)"
+echo ">> warmup: ${WARMUP_ROUNDS} fixed-task rounds (fills the bounded 4,096-entry proposal cache and crosses one snapshot interval)"
 for _ in $(seq 1 "$WARMUP_ROUNDS"); do load_round; done
 TOTAL_OPS=0
 ERR_COUNT=0
