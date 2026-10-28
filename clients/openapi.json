@@ -587,6 +587,12 @@
             "format": "int64",
             "minimum": 0
           },
+          "max_backoff_ms": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "minimum": 0
+          },
           "max_burst_size": {
             "type": "integer",
             "minimum": 0
@@ -598,6 +604,12 @@
           "max_dispatches_per_second": {
             "type": "integer",
             "format": "int32",
+            "minimum": 0
+          },
+          "max_doublings": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
             "minimum": 0
           },
           "max_in_flight": {

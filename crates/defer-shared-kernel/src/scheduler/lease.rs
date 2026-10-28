@@ -7,7 +7,7 @@ use raft_runtime::FenceToken;
 
 use super::{millis, pick_ready, DeferScheduler};
 use crate::types::{
-    AttemptSettlement, DispatchLease, NackOutcome, QueueControlState, SchedulerError,
+    AttemptSettlement, DispatchLease, NackOutcome, QueueControlState, QueuePolicy, SchedulerError,
     SchedulerResult, SettlementOutcome, TaskId, TaskStatus,
 };
 
@@ -233,7 +233,7 @@ impl DeferScheduler {
             task.status = TaskStatus::DeadLettered;
             return Ok(Some(NackOutcome::DeadLettered));
         }
-        let next_at = now + retry_backoff(state.policy.retry_backoff_ms, task.attempts);
+        let next_at = now + retry_backoff(&state.policy, task.attempts);
         task.create.schedule_at = next_at;
         task.status = TaskStatus::Scheduled;
         state.push_due(&task_id);
@@ -272,8 +272,7 @@ impl DeferScheduler {
             if task.attempts >= task.create.max_attempts {
                 task.status = TaskStatus::DeadLettered;
             } else {
-                task.create.schedule_at =
-                    now + retry_backoff(state.policy.retry_backoff_ms, task.attempts);
+                task.create.schedule_at = now + retry_backoff(&state.policy, task.attempts);
                 task.status = TaskStatus::Scheduled;
                 state.push_due(task_id);
             }
@@ -339,8 +338,73 @@ impl DeferScheduler {
     }
 }
 
-fn retry_backoff(base_ms: u64, delivered_attempt: u32) -> Duration {
-    let shift = delivered_attempt.saturating_sub(1).min(16);
-    Duration::milliseconds(base_ms.saturating_mul(1u64 << shift) as i64)
+pub(crate) fn retry_backoff(policy: &QueuePolicy, delivered_attempt: u32) -> Duration {
+    let max_doublings = policy.max_doublings.unwrap_or(16).min(16);
+    let shift = delivered_attempt.saturating_sub(1).min(max_doublings);
+    let mut ms = policy.retry_backoff_ms.saturating_mul(1u64 << shift);
+    if let Some(max_backoff_ms) = policy.max_backoff_ms {
+        ms = ms.min(max_backoff_ms);
+    }
+    Duration::milliseconds(ms as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_backoff_default_schedule_unchanged() {
+        let policy = QueuePolicy::default();
+        assert_eq!(retry_backoff(&policy, 0), Duration::milliseconds(1_000));
+        assert_eq!(retry_backoff(&policy, 1), Duration::milliseconds(1_000));
+        assert_eq!(retry_backoff(&policy, 2), Duration::milliseconds(2_000));
+        assert_eq!(retry_backoff(&policy, 3), Duration::milliseconds(4_000));
+        assert_eq!(retry_backoff(&policy, 4), Duration::milliseconds(8_000));
+        assert_eq!(
+            retry_backoff(&policy, 17),
+            Duration::milliseconds(1_000 * (1 << 16))
+        );
+        assert_eq!(
+            retry_backoff(&policy, 18),
+            Duration::milliseconds(1_000 * (1 << 16))
+        );
+    }
+
+    #[test]
+    fn retry_backoff_max_doublings_stops_growth() {
+        let policy = QueuePolicy {
+            max_doublings: Some(2),
+            ..QueuePolicy::default()
+        };
+        assert_eq!(retry_backoff(&policy, 1), Duration::milliseconds(1_000));
+        assert_eq!(retry_backoff(&policy, 2), Duration::milliseconds(2_000));
+        assert_eq!(retry_backoff(&policy, 3), Duration::milliseconds(4_000));
+        assert_eq!(retry_backoff(&policy, 4), Duration::milliseconds(4_000));
+        assert_eq!(retry_backoff(&policy, 5), Duration::milliseconds(4_000));
+    }
+
+    #[test]
+    fn retry_backoff_max_backoff_ms_caps_delay() {
+        let policy = QueuePolicy {
+            max_backoff_ms: Some(3_000),
+            ..QueuePolicy::default()
+        };
+        assert_eq!(retry_backoff(&policy, 1), Duration::milliseconds(1_000));
+        assert_eq!(retry_backoff(&policy, 2), Duration::milliseconds(2_000));
+        assert_eq!(retry_backoff(&policy, 3), Duration::milliseconds(3_000));
+        assert_eq!(retry_backoff(&policy, 4), Duration::milliseconds(3_000));
+    }
+
+    #[test]
+    fn retry_backoff_cap_below_base_applied_without_panic() {
+        let policy = QueuePolicy {
+            retry_backoff_ms: 1_000,
+            max_backoff_ms: Some(250),
+            ..QueuePolicy::default()
+        };
+        assert_eq!(retry_backoff(&policy, 1), Duration::milliseconds(250));
+        assert_eq!(retry_backoff(&policy, 2), Duration::milliseconds(250));
+        assert_eq!(retry_backoff(&policy, 3), Duration::milliseconds(250));
+    }
 }
 // HANDWRITE-END
