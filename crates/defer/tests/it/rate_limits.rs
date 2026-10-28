@@ -21,6 +21,7 @@ fn due_task(id: &str) -> CreateTask {
         schedule_at: Utc::now(),
         priority: DEFAULT_PRIORITY,
         max_attempts: 3,
+        dispatch_deadline_ms: None,
     }
 }
 
