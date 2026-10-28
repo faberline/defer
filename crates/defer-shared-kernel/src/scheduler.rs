@@ -7,7 +7,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use crate::types::{
     AttemptId, CreateTask, QueueControlState, QueueName, QueuePolicy, QueueSnapshot,
-    SchedulerError, SchedulerResult, TaskId, TaskStatus,
+    SchedulerError, SchedulerResult, TaskId, TaskStateFilter, TaskStatus,
 };
 
 mod lease;
@@ -260,6 +260,51 @@ impl DeferScheduler {
             .get(queue)
             .ok_or_else(|| SchedulerError::QueueMissing(queue.to_string()))?;
         Ok(state.tasks.get(task_id).map(|t| t.status.clone()))
+    }
+
+    pub fn list_tasks(
+        &self,
+        queue: &str,
+        state_filter: Option<TaskStateFilter>,
+        after: Option<&str>,
+        limit: usize,
+    ) -> SchedulerResult<(Vec<(TaskId, TaskStatus)>, bool)> {
+        let state = self
+            .queues
+            .get(queue)
+            .ok_or_else(|| SchedulerError::QueueMissing(queue.to_string()))?;
+
+        let mut matching: Vec<(&TaskId, &TaskRecord)> = state
+            .tasks
+            .iter()
+            .filter(|(task_id, task)| {
+                if let Some(cursor) = after {
+                    if !cursor.is_empty() && task_id.as_str() <= cursor {
+                        return false;
+                    }
+                }
+                if let Some(filter) = state_filter {
+                    if !filter.matches(&task.status) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
+
+        matching.sort_by_key(|(task_id, _)| *task_id);
+
+        let has_more = matching.len() > limit;
+        if has_more {
+            matching.truncate(limit);
+        }
+
+        let tasks = matching
+            .into_iter()
+            .map(|(task_id, task)| (task_id.clone(), task.status.clone()))
+            .collect();
+
+        Ok((tasks, has_more))
     }
 
     fn set_queue_control_state(
