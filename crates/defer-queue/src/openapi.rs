@@ -10,6 +10,7 @@ use utoipa::OpenApi;
     paths(
         crate::server::queue_get,
         crate::server::queue_put,
+        crate::server::queue_delete,
         crate::server::queue_control,
         crate::server::task_create,
         crate::server::task_create_batch,

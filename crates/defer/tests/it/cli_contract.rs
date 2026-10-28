@@ -11,6 +11,7 @@ fn defer() -> Command {
 }
 
 const EXPECTED_DOMAIN_OPERATIONS: &[&str] = &[
+    "DELETE /v1/queues/{queue}",
     "DELETE /v1/queues/{queue}/tasks/{task_id}",
     "GET /admin/backup",
     "GET /v1/queues/{queue}",

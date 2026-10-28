@@ -274,6 +274,14 @@ impl DeferScheduler {
         state.control_state = control_state;
         Ok(())
     }
+
+    pub fn delete_queue(&mut self, queue: &str) -> SchedulerResult<()> {
+        if self.queues.remove(queue).is_some() {
+            Ok(())
+        } else {
+            Err(SchedulerError::QueueMissing(queue.to_string()))
+        }
+    }
 }
 
 fn pick_ready(state: &mut QueueState) -> Option<TaskId> {
@@ -296,5 +304,89 @@ fn burst_tokens_milli(max_burst_size: usize) -> u64 {
 
 fn millis(value: DateTime<Utc>) -> u64 {
     value.timestamp_millis().max(0) as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Target;
+    use chrono::TimeZone;
+
+    fn sample_task(id: &str, at: DateTime<Utc>) -> CreateTask {
+        CreateTask {
+            task_id: id.into(),
+            target: Target {
+                url: "http://example.test/dispatch".into(),
+                method: "POST".into(),
+                headers: Default::default(),
+            },
+            payload: serde_json::json!({"id": id}),
+            schedule_at: at,
+            priority: 10,
+            max_attempts: 3,
+        }
+    }
+
+    #[test]
+    fn delete_queue_removes_queue_and_tasks_and_allows_clean_recreation() {
+        let now = Utc.timestamp_millis_opt(10_000).unwrap();
+        let mut scheduler = DeferScheduler::new();
+
+        // Unknown queue returns QueueMissing
+        assert_eq!(
+            scheduler.delete_queue("missing"),
+            Err(SchedulerError::QueueMissing("missing".to_string()))
+        );
+
+        // Configure queue and create tasks
+        scheduler.configure_queue("jobs", QueuePolicy::default());
+        scheduler
+            .create_task("jobs", sample_task("t1", now))
+            .unwrap();
+        scheduler
+            .create_task("jobs", sample_task("t2", now))
+            .unwrap();
+
+        assert_eq!(scheduler.queue_snapshot("jobs").unwrap().task_count, 2);
+
+        // Lease an in-flight attempt
+        let leases = scheduler.lease_due("jobs", now, 1).unwrap();
+        assert_eq!(leases.len(), 1);
+        let attempt_id = leases[0].attempt_id.clone();
+        assert_eq!(scheduler.queue_snapshot("jobs").unwrap().in_flight_count, 1);
+
+        // Delete queue succeeds while an attempt is in-flight
+        assert_eq!(scheduler.delete_queue("jobs"), Ok(()));
+
+        // Queue snapshot is gone
+        assert_eq!(
+            scheduler.queue_snapshot("jobs"),
+            Err(SchedulerError::QueueMissing("jobs".to_string()))
+        );
+
+        // Subsequent delete returns QueueMissing
+        assert_eq!(
+            scheduler.delete_queue("jobs"),
+            Err(SchedulerError::QueueMissing("jobs".to_string()))
+        );
+
+        // Later ack or nack of the in-flight attempt returns QueueMissing and does not panic
+        assert_eq!(
+            scheduler.ack("jobs", &attempt_id),
+            Err(SchedulerError::QueueMissing("jobs".to_string()))
+        );
+        assert_eq!(
+            scheduler.nack("jobs", &attempt_id, now),
+            Err(SchedulerError::QueueMissing("jobs".to_string()))
+        );
+
+        // Recreate queue with configure_queue (equivalent to PUT /v1/queues/{queue})
+        scheduler.configure_queue("jobs", QueuePolicy::default());
+        let snapshot = scheduler.queue_snapshot("jobs").unwrap();
+        assert_eq!(snapshot.task_count, 0);
+        assert_eq!(snapshot.scheduled_count, 0);
+        assert_eq!(snapshot.in_flight_count, 0);
+        assert_eq!(snapshot.terminal_count, 0);
+    }
 }
 // HANDWRITE-END
