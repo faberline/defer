@@ -13,6 +13,14 @@ Defer's peer for feature parity is Google Cloud Tasks. Each near-term outcome
 below closes one group of STATUS rows; the later outcomes follow once the
 custom resource and the shared Raft runtime carry the state they need.
 
+Operations move into `core`, as core
+[ADR 0002](https://github.com/faberline/core/blob/main/docs/adr/0002-core-owned-service-operations.md)
+records. Defer keeps its product: queues, tasks, dispatch, retries, and
+target signing. Core decides how defer runs: replica membership, shards and
+their split, routing between pods, resources and storage, rollout, and
+monitoring. The outcomes that change replicas, shards, or sizing adopt the
+core outcome that does that work, and keep defer's own proof.
+
 ## Near-term outcomes
 
 ### Declarative queues
@@ -29,19 +37,24 @@ custom resource and the shared Raft runtime carry the state they need.
   pod is replaced without any `PUT`.
 - Tracking: Not assigned.
 
-### Live topology transitions
+### Live replica membership
 
-- ID: `live-topology-transitions`
-- Outcome: A `Defer` instance moves from one shard with one replica to three
-  shards with three replicas and back while clients keep creating and
-  settling tasks, with no committed task lost and no lease settled twice.
-- Boundary: Defer carries no membership-change engine of its own; the
-  renderer lifts the `shardCount: 1` pin only when the shared Raft runtime
-  offers a live membership actuator defer can call. Task identity and
-  idempotency keys do not change shape when a queue moves between shards.
-- Completion evidence: A cluster acceptance run drives the 1x1 to 3x3 to 1x1
-  path under load and proves every task created before the transition
-  reaches exactly one terminal state afterwards.
+- ID: `live-replica-membership`
+- Outcome: A replica-count change on a `Defer` instance adds or removes a
+  voter without restarting the surviving members, while clients keep
+  creating and settling tasks, with no committed task lost and no lease
+  settled twice.
+- Boundary: Defer adopts core's
+  [`membership-controller`](https://github.com/faberline/core/blob/main/crates/service-k8s/ROADMAP.md#membership-controller)
+  instead of carrying a membership-change engine of its own. Defer delivers
+  this outcome when it moves onto core's engine and deletes `defer-operator`,
+  in phase 6 of ADR 0002. Every defer replica is a voter: scaling out adds a
+  learner, waits until it catches up, and promotes it; scaling in transfers
+  leadership first, then demotes and removes the member. Shard count is not
+  part of this outcome.
+- Completion evidence: A cluster acceptance run drives one replica to three
+  and back to one under load and proves every task created before the
+  transition reaches exactly one terminal state afterwards.
 - Tracking: Not assigned.
 
 ### GKE acceptance in repo
@@ -115,7 +128,11 @@ custom resource and the shared Raft runtime carry the state they need.
 - Outcome: A `Defer` custom resource states CPU, memory, and disk capacity
   policy per replica, and the operator sizes requests, limits, and the
   volume claim from it instead of from fixed defaults.
-- Boundary: Capacity policy describes one replica; it does not schedule
+- Boundary: Defer adopts core's
+  [`service-profile-engine`](https://github.com/faberline/core/blob/main/crates/service-k8s/ROADMAP.md#service-profile-engine):
+  resources and storage are spec blocks core owns, renders, and grows, so the
+  policy vocabulary belongs to those blocks and defer keeps no sizing code of
+  its own. Capacity policy describes one replica; it does not schedule
   across shards or move queues. Volume growth follows the storage class's
   expansion support and is never destructive.
 - Completion evidence: The operator render case proves the derived
@@ -132,10 +149,37 @@ custom resource and the shared Raft runtime carry the state they need.
   views.
 - Boundary: Defer keeps exporting Prometheus text and OTLP; the integration
   is the dashboard, alert, and resource-attribute contract, not a new
-  exporter.
+  exporter. The alert rules are data that defer's service profile returns
+  from `alerts()`, and core renders them beside its standard alerts and the
+  ServiceMonitor, as core's
+  [`service-profile-engine`](https://github.com/faberline/core/blob/main/crates/service-k8s/ROADMAP.md#service-profile-engine)
+  records.
 - Completion evidence: A documented import of the pack renders the panels
   against a live instance, and the alert rules fire in a GKE test-cluster
   run that forces lease loss.
+- Tracking: Not assigned.
+
+### Live topology transitions
+
+- ID: `live-topology-transitions`
+- Outcome: A `Defer` instance runs more than one shard, and a shard splits
+  while clients keep creating and settling tasks, with no committed task
+  lost and no lease settled twice.
+- Boundary: Core owns shards and their split. Core's
+  [`bucketed-resharding`](https://github.com/faberline/core/blob/main/crates/service-k8s/ROADMAP.md#bucketed-resharding)
+  decides when a shard splits and moves its data, and
+  [`shard-routing`](https://github.com/faberline/core/blob/main/crates/service-k8s/ROADMAP.md#shard-routing)
+  forwards each request to its shard. Defer switches to
+  `Partitioning::Bucketed` with the queue as the placement key, so a queue's
+  tasks and its rate, burst, and in-flight permits stay on one shard. Defer
+  supplies the data-plane hooks: they classify each request by its queue,
+  merge the results of a request that spans shards, and export and import
+  the tasks of a bucket. Task identity and idempotency keys do not change
+  shape when a queue moves between shards. Merging shards back into fewer is
+  outside this outcome, and shards never appear in the public API.
+- Completion evidence: A cluster acceptance run splits one shard into two
+  while clients keep creating and settling tasks, and proves every task
+  created before the split reaches exactly one terminal state afterwards.
 - Tracking: Not assigned.
 
 ## Non-goals
