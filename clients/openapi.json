@@ -59,7 +59,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -108,7 +108,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -159,7 +159,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -190,7 +190,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/crate.DispatchReport"
+                  "$ref": "#/components/schemas/DispatchReport"
                 }
               }
             }
@@ -317,7 +317,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -327,7 +327,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -377,7 +377,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -418,7 +418,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -469,7 +469,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -479,7 +479,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -510,13 +510,14 @@
             "minimum": 0
           },
           "schedule_at": {
-            "$ref": "#/components/schemas/DateTime"
+            "type": "string",
+            "format": "date-time"
           },
           "target": {
             "$ref": "#/components/schemas/Target"
           },
           "task_id": {
-            "$ref": "#/components/schemas/TaskId"
+            "type": "string"
           }
         }
       },
@@ -567,7 +568,8 @@
                 ],
                 "properties": {
                   "next_at": {
-                    "$ref": "#/components/schemas/DateTime"
+                    "type": "string",
+                    "format": "date-time"
                   }
                 }
               }
@@ -714,7 +716,7 @@
             "$ref": "#/components/schemas/QueuePolicy"
           },
           "queue": {
-            "$ref": "#/components/schemas/QueueName"
+            "type": "string"
           },
           "scheduled_count": {
             "type": "integer",
@@ -792,7 +794,7 @@
                 ],
                 "properties": {
                   "attempt_id": {
-                    "$ref": "#/components/schemas/AttemptId"
+                    "type": "string"
                   },
                   "epoch": {
                     "type": "integer",
@@ -805,7 +807,8 @@
                     "minimum": 0
                   },
                   "expires_at": {
-                    "$ref": "#/components/schemas/DateTime"
+                    "type": "string",
+                    "format": "date-time"
                   }
                 }
               }
