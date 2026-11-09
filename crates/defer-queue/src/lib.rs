@@ -9,8 +9,5 @@ pub mod metrics;
 pub mod openapi;
 pub mod server;
 
-// `dispatch_one` names its body `crate::DispatchReport`; utoipa 4 prints that
-// path into the published `$ref`, so the root re-export keeps the spec stable.
-pub use defer_dispatch::DispatchReport;
 pub use server::AppState;
 // HANDWRITE-END
