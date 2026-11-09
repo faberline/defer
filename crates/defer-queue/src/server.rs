@@ -176,7 +176,7 @@ pub struct QueueListQuery {
     ),
     responses(
         (status = 200, body = QueueListResponse),
-        (status = 400, body = service_http::ErrorEnvelope)
+        (status = 400, body = ErrorEnvelope)
     )
 )]
 pub async fn queue_list(
