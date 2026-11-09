@@ -12,6 +12,7 @@ const QUEUE: &str = "deploy-smoke";
 const POD: &str = "defer-0";
 const FIRST_POD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const API_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Waits until defer-0 exists and is Ready.
 fn wait_for_ready_pod(timeout: Duration) -> String {
@@ -60,46 +61,80 @@ async fn wait_healthy(http: &reqwest::Client, base: &str) {
             tokio::time::Instant::now() < deadline,
             "{base}/healthz: not healthy within {FIRST_POD_TIMEOUT:?}; last saw: {last}"
         );
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
 
-/// Polls task status until it matches `expected_status` or times out.
-fn wait_for_task_status(
+/// Creates or updates queue `QUEUE` and checks that it runs.
+async fn put_queue(http: &reqwest::Client, base: &str) {
+    let queue = send(http.put(format!("{base}/v1/queues/{QUEUE}")).json(&json!({
+        "max_in_flight": 100,
+        "max_dispatch_per_tick": 100,
+        "max_dispatches_per_second": 100,
+        "max_burst_size": 100,
+        "lease_ttl_ms": 30000,
+        "retry_backoff_ms": 250
+    })))
+    .await;
+    assert_eq!(queue["queue"], QUEUE, "{queue}");
+    assert_eq!(queue["control_state"], "Running", "{queue}");
+}
+
+/// Creates a task in `QUEUE` whose target is `GET {base}{path}`.
+async fn create_task(
     http: &reqwest::Client,
     base: &str,
-    queue: &str,
+    task_id: &str,
+    path: &str,
+    max_attempts: u32,
+) {
+    let resp = http
+        .post(format!("{base}/v1/queues/{QUEUE}/tasks"))
+        .json(&json!({
+            "task_id": task_id,
+            "target": {
+                "url": format!("{base}{path}"),
+                "method": "GET",
+                "headers": {}
+            },
+            "payload": { "suite": SUITE },
+            "schedule_at": "2020-01-01T00:00:00Z",
+            "priority": 10,
+            "max_attempts": max_attempts
+        }))
+        .send()
+        .await
+        .expect("create task request");
+    assert_eq!(resp.status().as_u16(), 201, "create task {task_id} status");
+}
+
+/// Polls task status until it reads `expected_status`. Returns the task JSON,
+/// or fails after `timeout`.
+async fn wait_for_task_status(
+    http: &reqwest::Client,
+    base: &str,
     task_id: &str,
     expected_status: &str,
     timeout: Duration,
 ) -> Value {
-    let handle = tokio::runtime::Handle::current();
-    let url = format!("{base}/v1/queues/{queue}/tasks/{task_id}");
-    let http = http.clone();
-    let expected = expected_status.to_string();
-    let what = format!("task {task_id} {expected_status}");
-    wait_for(&what, timeout, move || {
-        let url = url.clone();
-        let http = http.clone();
-        let expected = expected.clone();
-        let handle_clone = handle.clone();
-        std::thread::spawn(move || {
-            handle_clone.block_on(async {
-                let resp = http.get(&url).send().await.map_err(|e| e.to_string())?;
-                if !resp.status().is_success() {
-                    return Err(format!("HTTP {}", resp.status()));
-                }
-                let body: Value = resp.json().await.map_err(|e| e.to_string())?;
-                if body["status"] == expected {
-                    Ok(body)
-                } else {
-                    Err(format!("status: {}", body["status"]))
-                }
-            })
-        })
-        .join()
-        .unwrap()
-    })
+    let url = format!("{base}/v1/queues/{QUEUE}/tasks/{task_id}");
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let last = match http.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => match resp.json::<Value>().await {
+                Ok(body) if body["status"] == expected_status => return body,
+                Ok(body) => format!("status: {}", body["status"]),
+                Err(err) => err.to_string(),
+            },
+            Ok(resp) => format!("HTTP {}", resp.status()),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "task {task_id} {expected_status}: not reached within {timeout:?}; last saw: {last}"
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
 }
 
 fn parse_counter(metrics: &str, name: &str) -> Option<u64> {
@@ -125,9 +160,27 @@ fn parse_counter(metrics: &str, name: &str) -> Option<u64> {
     None
 }
 
+/// Reads `defer_dispatch_acked_total` and `defer_dispatch_dead_lettered_total`
+/// from `GET /metrics`.
+async fn read_dispatch_counters(http: &reqwest::Client, base: &str) -> Result<(u64, u64), String> {
+    let text = http
+        .get(format!("{base}/metrics"))
+        .send()
+        .await
+        .map_err(|err| err.to_string())?
+        .text()
+        .await
+        .map_err(|err| err.to_string())?;
+    let acked = parse_counter(&text, "defer_dispatch_acked_total")
+        .ok_or_else(|| "missing defer_dispatch_acked_total".to_string())?;
+    let dead_lettered = parse_counter(&text, "defer_dispatch_dead_lettered_total")
+        .ok_or_else(|| "missing defer_dispatch_dead_lettered_total".to_string())?;
+    Ok((acked, dead_lettered))
+}
+
 /// Test 1: PUT /v1/queues/<q> then create a task whose target is
 /// GET http://defer:7141/healthz (no receiver needed; a 2xx acks). Wait until the
-/// task reads Succeeded; print an E2E_EVIDENCE line with the attempt count.
+/// task reads Succeeded; print an E2E_EVIDENCE line with the observed status.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "e2e: needs E2E_ENDPOINT"]
 async fn test_1_dispatch_acked_on_2xx() {
@@ -139,41 +192,12 @@ async fn test_1_dispatch_acked_on_2xx() {
 
     wait_for_ready_pod(FIRST_POD_TIMEOUT);
     wait_healthy(&http, &base).await;
-
-    let queue = send(http.put(format!("{base}/v1/queues/{QUEUE}")).json(&json!({
-        "max_in_flight": 100,
-        "max_dispatch_per_tick": 100,
-        "max_dispatches_per_second": 100,
-        "max_burst_size": 100,
-        "lease_ttl_ms": 30000,
-        "retry_backoff_ms": 250
-    })))
-    .await;
-    assert_eq!(queue["queue"], QUEUE, "{queue}");
-    assert_eq!(queue["control_state"], "Running", "{queue}");
+    put_queue(&http, &base).await;
 
     let task_id = "deploy-smoke-ack";
-    let target_url = format!("{base}/healthz");
-    let resp = http
-        .post(format!("{base}/v1/queues/{QUEUE}/tasks"))
-        .json(&json!({
-            "task_id": task_id,
-            "target": {
-                "url": target_url,
-                "method": "GET",
-                "headers": {}
-            },
-            "payload": { "suite": SUITE },
-            "schedule_at": "2020-01-01T00:00:00Z",
-            "priority": 10,
-            "max_attempts": 3
-        }))
-        .send()
-        .await
-        .expect("create task request");
-    assert_eq!(resp.status().as_u16(), 201, "create task status");
+    create_task(&http, &base, task_id, "/healthz", 3).await;
 
-    let task = wait_for_task_status(&http, &base, QUEUE, task_id, "Succeeded", API_TIMEOUT);
+    let task = wait_for_task_status(&http, &base, task_id, "Succeeded", API_TIMEOUT).await;
     assert_eq!(task["task_id"], task_id);
     assert_eq!(task["status"], "Succeeded");
 
@@ -182,9 +206,7 @@ async fn test_1_dispatch_acked_on_2xx() {
         "task succeeded",
         json!({
             "task_id": task_id,
-            "status": "Succeeded",
-            "attempt_count": 1,
-            "attempts": 1
+            "status": "Succeeded"
         }),
     );
 }
@@ -202,40 +224,12 @@ async fn test_2_dispatch_dead_lettered_on_non_2xx() {
         .unwrap();
 
     wait_healthy(&http, &base).await;
-
-    let queue = send(http.put(format!("{base}/v1/queues/{QUEUE}")).json(&json!({
-        "max_in_flight": 100,
-        "max_dispatch_per_tick": 100,
-        "max_dispatches_per_second": 100,
-        "max_burst_size": 100,
-        "lease_ttl_ms": 30000,
-        "retry_backoff_ms": 250
-    })))
-    .await;
-    assert_eq!(queue["queue"], QUEUE, "{queue}");
+    put_queue(&http, &base).await;
 
     let task_id = "deploy-smoke-dead-letter";
-    let target_url = format!("{base}/nonexistent");
-    let resp = http
-        .post(format!("{base}/v1/queues/{QUEUE}/tasks"))
-        .json(&json!({
-            "task_id": task_id,
-            "target": {
-                "url": target_url,
-                "method": "GET",
-                "headers": {}
-            },
-            "payload": { "suite": SUITE },
-            "schedule_at": "2020-01-01T00:00:00Z",
-            "priority": 10,
-            "max_attempts": 2
-        }))
-        .send()
-        .await
-        .expect("create task request");
-    assert_eq!(resp.status().as_u16(), 201, "create task status");
+    create_task(&http, &base, task_id, "/nonexistent", 2).await;
 
-    let task = wait_for_task_status(&http, &base, QUEUE, task_id, "DeadLettered", API_TIMEOUT);
+    let task = wait_for_task_status(&http, &base, task_id, "DeadLettered", API_TIMEOUT).await;
     assert_eq!(task["task_id"], task_id);
     assert_eq!(task["status"], "DeadLettered");
 
@@ -244,17 +238,15 @@ async fn test_2_dispatch_dead_lettered_on_non_2xx() {
         "task dead-lettered",
         json!({
             "task_id": task_id,
-            "status": "DeadLettered",
-            "attempt_count": 2,
-            "attempts": 2
+            "status": "DeadLettered"
         }),
     );
 }
 
 /// Test 3: GET /metrics shows defer_dispatch_acked_total and
-/// defer_dispatch_dead_lettered_total at least 1 after tests 1 and 2 (read the
-/// counters inside the same test, so test order does not matter), and /readyz
-/// answers 200.
+/// defer_dispatch_dead_lettered_total at least 1, and /readyz answers 200.
+/// The test creates its own acked and dead-lettered tasks, so it does not
+/// depend on the other tests or their order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "e2e: needs E2E_ENDPOINT"]
 async fn test_3_metrics_and_readyz() {
@@ -264,36 +256,33 @@ async fn test_3_metrics_and_readyz() {
         .build()
         .unwrap();
 
-    let handle = tokio::runtime::Handle::current();
-    let metrics_url = format!("{base}/metrics");
-    let http_clone = http.clone();
+    wait_healthy(&http, &base).await;
+    put_queue(&http, &base).await;
 
-    let (acked, dead_lettered) = wait_for(
-        "metrics show defer_dispatch_acked_total and defer_dispatch_dead_lettered_total >= 1",
-        API_TIMEOUT,
-        move || {
-            let url = metrics_url.clone();
-            let http = http_clone.clone();
-            let handle_clone = handle.clone();
-            std::thread::spawn(move || {
-                handle_clone.block_on(async {
-                    let resp = http.get(&url).send().await.map_err(|e| e.to_string())?;
-                    let text = resp.text().await.map_err(|e| e.to_string())?;
-                    let acked = parse_counter(&text, "defer_dispatch_acked_total")
-                        .ok_or_else(|| "missing defer_dispatch_acked_total".to_string())?;
-                    let dead_lettered = parse_counter(&text, "defer_dispatch_dead_lettered_total")
-                        .ok_or_else(|| "missing defer_dispatch_dead_lettered_total".to_string())?;
-                    if acked >= 1 && dead_lettered >= 1 {
-                        Ok((acked, dead_lettered))
-                    } else {
-                        Err(format!("acked={acked}, dead_lettered={dead_lettered}"))
-                    }
-                })
-            })
-            .join()
-            .unwrap()
-        },
-    );
+    let acked_task = "deploy-smoke-metrics-ack";
+    let dead_task = "deploy-smoke-metrics-dead-letter";
+    create_task(&http, &base, acked_task, "/healthz", 3).await;
+    create_task(&http, &base, dead_task, "/nonexistent", 2).await;
+    wait_for_task_status(&http, &base, acked_task, "Succeeded", API_TIMEOUT).await;
+    wait_for_task_status(&http, &base, dead_task, "DeadLettered", API_TIMEOUT).await;
+
+    let deadline = tokio::time::Instant::now() + API_TIMEOUT;
+    let (acked, dead_lettered) = loop {
+        let last = match read_dispatch_counters(&http, &base).await {
+            Ok((acked, dead_lettered)) if acked >= 1 && dead_lettered >= 1 => {
+                break (acked, dead_lettered);
+            }
+            Ok((acked, dead_lettered)) => {
+                format!("acked={acked}, dead_lettered={dead_lettered}")
+            }
+            Err(err) => err,
+        };
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "metrics show defer_dispatch_acked_total and defer_dispatch_dead_lettered_total >= 1: not reached within {API_TIMEOUT:?}; last saw: {last}"
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    };
 
     assert!(
         acked >= 1,

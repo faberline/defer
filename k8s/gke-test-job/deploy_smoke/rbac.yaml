@@ -1,6 +1,6 @@
-# What the suite reads and does in the run's namespace, and nothing
-# cluster-wide: it reads the operator's objects and pods, runs `defer
-# --version` in defer-0, and deletes defer-0 for the replacement check.
+# What the suite does in the run's namespace, and nothing cluster-wide: it
+# only reads pod defer-0 (`kubectl get pod defer-0`) to wait for it to be
+# Ready. It does not exec into or delete any pod.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -14,22 +14,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "watch", "delete"]
-  - apiGroups: [""]
-    resources: ["pods/exec"]
-    verbs: ["create", "get"]
-  - apiGroups: [""]
-    resources: ["persistentvolumeclaims", "services", "endpoints", "events"]
-    verbs: ["get", "list"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["policy"]
-    resources: ["poddisruptionbudgets"]
-    verbs: ["get", "list"]
-  - apiGroups: ["defer.dev"]
-    resources: ["defers"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
