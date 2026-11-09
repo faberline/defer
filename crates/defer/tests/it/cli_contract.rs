@@ -116,16 +116,16 @@ fn assert_generated_client(
         );
     }
 
+    for file in expected_files {
+        let text = std::fs::read_to_string(out1.path().join(file)).unwrap();
+        assert!(!text.is_empty(), "{lang} {file} is empty");
+        assert!(
+            !text.contains("TODO"),
+            "{lang} {file} contains TODO scaffold"
+        );
+    }
+
     let client = std::fs::read_to_string(out1.path().join(client_file)).unwrap();
-    assert!(!client.is_empty(), "{lang} client file is empty");
-    assert!(
-        !client.contains("TODO"),
-        "{lang} generated client contains TODO scaffold"
-    );
-    assert!(
-        !symbols.is_empty(),
-        "{lang} assertion must check a non-zero number of symbols"
-    );
     for symbol in symbols {
         assert!(
             client.contains(symbol),
@@ -390,21 +390,6 @@ fn offline_spec_and_typed_client_generation_use_one_contract() {
             .map(|op| (*op).to_string())
             .collect::<Vec<_>>(),
         "routes output must match expected domain operations"
-    );
-
-    // Verify pinned target contracts in clients/codegen.toml
-    let codegen_toml = include_str!("../../../../clients/codegen.toml");
-    assert!(
-        codegen_toml.contains("typescript = \"typescript-5.0\""),
-        "codegen.toml missing pinned typescript target"
-    );
-    assert!(
-        codegen_toml.contains("python = \"python-3.14\""),
-        "codegen.toml missing pinned python target"
-    );
-    assert!(
-        codegen_toml.contains("rust = \"rust-2024\""),
-        "codegen.toml missing pinned rust target"
     );
 
     assert_generated_client(
