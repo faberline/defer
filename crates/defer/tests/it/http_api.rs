@@ -339,24 +339,18 @@ async fn h2c_routes_probes_openapi_metrics_dispatch_and_auth_are_live() {
             .status(),
         StatusCode::NO_CONTENT
     );
-    assert_eq!(
-        http1
-            .get(format!("{url}/v1/queues/jobs"))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        client
-            .delete(format!("{url}/v1/queues/jobs"))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::NOT_FOUND
-    );
+    let gone = http1
+        .get(format!("{url}/v1/queues/jobs"))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(gone, StatusCode::NOT_FOUND, "not_found").await;
+    let gone = client
+        .delete(format!("{url}/v1/queues/jobs"))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(gone, StatusCode::NOT_FOUND, "not_found").await;
     assert_eq!(
         client
             .put(format!("{url}/v1/queues/jobs"))

@@ -672,46 +672,67 @@ async fn queue_delete_converges_on_followers_and_survives_restart() {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 
+    // A marker queue created after the delete is later in the log. Wait for it
+    // on each node before asserting that `jobs` is gone, so the check runs only
+    // after that node has replayed past the delete.
+    cluster
+        .raft(leader)
+        .configure_queue("marker".into(), QueuePolicy::default())
+        .await
+        .unwrap();
+
     let restart_id = follower;
     cluster.kill(restart_id).await;
     cluster.start_node(restart_id);
-    let deadline = Instant::now() + Duration::from_secs(8);
-    loop {
-        let exists = cluster
+    wait_queue_present(&cluster, restart_id, "marker").await;
+    assert!(
+        cluster
             .raft(restart_id)
             .scheduler()
             .lock()
             .unwrap()
             .queue_snapshot("jobs")
-            .is_ok();
-        if !exists {
-            break;
-        }
-        assert!(Instant::now() < deadline, "queue reappeared after restart");
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
+            .is_err(),
+        "deleted queue reappeared on restarted node"
+    );
 
-    let deadline = Instant::now() + Duration::from_secs(8);
-    loop {
-        let gone = cluster.live().all(|(_, node)| {
-            node.raft
+    let live: Vec<usize> = cluster.live().map(|(id, _)| id).collect();
+    for id in live {
+        wait_queue_present(&cluster, id, "marker").await;
+        assert!(
+            cluster
+                .raft(id)
                 .scheduler()
                 .lock()
                 .unwrap()
                 .queue_snapshot("jobs")
-                .is_err()
-        });
-        if gone {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "deleted queue must be gone on all live nodes"
+                .is_err(),
+            "deleted queue must be gone on live node {id}"
         );
-        tokio::time::sleep(Duration::from_millis(25)).await;
     }
 
     cluster.shutdown().await;
+}
+
+async fn wait_queue_present(cluster: &Cluster, id: usize, queue: &str) {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let present = cluster
+            .raft(id)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot(queue)
+            .is_ok();
+        if present {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "queue {queue} did not replicate to node {id}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 // </HANDWRITE>
 // HANDWRITE-END
