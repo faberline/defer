@@ -2,6 +2,11 @@
 //! The defer HTTP router and its handlers. The handlers stay in this module:
 //! utoipa derives each operation's default OpenAPI tag (`crate::server`) from
 //! it.
+//!
+//! A `body = <Type>` in `#[utoipa::path]` becomes a `$ref` built from the
+//! text of the path, not from the type. Write the bare component name (for
+//! example `ErrorEnvelope`), never a module path: `service_http::ErrorEnvelope`
+//! would publish a `$ref` with no matching component.
 
 mod dto;
 mod state;
@@ -156,7 +161,7 @@ fn internal(error: impl std::fmt::Display) -> Response {
     get,
     path = "/v1/queues/{queue}",
     params(("queue" = String, Path, description = "Queue name")),
-    responses((status = 200, body = QueueSnapshot), (status = 404, body = service_http::ErrorEnvelope))
+    responses((status = 200, body = QueueSnapshot), (status = 404, body = ErrorEnvelope))
 )]
 pub async fn queue_get(
     State(state): State<AppState>,
@@ -184,7 +189,7 @@ pub async fn queue_get(
     path = "/v1/queues/{queue}",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = QueuePolicy,
-    responses((status = 200, body = QueueSnapshot), (status = 400, body = service_http::ErrorEnvelope))
+    responses((status = 200, body = QueueSnapshot), (status = 400, body = ErrorEnvelope))
 )]
 pub async fn queue_put(
     State(state): State<AppState>,
@@ -207,7 +212,7 @@ pub async fn queue_put(
     path = "/v1/queues/{queue}/control",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = QueueControlRequest,
-    responses((status = 200, body = QueueSnapshot), (status = 404, body = service_http::ErrorEnvelope))
+    responses((status = 200, body = QueueSnapshot), (status = 404, body = ErrorEnvelope))
 )]
 pub async fn queue_control(
     State(state): State<AppState>,
@@ -230,7 +235,7 @@ pub async fn queue_control(
     path = "/v1/queues/{queue}/tasks",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = CreateTask,
-    responses((status = 201), (status = 404, body = service_http::ErrorEnvelope), (status = 409, body = service_http::ErrorEnvelope))
+    responses((status = 201), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
 )]
 pub async fn task_create(
     State(state): State<AppState>,
@@ -253,7 +258,7 @@ pub async fn task_create(
     path = "/v1/queues/{queue}/tasks:batch",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = CreateTasksRequest,
-    responses((status = 201, body = CreateTasksResponse), (status = 404, body = service_http::ErrorEnvelope), (status = 409, body = service_http::ErrorEnvelope))
+    responses((status = 201, body = CreateTasksResponse), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
 )]
 pub async fn task_create_batch(
     State(state): State<AppState>,
@@ -278,7 +283,7 @@ pub async fn task_create_batch(
         ("queue" = String, Path, description = "Queue name"),
         ("task_id" = String, Path, description = "Task id")
     ),
-    responses((status = 200, body = TaskStatusResponse), (status = 404, body = service_http::ErrorEnvelope))
+    responses((status = 200, body = TaskStatusResponse), (status = 404, body = ErrorEnvelope))
 )]
 pub async fn task_status(
     State(state): State<AppState>,
@@ -311,7 +316,7 @@ pub async fn task_status(
         ("queue" = String, Path, description = "Queue name"),
         ("task_id" = String, Path, description = "Task id")
     ),
-    responses((status = 204), (status = 404, body = service_http::ErrorEnvelope))
+    responses((status = 204), (status = 404, body = ErrorEnvelope))
 )]
 pub async fn task_cancel(
     State(state): State<AppState>,
@@ -338,7 +343,7 @@ pub async fn task_cancel(
     post,
     path = "/v1/queues/{queue}/dispatch",
     params(("queue" = String, Path, description = "Queue name")),
-    responses((status = 200, body = crate::DispatchReport), (status = 204))
+    responses((status = 200, body = DispatchReport), (status = 204))
 )]
 pub async fn dispatch_one(
     State(state): State<AppState>,
