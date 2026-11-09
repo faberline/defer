@@ -25,6 +25,7 @@ fn default_method() -> String {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct CreateTask {
+    #[schema(value_type = String)]
     pub task_id: TaskId,
     pub target: Target,
     #[serde(default)]
@@ -77,6 +78,7 @@ pub enum QueueControlState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct QueueSnapshot {
+    #[schema(value_type = String)]
     pub queue: QueueName,
     pub control_state: QueueControlState,
     pub policy: QueuePolicy,
@@ -90,6 +92,7 @@ pub struct QueueSnapshot {
 pub enum TaskStatus {
     Scheduled,
     Leased {
+        #[schema(value_type = String)]
         attempt_id: AttemptId,
         executor_node: u64,
         epoch: u64,
@@ -98,6 +101,29 @@ pub enum TaskStatus {
     Succeeded,
     DeadLettered,
     Canceled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStateFilter {
+    Scheduled,
+    Leased,
+    Succeeded,
+    DeadLettered,
+    Canceled,
+}
+
+impl TaskStateFilter {
+    pub fn matches(&self, status: &TaskStatus) -> bool {
+        matches!(
+            (self, status),
+            (Self::Scheduled, TaskStatus::Scheduled)
+                | (Self::Leased, TaskStatus::Leased { .. })
+                | (Self::Succeeded, TaskStatus::Succeeded)
+                | (Self::DeadLettered, TaskStatus::DeadLettered)
+                | (Self::Canceled, TaskStatus::Canceled)
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

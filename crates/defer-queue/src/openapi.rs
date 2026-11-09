@@ -15,6 +15,7 @@ use utoipa::OpenApi;
         crate::server::task_create_batch,
         crate::server::task_status,
         crate::server::task_cancel,
+        crate::server::task_list,
         crate::server::dispatch_one,
         crate::server::admin_backup,
     ),
@@ -31,6 +32,7 @@ use utoipa::OpenApi;
         crate::server::CreateTasksRequest,
         crate::server::CreateTasksResponse,
         crate::server::TaskStatusResponse,
+        crate::server::TaskListResponse,
         service_http::ErrorEnvelope,
     ))
 )]
@@ -61,6 +63,32 @@ mod tests {
         assert!(
             committed == live,
             "clients/openapi.json is stale: run DEFER_WRITE_OPENAPI=1 cargo test -p defer-queue --lib openapi::"
+        );
+    }
+
+    /// Every `#/components/schemas/<name>` reference in the live document
+    /// must name a registered component. A dangling reference breaks client
+    /// generation.
+    #[test]
+    fn every_schema_ref_resolves_to_a_component() {
+        const PREFIX: &str = "\"#/components/schemas/";
+        let doc = super::openapi();
+        let json = doc.to_json().unwrap();
+        let components = doc
+            .components
+            .as_ref()
+            .map(|components| &components.schemas);
+        let mut dangling = std::collections::BTreeSet::new();
+        for (start, _) in json.match_indices(PREFIX) {
+            let rest = &json[start + PREFIX.len()..];
+            let name = &rest[..rest.find('"').unwrap()];
+            if !components.is_some_and(|schemas| schemas.contains_key(name)) {
+                dangling.insert(name.to_string());
+            }
+        }
+        assert!(
+            dangling.is_empty(),
+            "OpenAPI refs without a component: {dangling:?}"
         );
     }
 }
