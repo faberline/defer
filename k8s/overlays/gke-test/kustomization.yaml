@@ -11,10 +11,10 @@
 # defer-system into defer) and one Defer CR, `defer`, that the operator turns
 # into StatefulSet/defer, Service/defer (:7141), and the pod defer-0.
 #
-# Every pod runs on pool-defer-server, one pod per node: the operator replica
-# here and defer-0 through the CR's spec.placement. The pool has at most 2
-# nodes, so the operator runs 1 replica. aw's infra/gke-test/pools.yaml owns
-# the pools; nothing here creates cloud resources.
+# Every pod runs on pool-defer-server: the operator replica here and defer-0
+# through the CR's spec.placement. The operator (1 replica) and defer-0 may
+# share a node. aw's infra/gke-test/pools.yaml owns the pools; nothing here
+# creates cloud resources.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

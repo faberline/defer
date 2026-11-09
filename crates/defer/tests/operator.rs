@@ -393,4 +393,16 @@ fn tokens_secret_csi_driver_overrides_the_default_csi_driver_name() {
         "defer-registry-csi"
     );
 }
+
+#[test]
+fn gke_test_overlay_lets_the_operator_share_a_node_with_defer_0() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../k8s/overlays/gke-test/operator/kustomization.yaml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !text.contains("podAntiAffinity"),
+        "the operator overlay must not forbid sharing a node with defer-0"
+    );
+    assert!(text.contains("pool-defer-server") || text.contains("defer-server"));
+}
 // HANDWRITE-END

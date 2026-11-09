@@ -1,7 +1,6 @@
 # The shipped operator layer, fitted to the shared test cluster: in the run's
 # namespace instead of defer-system, on pool-defer-server, pulling the image
-# under test with ghcr-pull, one replica, one pod per node, and requests
-# without limits.
+# under test with ghcr-pull, one replica, and requests without limits.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -34,8 +33,7 @@ patches:
       kind: Deployment
       name: defer-operator
     patch: |-
-      # pool-defer-server has at most 2 nodes: one for the operator, one for
-      # defer-0.
+      # The operator shares its pool-defer-server node with defer-0.
       - op: replace
         path: /spec/replicas
         value: 1
@@ -59,14 +57,5 @@ patches:
         path: /spec/template/spec/imagePullSecrets
         value:
           - name: ghcr-pull
-      # One pod per node. The empty selector matches every pod of the
-      # namespace, so defer-0 never shares a node with the operator.
-      - op: add
-        path: /spec/template/spec/affinity
-        value:
-          podAntiAffinity:
-            requiredDuringSchedulingIgnoredDuringExecution:
-              - topologyKey: kubernetes.io/hostname
-                labelSelector: {}
       - op: remove
         path: /spec/template/spec/containers/0/resources/limits
