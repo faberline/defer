@@ -251,8 +251,8 @@ pub struct TaskListQuery {
     ),
     responses(
         (status = 200, body = TaskListResponse),
-        (status = 400, body = service_http::ErrorEnvelope),
-        (status = 404, body = service_http::ErrorEnvelope)
+        (status = 400, body = ErrorEnvelope),
+        (status = 404, body = ErrorEnvelope)
     )
 )]
 pub async fn task_list(
