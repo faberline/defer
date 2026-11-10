@@ -196,6 +196,7 @@ fn task(id: &str, at: chrono::DateTime<Utc>) -> CreateTask {
         schedule_at: at,
         priority: 10,
         max_attempts: 3,
+        dispatch_deadline_ms: None,
     }
 }
 
