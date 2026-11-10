@@ -11,6 +11,7 @@ use utoipa::OpenApi;
         crate::server::queue_list,
         crate::server::queue_get,
         crate::server::queue_put,
+        crate::server::queue_delete,
         crate::server::queue_control,
         crate::server::queue_purge,
         crate::server::task_create,
