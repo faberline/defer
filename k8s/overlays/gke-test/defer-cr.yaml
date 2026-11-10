@@ -12,13 +12,19 @@ spec:
   shardCount: 1
   replicasPerShard: 1
   voterCount: 1
-  storage: 1Gi
+  # The test pools are N4 machines, which take only Hyperdisk. The default
+  # class standard-rwo is pd-balanced, so the PVC never binds there and the
+  # autoscaler does not add a node. aw infra/gke-test/pools.yaml says PVCs on
+  # these pools use dynamic-rwo. A hyperdisk-balanced disk is at least 4 GB,
+  # so a smaller request fails with "Disk size cannot be smaller than 4 GB".
+  storage: 4Gi
+  storageClass: dynamic-rwo
   graceSecs: 1
   logLevel: info
   # Stated, not omitted: the suites test the PVC-retained queue state, not
   # auth.
   auth: "off"
-  # Small enough to share an e2-standard-4 with the node's system pods.
+  # Small enough to share an n4-standard-2 with the node's system pods.
   resources:
     cpu: 250m
     memory: 512Mi
