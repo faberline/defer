@@ -4,7 +4,8 @@ pub mod reconcile;
 pub mod render;
 
 pub use crd::{
-    crd_yaml, Defer, DeferBackupSpec, DeferPlacement, DeferResourceLimits, DeferSpec, DeferStatus,
+    crd_yaml, DeclaredQueueControl, DeclaredQueuePolicySpec, DeclaredQueueSpec, Defer,
+    DeferBackupSpec, DeferPlacement, DeferResourceLimits, DeferSpec, DeferStatus,
     LocalObjectReference, Toleration,
 };
 pub use reconcile::run;

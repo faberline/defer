@@ -77,6 +77,10 @@ pub struct DeferSpec {
     /// behavior.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limits: Option<DeferResourceLimits>,
+    /// Queues to provision on the cluster at startup. Forwarded to every serving
+    /// pod as `DEFER_DECLARED_QUEUES` (#32).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queues: Vec<DeclaredQueueSpec>,
 }
 
 /// Container resource limits for the serving StatefulSet container.
@@ -89,6 +93,54 @@ pub struct DeferResourceLimits {
     /// Maximum memory quantity (e.g. `512Mi`, `4Gi`). Unset leaves memory unbounded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<String>,
+}
+
+/// One queue declared on the Defer custom resource, forwarded to every serving
+/// pod as `DEFER_DECLARED_QUEUES` (#32).
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclaredQueueSpec {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<DeclaredQueuePolicySpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<DeclaredQueueControl>,
+}
+
+/// Queue policy overrides in camelCase, matching the six `QueuePolicy` fields.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclaredQueuePolicySpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_in_flight: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_dispatch_per_tick: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_dispatches_per_second: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_burst_size: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_ttl_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_backoff_ms: Option<u64>,
+}
+
+/// Control state for a declared queue.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub enum DeclaredQueueControl {
+    Running,
+    Paused,
+    Disabled,
+}
+
+impl DeclaredQueueControl {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Running => "Running",
+            Self::Paused => "Paused",
+            Self::Disabled => "Disabled",
+        }
+    }
 }
 
 /// Node placement for the operator-rendered pods: the serving StatefulSet
