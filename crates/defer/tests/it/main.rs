@@ -12,6 +12,7 @@ mod e2e;
 mod http_api;
 mod http_dispatch;
 mod http_dispatch_signing;
+mod process_journey;
 mod raft_peer_mtls;
 mod raft_scheduler;
 mod rate_limits;
