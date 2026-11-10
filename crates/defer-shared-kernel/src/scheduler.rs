@@ -369,6 +369,7 @@ mod tests {
             schedule_at: at,
             priority: 10,
             max_attempts: 3,
+            dispatch_deadline_ms: None,
         }
     }
 
