@@ -7,9 +7,10 @@
 # task repeatedly exercises committed lease/nack/reschedule retry transitions.
 # The task keyspace stays fixed so RSS, descriptor, thread/task, and p99 growth
 # represent instability rather than expected scheduler-state growth.
-# The default warmup performs at least 2,048 queue-control transitions in
-# addition to the live retry traffic, filling the bounded 4,096-entry proposal
-# cache and crossing the 1,024-entry snapshot cadence before measurement.
+# The default warmup adds at least 2,048 proposals (two control proposals per
+# round) to the shared bounded 4,096-entry proposal cache, crossing the
+# 1,024-entry snapshot cadence before measurement. It does not guarantee that
+# the cache saturates; adaptive saturation is a follow-up.
 
 set -euo pipefail
 
@@ -79,6 +80,7 @@ if [[ "${DEFER_SOAK_AUTOSTART:-0}" == "1" ]]; then
     fi
     if ! kill -0 "$AUTOSTART_PID" 2>/dev/null; then
       echo "!! Defer exited before becoming healthy (log: $AUTOSTART_DIR/defer.log)" >&2
+      tail -n 50 "$AUTOSTART_DIR/defer.log" >&2 || true
       exit 1
     fi
     sleep 1
@@ -196,7 +198,7 @@ run_until() {
   while [[ $(date +%s) -lt "$deadline" ]]; do load_round; done
 }
 
-echo ">> warmup: ${WARMUP_ROUNDS} fixed-task rounds (fills the bounded 4,096-entry proposal cache and crosses one snapshot interval)"
+echo ">> warmup: ${WARMUP_ROUNDS} fixed-task rounds (at least $((WARMUP_ROUNDS * 2)) proposals toward the shared bounded 4,096-entry proposal cache; crosses one 1,024-entry snapshot interval; saturation not guaranteed)"
 for _ in $(seq 1 "$WARMUP_ROUNDS"); do load_round; done
 TOTAL_OPS=0
 ERR_COUNT=0
