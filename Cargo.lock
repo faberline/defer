@@ -1356,6 +1356,7 @@ dependencies = [
  "rcgen",
  "relay",
  "reqwest",
+ "serde",
  "serde_json",
  "serde_yaml",
  "server-lifecycle",
