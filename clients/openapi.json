@@ -59,7 +59,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -108,7 +108,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -159,7 +159,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -190,7 +190,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/crate.DispatchReport"
+                  "$ref": "#/components/schemas/DispatchReport"
                 }
               }
             }
@@ -234,7 +234,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -243,6 +243,86 @@
       }
     },
     "/v1/queues/{queue}/tasks": {
+      "get": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "task_list",
+        "parameters": [
+          {
+            "name": "queue",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Filter by task state (scheduled, leased, succeeded, dead_lettered, canceled)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of tasks to return (1..=1000, default 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Last task_id of previous page",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "crate::server"
@@ -278,7 +358,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -288,7 +368,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -338,7 +418,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -379,7 +459,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -430,7 +510,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -440,7 +520,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -471,13 +551,14 @@
             "minimum": 0
           },
           "schedule_at": {
-            "$ref": "#/components/schemas/DateTime"
+            "type": "string",
+            "format": "date-time"
           },
           "target": {
             "$ref": "#/components/schemas/Target"
           },
           "task_id": {
-            "$ref": "#/components/schemas/TaskId"
+            "type": "string"
           }
         }
       },
@@ -528,7 +609,8 @@
                 ],
                 "properties": {
                   "next_at": {
-                    "$ref": "#/components/schemas/DateTime"
+                    "type": "string",
+                    "format": "date-time"
                   }
                 }
               }
@@ -687,7 +769,7 @@
             "$ref": "#/components/schemas/QueuePolicy"
           },
           "queue": {
-            "$ref": "#/components/schemas/QueueName"
+            "type": "string"
           },
           "scheduled_count": {
             "type": "integer",
@@ -723,6 +805,24 @@
           }
         }
       },
+      "TaskListResponse": {
+        "type": "object",
+        "required": [
+          "tasks"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": "string",
+            "nullable": true
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskStatusResponse"
+            }
+          }
+        }
+      },
       "TaskStatus": {
         "oneOf": [
           {
@@ -747,7 +847,7 @@
                 ],
                 "properties": {
                   "attempt_id": {
-                    "$ref": "#/components/schemas/AttemptId"
+                    "type": "string"
                   },
                   "epoch": {
                     "type": "integer",
@@ -760,7 +860,8 @@
                     "minimum": 0
                   },
                   "expires_at": {
-                    "$ref": "#/components/schemas/DateTime"
+                    "type": "string",
+                    "format": "date-time"
                   }
                 }
               }
