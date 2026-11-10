@@ -607,6 +607,137 @@ async fn dead_letter_terminal_state_converges_and_survives_restart() {
 
     cluster.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn queue_delete_converges_on_followers_and_survives_restart() {
+    let now = Utc.timestamp_millis_opt(30_000).unwrap();
+    let mut cluster = Cluster::new(3).await;
+    cluster.start_all();
+    let leader = cluster.wait_leader().await;
+    let follower = cluster
+        .live()
+        .map(|(id, _)| id)
+        .find(|id| *id != leader)
+        .unwrap();
+
+    cluster
+        .raft(leader)
+        .configure_queue("jobs".into(), QueuePolicy::default())
+        .await
+        .unwrap();
+    cluster
+        .raft(leader)
+        .create_task("jobs".into(), task("task-one", now))
+        .await
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let count = cluster
+            .raft(follower)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot("jobs")
+            .map(|s| s.task_count)
+            .unwrap_or(0);
+        if count == 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "task did not appear on follower before delete"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    cluster
+        .raft(leader)
+        .delete_queue("jobs".into())
+        .await
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let exists = cluster
+            .raft(follower)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot("jobs")
+            .is_ok();
+        if !exists {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "queue did not disappear on follower"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    // A marker queue created after the delete is later in the log. Wait for it
+    // on each node before asserting that `jobs` is gone, so the check runs only
+    // after that node has replayed past the delete.
+    cluster
+        .raft(leader)
+        .configure_queue("marker".into(), QueuePolicy::default())
+        .await
+        .unwrap();
+
+    let restart_id = follower;
+    cluster.kill(restart_id).await;
+    cluster.start_node(restart_id);
+    wait_queue_present(&cluster, restart_id, "marker").await;
+    assert!(
+        cluster
+            .raft(restart_id)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot("jobs")
+            .is_err(),
+        "deleted queue reappeared on restarted node"
+    );
+
+    let live: Vec<usize> = cluster.live().map(|(id, _)| id).collect();
+    for id in live {
+        wait_queue_present(&cluster, id, "marker").await;
+        assert!(
+            cluster
+                .raft(id)
+                .scheduler()
+                .lock()
+                .unwrap()
+                .queue_snapshot("jobs")
+                .is_err(),
+            "deleted queue must be gone on live node {id}"
+        );
+    }
+
+    cluster.shutdown().await;
+}
+
+async fn wait_queue_present(cluster: &Cluster, id: usize, queue: &str) {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let present = cluster
+            .raft(id)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot(queue)
+            .is_ok();
+        if present {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "queue {queue} did not replicate to node {id}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
 // </HANDWRITE>
 
 // <HANDWRITE gap="missing-generator:unit-test" tracker="#12" reason="Own repeated leader failover, full cluster restart, and progress convergence across replicas.">
