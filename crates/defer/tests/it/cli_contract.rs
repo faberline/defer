@@ -11,6 +11,7 @@ fn defer() -> Command {
 }
 
 const EXPECTED_DOMAIN_OPERATIONS: &[&str] = &[
+    "DELETE /v1/queues/{queue}",
     "DELETE /v1/queues/{queue}/tasks/{task_id}",
     "GET /admin/backup",
     "GET /v1/queues",
@@ -379,6 +380,7 @@ fn offline_spec_and_typed_client_generation_use_one_contract() {
             "GET /v1/queues",
             "PUT /v1/queues/{queue}",
             "GET /v1/queues/{queue}",
+            "DELETE /v1/queues/{queue}",
             "POST /v1/queues/{queue}/control",
             "POST /v1/queues/{queue}/tasks",
             "GET /v1/queues/{queue}/tasks",

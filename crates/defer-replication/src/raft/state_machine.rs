@@ -114,6 +114,9 @@ impl DeferStateMachine {
             DeferCommand::Cancel { queue, task_id } => {
                 DeferOutcome::Canceled(scheduler.cancel(&queue, &task_id))
             }
+            DeferCommand::DeleteQueue { queue } => {
+                DeferOutcome::QueueDeleted(scheduler.delete_queue(&queue))
+            }
         }
     }
 }
