@@ -4,8 +4,7 @@
     "title": "Defer HTTP API",
     "description": "Raft-backed delayed HTTP push queue over HTTP/1.1 and h2c.",
     "contact": {
-      "name": "Chris Cheng",
-      "email": "chris.cheng.c4@gmail.com"
+      "name": "Faberline contributors"
     },
     "license": {
       "name": "MIT"
@@ -365,6 +364,16 @@
           "201": {
             "description": ""
           },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "",
             "content": {
@@ -517,6 +526,16 @@
               }
             }
           },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "",
             "content": {
@@ -551,6 +570,12 @@
           "schedule_at"
         ],
         "properties": {
+          "dispatch_deadline_ms": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "minimum": 0
+          },
           "max_attempts": {
             "type": "integer",
             "format": "int32",
