@@ -1,0 +1,266 @@
+# CI stages: lint -> test -> e2e -> gate.
+# See https://github.com/faberline/aw/blob/main/docs/standards/ci.md
+# The ruleset requires only the "gate" job. Keep its name fixed.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: "lint: fmt, clippy"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+      - name: Run fmt and clippy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test-workspace:
+    name: "test: workspace"
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+      - name: Run Defer tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --workspace
+          cargo test --locked -p defer --features operator --test operator
+          python3 -B scripts/meta/project_docs_contract.py check .
+
+  test-release-contract:
+    name: "test: release contract"
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Release contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B scripts/release/verify-release-contract.py --app defer
+          python3 -B scripts/release/make-gke-release-receipt.py --self-test
+
+  # The e2e jobs run only on push to main. The operator_recovery check is red
+  # on pull requests for a cluster reason (defer-0 stays Pending; the node
+  # group is at its maximum), so the cluster fix decides when they run on pull
+  # requests too. The gate job accepts a skipped e2e job.
+  e2e-image:
+    name: "e2e: server image"
+    needs: [test-workspace, test-release-contract]
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/defer-test-image.yml
+
+  e2e-test-client:
+    name: "e2e: test-client image"
+    needs: [test-workspace, test-release-contract]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.digest.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: defer-test-client-x86_64-unknown-linux-musl
+
+      # The suites only talk HTTP and run kubectl, so the test binary needs no
+      # crate feature; musl makes it fit the static base image.
+      - name: Build the test binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe="$(cargo test --release --locked --target x86_64-unknown-linux-musl \
+              -p defer --test it --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .target.name == "it") | .executable')"
+          [[ -n "$exe" && -x "$exe" ]] || { echo "::error::no test binary for it"; exit 1; }
+          mkdir -p dist/linux/amd64
+          cp "$exe" dist/linux/amd64/defer-it
+
+      - name: Resolve image tag
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          git12="$(git rev-parse HEAD | cut -c1-12)"
+          echo "tag=ghcr.io/${{ github.repository_owner }}/defer-test-client:sha-${git12}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push the test-client image
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.test
+          target: test-client
+          platforms: linux/amd64
+          push: true
+          # NEVER add `latest` or a semver tag here — dev/test line only.
+          tags: ${{ steps.ver.outputs.tag }}
+
+      - name: Record pushed digest
+        id: digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad digest: $DIGEST"; exit 1; }
+          echo "image=ghcr.io/${{ github.repository_owner }}/defer-test-client@${DIGEST}" >> "$GITHUB_OUTPUT"
+
+  e2e-resolve:
+    name: "e2e: resolve image identity"
+    needs: [test-workspace, test-release-contract, e2e-image]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      image: ${{ steps.identity.outputs.image }}
+      test-env: ${{ steps.identity.outputs.test_env }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Pin the image and its expected identity
+        id: identity
+        shell: bash
+        env:
+          RAW_IMAGE: ${{ needs.e2e-image.outputs.image }}
+        run: |
+          set -euo pipefail
+          die() { echo "::error::$*" >&2; exit 1; }
+          [[ "$RAW_IMAGE" =~ ^ghcr\.io/faberline/defer:sha-([0-9a-f]{12})@(sha256:[0-9a-f]{64})$ ]] \
+            || die "image must be ghcr.io/faberline/defer:sha-<git12>@sha256:<64 hex>, got: $RAW_IMAGE"
+          git_sha="${BASH_REMATCH[1]:0:8}"
+          root_digest="${BASH_REMATCH[2]}"
+          image="ghcr.io/faberline/defer@${root_digest}"
+
+          version="$(grep '^version = ' Cargo.toml | head -n1 | cut -d'"' -f2)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || die "invalid version: $version"
+
+          # defer-test-image.yml pushes one linux/amd64 image. buildx may still
+          # wrap it in an index (attestations); then the amd64 child is what
+          # the node pulls. A plain manifest runs as the root digest itself.
+          raw="$(docker buildx imagetools inspect --raw "$image")"
+          if jq -e '.manifests? | type == "array"' <<<"$raw" >/dev/null; then
+            runtime_digest="$(jq -r '
+              [.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest] |
+              if length == 1 then .[0] else empty end' <<<"$raw")"
+          else
+            runtime_digest="$root_digest"
+          fi
+          [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "no single linux/amd64 digest for $image"
+
+          {
+            echo "image=${image}"
+            echo "test_env<<EOF"
+            echo "E2E_EXPECTED_VERSION=${version}"
+            echo "E2E_EXPECTED_GIT_SHA=${git_sha}"
+            echo "E2E_EXPECTED_IMAGE=${image}"
+            echo "E2E_EXPECTED_RUNTIME_DIGEST=${runtime_digest}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### defer gke-test identity"
+            echo
+            echo '```text'
+            echo "image:          ${image}"
+            echo "version:        ${version}"
+            echo "git_sha:        ${git_sha}"
+            echo "runtime_digest: ${runtime_digest}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  e2e-operator-recovery:
+    name: "e2e: operator_recovery"
+    needs: [e2e-resolve, e2e-test-client]
+    if: github.event_name == 'push'
+    permissions:
+      id-token: write
+      contents: read
+      packages: read
+    uses: faberline/aw/.github/workflows/gke-test.yml@6eb7ebcdf38343e0d4c77f8674b6bc30976d86bb
+    with:
+      aw-ref: 6eb7ebcdf38343e0d4c77f8674b6bc30976d86bb
+      image: ${{ needs.e2e-resolve.outputs.image }}
+      image-name: ghcr.io/faberline/defer
+      namespace: defer
+      test-job: k8s/gke-test-job/operator_recovery
+      test-image: ${{ needs.e2e-test-client.outputs.image }}
+      test-image-name: defer-test-client
+      test-env: ${{ needs.e2e-resolve.outputs.test-env }}
+      evidence-suffix: operator_recovery
+
+  gate:
+    name: gate
+    if: always()
+    needs: [lint, test-workspace, test-release-contract, e2e-image, e2e-test-client, e2e-resolve, e2e-operator-recovery]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check every stage
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e '.lint.result == "success"' > /dev/null
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' > /dev/null
