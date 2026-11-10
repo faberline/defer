@@ -21,6 +21,7 @@ fn task(id: &str, at: DateTime<Utc>) -> CreateTask {
         schedule_at: at,
         priority: 10,
         max_attempts: 3,
+        dispatch_deadline_ms: None,
     }
 }
 

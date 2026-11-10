@@ -28,8 +28,8 @@ use defer_replication::ProposeError;
 use defer_shared_kernel::{CreateTask, QueuePolicy, SchedulerError};
 
 pub use dto::{
-    CreateTasksRequest, CreateTasksResponse, QueueControlRequest, TaskListResponse,
-    TaskStatusResponse,
+    CreateTasksRequest, CreateTasksResponse, QueueControlRequest, QueueListResponse,
+    TaskListResponse, TaskStatusResponse,
 };
 pub use state::AppState;
 
@@ -63,6 +63,7 @@ fn router_inner(
     let verifier = state.verifier.clone();
     let body_limit = state.body_limit_bytes();
     let data = Router::new()
+        .route("/v1/queues", get(queue_list))
         .route("/v1/queues/{queue}", get(queue_get).put(queue_put))
         .route("/v1/queues/{queue}/control", post(queue_control))
         .route("/v1/queues/{queue}/tasks", get(task_list).post(task_create))
@@ -160,6 +161,87 @@ fn internal(error: impl std::fmt::Display) -> Response {
     .into_response()
 }
 
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct QueueListQuery {
+    pub page_size: Option<String>,
+    pub page_token: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/queues",
+    params(
+        ("page_size" = Option<usize>, Query, description = "Maximum number of queues to return (1..=1000, default 100)"),
+        ("page_token" = Option<String>, Query, description = "Page token of previous page"),
+    ),
+    responses(
+        (status = 200, body = QueueListResponse),
+        (status = 400, body = ErrorEnvelope)
+    )
+)]
+pub async fn queue_list(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Query(query): Query<QueueListQuery>,
+) -> Response {
+    let page_size = match query.page_size.as_deref() {
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(size) if (1..=1000).contains(&size) => size as usize,
+            _ => {
+                return ApiErr::new(
+                    StatusCode::BAD_REQUEST,
+                    "bad_request",
+                    "page_size must be in range 1..=1000",
+                )
+                .into_response();
+            }
+        },
+        None => 100,
+    };
+
+    state.metrics.requests.incr();
+
+    let principal_inner = principal.into_inner();
+    let scheduler_arc = state.raft.scheduler();
+    let scheduler = scheduler_arc.lock().unwrap();
+    let all_queues = scheduler.queue_names();
+    let visible_queues: Vec<_> = all_queues
+        .into_iter()
+        .filter(|q| principal_inner.ensure(q, Role::Read).is_ok())
+        .collect();
+
+    let start_idx = match query.page_token.as_deref() {
+        Some(token) if !token.is_empty() => visible_queues
+            .iter()
+            .position(|q| q.as_str() > token)
+            .unwrap_or(visible_queues.len()),
+        _ => 0,
+    };
+
+    let remaining = &visible_queues[start_idx..];
+    let (page_queues, next_page_token) = if remaining.len() > page_size {
+        (
+            &remaining[..page_size],
+            Some(remaining[page_size - 1].clone()),
+        )
+    } else {
+        (remaining, None)
+    };
+
+    let mut queues = Vec::with_capacity(page_queues.len());
+    for name in page_queues {
+        if let Ok(snapshot) = scheduler.queue_snapshot(name) {
+            queues.push(snapshot);
+        }
+    }
+
+    Json(QueueListResponse {
+        queues,
+        next_page_token,
+    })
+    .into_response()
+}
+
 #[utoipa::path(
     get,
     path = "/v1/queues/{queue}",
@@ -230,6 +312,21 @@ pub async fn queue_control(
     match state.raft.set_queue_control(queue, request.state).await {
         Ok(snapshot) => Json(snapshot).into_response(),
         Err(error) => propose_error(error),
+    }
+}
+
+fn validate_dispatch_deadline(deadline_ms: Option<u64>) -> Option<Response> {
+    if deadline_ms == Some(0) {
+        Some(
+            ApiErr::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_argument",
+                "dispatch_deadline_ms must be greater than 0",
+            )
+            .into_response(),
+        )
+    } else {
+        None
     }
 }
 
@@ -331,7 +428,7 @@ pub async fn task_list(
     path = "/v1/queues/{queue}/tasks",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = CreateTask,
-    responses((status = 201), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
+    responses((status = 201), (status = 400, body = ErrorEnvelope), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
 )]
 pub async fn task_create(
     State(state): State<AppState>,
@@ -341,6 +438,9 @@ pub async fn task_create(
 ) -> Response {
     if let Err(error) = authorize(&principal, &queue, Role::Write) {
         return error.into_response();
+    }
+    if let Some(response) = validate_dispatch_deadline(task.dispatch_deadline_ms) {
+        return response;
     }
     state.metrics.requests.incr();
     match state.raft.create_task(queue, task).await {
@@ -354,7 +454,7 @@ pub async fn task_create(
     path = "/v1/queues/{queue}/tasks:batch",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = CreateTasksRequest,
-    responses((status = 201, body = CreateTasksResponse), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
+    responses((status = 201, body = CreateTasksResponse), (status = 400, body = ErrorEnvelope), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
 )]
 pub async fn task_create_batch(
     State(state): State<AppState>,
@@ -364,6 +464,11 @@ pub async fn task_create_batch(
 ) -> Response {
     if let Err(error) = authorize(&principal, &queue, Role::Write) {
         return error.into_response();
+    }
+    for task in &request.tasks {
+        if let Some(response) = validate_dispatch_deadline(task.dispatch_deadline_ms) {
+            return response;
+        }
     }
     state.metrics.requests.incr();
     match state.raft.create_tasks(queue, request.tasks).await {
@@ -499,6 +604,30 @@ mod tests {
         assert_eq!(disabled.status(), StatusCode::CONFLICT);
         let infra = propose_error(anyhow::anyhow!("commit timed out").into());
         assert_eq!(infra.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn validate_dispatch_deadline_rejects_zero() {
+        let err = validate_dispatch_deadline(Some(0)).expect("0 must be rejected");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert!(validate_dispatch_deadline(None).is_none());
+        assert!(validate_dispatch_deadline(Some(100)).is_none());
+    }
+
+    #[test]
+    fn queue_list_response_construction() {
+        let response = QueueListResponse {
+            queues: vec![],
+            next_page_token: None,
+        };
+        assert!(response.queues.is_empty());
+        assert_eq!(response.next_page_token, None);
+
+        let response_with_token = QueueListResponse {
+            queues: vec![],
+            next_page_token: Some("q2".into()),
+        };
+        assert_eq!(response_with_token.next_page_token.as_deref(), Some("q2"));
     }
 }
 // HANDWRITE-END
