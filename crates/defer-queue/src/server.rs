@@ -2,13 +2,18 @@
 //! The defer HTTP router and its handlers. The handlers stay in this module:
 //! utoipa derives each operation's default OpenAPI tag (`crate::server`) from
 //! it.
+//!
+//! A `body = <Type>` in `#[utoipa::path]` becomes a `$ref` built from the
+//! text of the path, not from the type. Write the bare component name (for
+//! example `ErrorEnvelope`), never a module path: `service_http::ErrorEnvelope`
+//! would publish a `$ref` with no matching component.
 
 mod dto;
 mod state;
 
 use std::sync::Arc;
 
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::{header, Method, StatusCode};
 use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
@@ -22,7 +27,10 @@ use defer_dispatch::DispatchDisposition;
 use defer_replication::ProposeError;
 use defer_shared_kernel::{CreateTask, QueuePolicy, SchedulerError};
 
-pub use dto::{CreateTasksRequest, CreateTasksResponse, QueueControlRequest, TaskStatusResponse};
+pub use dto::{
+    CreateTasksRequest, CreateTasksResponse, QueueControlRequest, QueueListResponse,
+    TaskListResponse, TaskStatusResponse,
+};
 pub use state::AppState;
 
 pub fn router(state: AppState) -> Router {
@@ -55,9 +63,13 @@ fn router_inner(
     let verifier = state.verifier.clone();
     let body_limit = state.body_limit_bytes();
     let data = Router::new()
-        .route("/v1/queues/{queue}", get(queue_get).put(queue_put))
+        .route("/v1/queues", get(queue_list))
+        .route(
+            "/v1/queues/{queue}",
+            get(queue_get).put(queue_put).delete(queue_delete),
+        )
         .route("/v1/queues/{queue}/control", post(queue_control))
-        .route("/v1/queues/{queue}/tasks", post(task_create))
+        .route("/v1/queues/{queue}/tasks", get(task_list).post(task_create))
         .route("/v1/queues/{queue}/tasks:batch", post(task_create_batch))
         .route(
             "/v1/queues/{queue}/tasks/{task_id}",
@@ -152,11 +164,92 @@ fn internal(error: impl std::fmt::Display) -> Response {
     .into_response()
 }
 
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct QueueListQuery {
+    pub page_size: Option<String>,
+    pub page_token: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/queues",
+    params(
+        ("page_size" = Option<usize>, Query, description = "Maximum number of queues to return (1..=1000, default 100)"),
+        ("page_token" = Option<String>, Query, description = "Page token of previous page"),
+    ),
+    responses(
+        (status = 200, body = QueueListResponse),
+        (status = 400, body = ErrorEnvelope)
+    )
+)]
+pub async fn queue_list(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Query(query): Query<QueueListQuery>,
+) -> Response {
+    let page_size = match query.page_size.as_deref() {
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(size) if (1..=1000).contains(&size) => size as usize,
+            _ => {
+                return ApiErr::new(
+                    StatusCode::BAD_REQUEST,
+                    "bad_request",
+                    "page_size must be in range 1..=1000",
+                )
+                .into_response();
+            }
+        },
+        None => 100,
+    };
+
+    state.metrics.requests.incr();
+
+    let principal_inner = principal.into_inner();
+    let scheduler_arc = state.raft.scheduler();
+    let scheduler = scheduler_arc.lock().unwrap();
+    let all_queues = scheduler.queue_names();
+    let visible_queues: Vec<_> = all_queues
+        .into_iter()
+        .filter(|q| principal_inner.ensure(q, Role::Read).is_ok())
+        .collect();
+
+    let start_idx = match query.page_token.as_deref() {
+        Some(token) if !token.is_empty() => visible_queues
+            .iter()
+            .position(|q| q.as_str() > token)
+            .unwrap_or(visible_queues.len()),
+        _ => 0,
+    };
+
+    let remaining = &visible_queues[start_idx..];
+    let (page_queues, next_page_token) = if remaining.len() > page_size {
+        (
+            &remaining[..page_size],
+            Some(remaining[page_size - 1].clone()),
+        )
+    } else {
+        (remaining, None)
+    };
+
+    let mut queues = Vec::with_capacity(page_queues.len());
+    for name in page_queues {
+        if let Ok(snapshot) = scheduler.queue_snapshot(name) {
+            queues.push(snapshot);
+        }
+    }
+
+    Json(QueueListResponse {
+        queues,
+        next_page_token,
+    })
+    .into_response()
+}
+
 #[utoipa::path(
     get,
     path = "/v1/queues/{queue}",
     params(("queue" = String, Path, description = "Queue name")),
-    responses((status = 200, body = QueueSnapshot), (status = 404, body = service_http::ErrorEnvelope))
+    responses((status = 200, body = QueueSnapshot), (status = 404, body = ErrorEnvelope))
 )]
 pub async fn queue_get(
     State(state): State<AppState>,
@@ -184,7 +277,7 @@ pub async fn queue_get(
     path = "/v1/queues/{queue}",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = QueuePolicy,
-    responses((status = 200, body = QueueSnapshot), (status = 400, body = service_http::ErrorEnvelope))
+    responses((status = 200, body = QueueSnapshot), (status = 400, body = ErrorEnvelope))
 )]
 pub async fn queue_put(
     State(state): State<AppState>,
@@ -203,11 +296,32 @@ pub async fn queue_put(
 }
 
 #[utoipa::path(
+    delete,
+    path = "/v1/queues/{queue}",
+    params(("queue" = String, Path, description = "Queue name")),
+    responses((status = 204), (status = 404, body = ErrorEnvelope))
+)]
+pub async fn queue_delete(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Path(queue): Path<String>,
+) -> Response {
+    if let Err(error) = authorize(&principal, &queue, Role::Write) {
+        return error.into_response();
+    }
+    state.metrics.requests.incr();
+    match state.raft.delete_queue(queue).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => propose_error(error),
+    }
+}
+
+#[utoipa::path(
     post,
     path = "/v1/queues/{queue}/control",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = QueueControlRequest,
-    responses((status = 200, body = QueueSnapshot), (status = 404, body = service_http::ErrorEnvelope))
+    responses((status = 200, body = QueueSnapshot), (status = 404, body = ErrorEnvelope))
 )]
 pub async fn queue_control(
     State(state): State<AppState>,
@@ -225,12 +339,120 @@ pub async fn queue_control(
     }
 }
 
+fn validate_dispatch_deadline(deadline_ms: Option<u64>) -> Option<Response> {
+    if deadline_ms == Some(0) {
+        Some(
+            ApiErr::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_argument",
+                "dispatch_deadline_ms must be greater than 0",
+            )
+            .into_response(),
+        )
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct TaskListQuery {
+    pub state: Option<String>,
+    pub limit: Option<String>,
+    pub cursor: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/queues/{queue}/tasks",
+    params(
+        ("queue" = String, Path, description = "Queue name"),
+        ("state" = Option<String>, Query, description = "Filter by task state (scheduled, leased, succeeded, dead_lettered, canceled)"),
+        ("limit" = Option<usize>, Query, description = "Maximum number of tasks to return (1..=1000, default 100)"),
+        ("cursor" = Option<String>, Query, description = "Last task_id of previous page"),
+    ),
+    responses(
+        (status = 200, body = TaskListResponse),
+        (status = 400, body = ErrorEnvelope),
+        (status = 404, body = ErrorEnvelope)
+    )
+)]
+pub async fn task_list(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Path(queue): Path<String>,
+    Query(query): Query<TaskListQuery>,
+) -> Response {
+    if let Err(error) = authorize(&principal, &queue, Role::Read) {
+        return error.into_response();
+    }
+    state.metrics.requests.incr();
+
+    let limit = match query.limit.as_deref() {
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(limit) if (1..=1000).contains(&limit) => limit as usize,
+            _ => {
+                return ApiErr::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid",
+                    "limit must be between 1 and 1000",
+                )
+                .into_response();
+            }
+        },
+        None => 100,
+    };
+
+    let state_filter = match query.state.as_deref() {
+        Some("scheduled") => Some(defer_shared_kernel::TaskStateFilter::Scheduled),
+        Some("leased") => Some(defer_shared_kernel::TaskStateFilter::Leased),
+        Some("succeeded") => Some(defer_shared_kernel::TaskStateFilter::Succeeded),
+        Some("dead_lettered") => Some(defer_shared_kernel::TaskStateFilter::DeadLettered),
+        Some("canceled") => Some(defer_shared_kernel::TaskStateFilter::Canceled),
+        Some(unknown) => {
+            return ApiErr::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                format!("invalid state filter: {unknown}"),
+            )
+            .into_response();
+        }
+        None => None,
+    };
+
+    let cursor = query.cursor.as_deref().filter(|s| !s.is_empty());
+
+    let (tasks, has_more) =
+        match state
+            .raft
+            .scheduler()
+            .lock()
+            .unwrap()
+            .list_tasks(&queue, state_filter, cursor, limit)
+        {
+            Ok(res) => res,
+            Err(error) => return scheduler_error(error),
+        };
+
+    let next_cursor = if has_more {
+        tasks.last().map(|(id, _)| id.clone())
+    } else {
+        None
+    };
+
+    let tasks = tasks
+        .into_iter()
+        .map(|(task_id, status)| TaskStatusResponse { task_id, status })
+        .collect();
+
+    Json(TaskListResponse { tasks, next_cursor }).into_response()
+}
+
 #[utoipa::path(
     post,
     path = "/v1/queues/{queue}/tasks",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = CreateTask,
-    responses((status = 201), (status = 404, body = service_http::ErrorEnvelope), (status = 409, body = service_http::ErrorEnvelope))
+    responses((status = 201), (status = 400, body = ErrorEnvelope), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
 )]
 pub async fn task_create(
     State(state): State<AppState>,
@@ -240,6 +462,9 @@ pub async fn task_create(
 ) -> Response {
     if let Err(error) = authorize(&principal, &queue, Role::Write) {
         return error.into_response();
+    }
+    if let Some(response) = validate_dispatch_deadline(task.dispatch_deadline_ms) {
+        return response;
     }
     state.metrics.requests.incr();
     match state.raft.create_task(queue, task).await {
@@ -253,7 +478,7 @@ pub async fn task_create(
     path = "/v1/queues/{queue}/tasks:batch",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = CreateTasksRequest,
-    responses((status = 201, body = CreateTasksResponse), (status = 404, body = service_http::ErrorEnvelope), (status = 409, body = service_http::ErrorEnvelope))
+    responses((status = 201, body = CreateTasksResponse), (status = 400, body = ErrorEnvelope), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
 )]
 pub async fn task_create_batch(
     State(state): State<AppState>,
@@ -263,6 +488,11 @@ pub async fn task_create_batch(
 ) -> Response {
     if let Err(error) = authorize(&principal, &queue, Role::Write) {
         return error.into_response();
+    }
+    for task in &request.tasks {
+        if let Some(response) = validate_dispatch_deadline(task.dispatch_deadline_ms) {
+            return response;
+        }
     }
     state.metrics.requests.incr();
     match state.raft.create_tasks(queue, request.tasks).await {
@@ -278,7 +508,7 @@ pub async fn task_create_batch(
         ("queue" = String, Path, description = "Queue name"),
         ("task_id" = String, Path, description = "Task id")
     ),
-    responses((status = 200, body = TaskStatusResponse), (status = 404, body = service_http::ErrorEnvelope))
+    responses((status = 200, body = TaskStatusResponse), (status = 404, body = ErrorEnvelope))
 )]
 pub async fn task_status(
     State(state): State<AppState>,
@@ -311,7 +541,7 @@ pub async fn task_status(
         ("queue" = String, Path, description = "Queue name"),
         ("task_id" = String, Path, description = "Task id")
     ),
-    responses((status = 204), (status = 404, body = service_http::ErrorEnvelope))
+    responses((status = 204), (status = 404, body = ErrorEnvelope))
 )]
 pub async fn task_cancel(
     State(state): State<AppState>,
@@ -338,7 +568,7 @@ pub async fn task_cancel(
     post,
     path = "/v1/queues/{queue}/dispatch",
     params(("queue" = String, Path, description = "Queue name")),
-    responses((status = 200, body = crate::DispatchReport), (status = 204))
+    responses((status = 200, body = DispatchReport), (status = 204))
 )]
 pub async fn dispatch_one(
     State(state): State<AppState>,
@@ -398,6 +628,30 @@ mod tests {
         assert_eq!(disabled.status(), StatusCode::CONFLICT);
         let infra = propose_error(anyhow::anyhow!("commit timed out").into());
         assert_eq!(infra.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn validate_dispatch_deadline_rejects_zero() {
+        let err = validate_dispatch_deadline(Some(0)).expect("0 must be rejected");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert!(validate_dispatch_deadline(None).is_none());
+        assert!(validate_dispatch_deadline(Some(100)).is_none());
+    }
+
+    #[test]
+    fn queue_list_response_construction() {
+        let response = QueueListResponse {
+            queues: vec![],
+            next_page_token: None,
+        };
+        assert!(response.queues.is_empty());
+        assert_eq!(response.next_page_token, None);
+
+        let response_with_token = QueueListResponse {
+            queues: vec![],
+            next_page_token: Some("q2".into()),
+        };
+        assert_eq!(response_with_token.next_page_token.as_deref(), Some("q2"));
     }
 }
 // HANDWRITE-END

@@ -25,6 +25,7 @@ fn default_method() -> String {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct CreateTask {
+    #[schema(value_type = String)]
     pub task_id: TaskId,
     pub target: Target,
     #[serde(default)]
@@ -34,6 +35,8 @@ pub struct CreateTask {
     pub priority: u8,
     #[serde(default = "default_max_attempts")]
     pub max_attempts: u32,
+    #[serde(default)]
+    pub dispatch_deadline_ms: Option<u64>,
 }
 
 pub fn default_priority() -> u8 {
@@ -52,6 +55,10 @@ pub struct QueuePolicy {
     pub max_burst_size: usize,
     pub lease_ttl_ms: u64,
     pub retry_backoff_ms: u64,
+    #[serde(default)]
+    pub max_backoff_ms: Option<u64>,
+    #[serde(default)]
+    pub max_doublings: Option<u32>,
 }
 
 impl Default for QueuePolicy {
@@ -63,6 +70,8 @@ impl Default for QueuePolicy {
             max_burst_size: 100,
             lease_ttl_ms: 30_000,
             retry_backoff_ms: 1_000,
+            max_backoff_ms: None,
+            max_doublings: None,
         }
     }
 }
@@ -77,6 +86,7 @@ pub enum QueueControlState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct QueueSnapshot {
+    #[schema(value_type = String)]
     pub queue: QueueName,
     pub control_state: QueueControlState,
     pub policy: QueuePolicy,
@@ -90,6 +100,7 @@ pub struct QueueSnapshot {
 pub enum TaskStatus {
     Scheduled,
     Leased {
+        #[schema(value_type = String)]
         attempt_id: AttemptId,
         executor_node: u64,
         epoch: u64,
@@ -98,6 +109,29 @@ pub enum TaskStatus {
     Succeeded,
     DeadLettered,
     Canceled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStateFilter {
+    Scheduled,
+    Leased,
+    Succeeded,
+    DeadLettered,
+    Canceled,
+}
+
+impl TaskStateFilter {
+    pub fn matches(&self, status: &TaskStatus) -> bool {
+        matches!(
+            (self, status),
+            (Self::Scheduled, TaskStatus::Scheduled)
+                | (Self::Leased, TaskStatus::Leased { .. })
+                | (Self::Succeeded, TaskStatus::Succeeded)
+                | (Self::DeadLettered, TaskStatus::DeadLettered)
+                | (Self::Canceled, TaskStatus::Canceled)
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -115,6 +149,8 @@ pub struct DispatchLease {
     pub epoch: u64,
     pub leased_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    #[serde(default)]
+    pub dispatch_deadline_ms: Option<u64>,
 }
 
 /// One externally observed HTTP result to commit against its fenced lease.
@@ -154,4 +190,86 @@ pub enum SchedulerError {
 }
 
 pub type SchedulerResult<T> = Result<T, SchedulerError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn policy_json_without_new_fields_deserializes() {
+        let json = r#"{"max_in_flight":100,"max_dispatch_per_tick":100,"max_dispatches_per_second":100,"max_burst_size":100,"lease_ttl_ms":30000,"retry_backoff_ms":1000}"#;
+        let policy: QueuePolicy =
+            serde_json::from_str(json).expect("deserializes without optional bounds");
+        assert_eq!(policy.max_backoff_ms, None);
+        assert_eq!(policy.max_doublings, None);
+        assert_eq!(policy, QueuePolicy::default());
+    }
+
+    #[test]
+    fn policy_json_with_new_fields_deserializes() {
+        let json = r#"{"max_in_flight":50,"max_dispatch_per_tick":20,"max_dispatches_per_second":10,"max_burst_size":5,"lease_ttl_ms":10000,"retry_backoff_ms":500,"max_backoff_ms":60000,"max_doublings":5}"#;
+        let policy: QueuePolicy =
+            serde_json::from_str(json).expect("deserializes with optional bounds");
+        assert_eq!(policy.max_backoff_ms, Some(60_000));
+        assert_eq!(policy.max_doublings, Some(5));
+    }
+
+    #[test]
+    fn create_task_decodes_with_and_without_dispatch_deadline() {
+        let json_without = serde_json::json!({
+            "task_id": "task-1",
+            "target": { "url": "http://127.0.0.1:8080/hook" },
+            "schedule_at": "2026-10-24T00:00:00Z"
+        });
+        let task_without: CreateTask = serde_json::from_value(json_without).unwrap();
+        assert_eq!(task_without.dispatch_deadline_ms, None);
+
+        let json_with = serde_json::json!({
+            "task_id": "task-2",
+            "target": { "url": "http://127.0.0.1:8080/hook" },
+            "schedule_at": "2026-10-24T00:00:00Z",
+            "dispatch_deadline_ms": 2500
+        });
+        let task_with: CreateTask = serde_json::from_value(json_with).unwrap();
+        assert_eq!(task_with.dispatch_deadline_ms, Some(2500));
+    }
+
+    #[test]
+    fn dispatch_lease_decodes_with_and_without_dispatch_deadline() {
+        let json_without = serde_json::json!({
+            "attempt_id": "att-1",
+            "task_id": "task-1",
+            "queue": "jobs",
+            "target": { "url": "http://127.0.0.1:8080/hook", "method": "POST", "headers": {} },
+            "payload": null,
+            "priority": 10,
+            "attempt": 1,
+            "idempotency_key": "jobs/task-1",
+            "executor_node": 1,
+            "epoch": 1,
+            "leased_at": "2026-10-24T00:00:00Z",
+            "expires_at": "2026-10-24T00:00:30Z"
+        });
+        let lease_without: DispatchLease = serde_json::from_value(json_without).unwrap();
+        assert_eq!(lease_without.dispatch_deadline_ms, None);
+
+        let json_with = serde_json::json!({
+            "attempt_id": "att-2",
+            "task_id": "task-2",
+            "queue": "jobs",
+            "target": { "url": "http://127.0.0.1:8080/hook", "method": "POST", "headers": {} },
+            "payload": null,
+            "priority": 10,
+            "attempt": 1,
+            "idempotency_key": "jobs/task-2",
+            "executor_node": 1,
+            "epoch": 1,
+            "leased_at": "2026-10-24T00:00:00Z",
+            "expires_at": "2026-10-24T00:00:30Z",
+            "dispatch_deadline_ms": 1500
+        });
+        let lease_with: DispatchLease = serde_json::from_value(json_with).unwrap();
+        assert_eq!(lease_with.dispatch_deadline_ms, Some(1500));
+    }
+}
 // HANDWRITE-END

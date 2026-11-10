@@ -136,6 +136,7 @@ async fn defer_stays_within_twenty_percent_of_relay_scheduler_ceiling() {
                 max_burst_size: total,
                 lease_ttl_ms: 30_000,
                 retry_backoff_ms: 1_000,
+                ..QueuePolicy::default()
             },
         )
         .await
@@ -178,6 +179,7 @@ async fn defer_stays_within_twenty_percent_of_relay_scheduler_ceiling() {
                 schedule_at: now,
                 priority: 10,
                 max_attempts: 3,
+                dispatch_deadline_ms: None,
             })
             .collect();
         assert_eq!(

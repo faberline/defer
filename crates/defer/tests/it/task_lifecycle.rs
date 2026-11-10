@@ -1,7 +1,8 @@
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:defer-task-lifecycle" tracker="#766" reason="Conformance tests for Defer's ETA-first, priority-aware push queue scheduler core."
 use chrono::{Duration, Utc};
 use defer::{
-    CreateTask, DeferScheduler, NackOutcome, QueuePolicy, Target, TaskStatus, DEFAULT_PRIORITY,
+    CreateTask, DeferScheduler, NackOutcome, QueuePolicy, Target, TaskStateFilter, TaskStatus,
+    DEFAULT_PRIORITY,
 };
 
 fn target() -> Target {
@@ -20,6 +21,7 @@ fn task(id: &str, due_offset_ms: i64, priority: u8, max_attempts: u32) -> Create
         schedule_at: Utc::now() + Duration::milliseconds(due_offset_ms),
         priority,
         max_attempts,
+        dispatch_deadline_ms: None,
     }
 }
 
@@ -141,5 +143,241 @@ fn cancel_prevents_dispatch() {
         s.status("q", "cancel-me").unwrap(),
         Some(TaskStatus::Canceled)
     );
+}
+
+#[test]
+fn retry_backoff_bounds_honor_max_doublings_and_max_backoff() {
+    let now = Utc::now();
+    let mut s = scheduler(QueuePolicy {
+        retry_backoff_ms: 1_000,
+        max_backoff_ms: Some(3_000),
+        max_doublings: Some(2),
+        ..QueuePolicy::default()
+    });
+    let mut t = task("bounded-retry", 0, DEFAULT_PRIORITY, 5);
+    t.schedule_at = now;
+    s.create_task("q", t).unwrap();
+
+    // attempt 1: backoff is 1000ms
+    let first = s.lease_due("q", now, 1).unwrap().remove(0);
+    let outcome = s.nack("q", &first.attempt_id, now).unwrap().unwrap();
+    let next_at = match outcome {
+        NackOutcome::Retried { next_at } => next_at,
+        NackOutcome::DeadLettered => panic!("attempt 1 should retry"),
+    };
+    assert_eq!(next_at, now + Duration::milliseconds(1_000));
+
+    // attempt 2: backoff is 2000ms
+    let second = s.lease_due("q", next_at, 1).unwrap().remove(0);
+    let outcome2 = s.nack("q", &second.attempt_id, next_at).unwrap().unwrap();
+    let next_at2 = match outcome2 {
+        NackOutcome::Retried { next_at } => next_at,
+        NackOutcome::DeadLettered => panic!("attempt 2 should retry"),
+    };
+    assert_eq!(next_at2, next_at + Duration::milliseconds(2_000));
+
+    // attempt 3: 1000 * 2^2 = 4000ms, capped at max_backoff_ms (3000ms)
+    let third = s.lease_due("q", next_at2, 1).unwrap().remove(0);
+    let outcome3 = s.nack("q", &third.attempt_id, next_at2).unwrap().unwrap();
+    let next_at3 = match outcome3 {
+        NackOutcome::Retried { next_at } => next_at,
+        NackOutcome::DeadLettered => panic!("attempt 3 should retry"),
+    };
+    assert_eq!(next_at3, next_at2 + Duration::milliseconds(3_000));
+
+    // attempt 4: max_doublings = 2 stops growth, capped at 3000ms
+    let fourth = s.lease_due("q", next_at3, 1).unwrap().remove(0);
+    let outcome4 = s.nack("q", &fourth.attempt_id, next_at3).unwrap().unwrap();
+    let next_at4 = match outcome4 {
+        NackOutcome::Retried { next_at } => next_at,
+        NackOutcome::DeadLettered => panic!("attempt 4 should retry"),
+    };
+    assert_eq!(next_at4, next_at3 + Duration::milliseconds(3_000));
+}
+
+#[test]
+fn retry_backoff_cap_below_base_applied_without_panic() {
+    let now = Utc::now();
+    let mut s = scheduler(QueuePolicy {
+        retry_backoff_ms: 1_000,
+        max_backoff_ms: Some(250),
+        ..QueuePolicy::default()
+    });
+    let mut t = task("low-cap", 0, DEFAULT_PRIORITY, 3);
+    t.schedule_at = now;
+    s.create_task("q", t).unwrap();
+
+    let first = s.lease_due("q", now, 1).unwrap().remove(0);
+    let outcome = s.nack("q", &first.attempt_id, now).unwrap().unwrap();
+    let next_at = match outcome {
+        NackOutcome::Retried { next_at } => next_at,
+        NackOutcome::DeadLettered => panic!("should retry"),
+    };
+    assert_eq!(next_at, now + Duration::milliseconds(250));
+}
+
+#[test]
+fn reclaim_expired_honors_retry_backoff_bounds() {
+    let now = Utc::now();
+    let mut s = scheduler(QueuePolicy {
+        lease_ttl_ms: 1_000,
+        retry_backoff_ms: 1_000,
+        max_backoff_ms: Some(1_500),
+        max_doublings: Some(1),
+        ..QueuePolicy::default()
+    });
+    let mut t = task("expired-task", 0, DEFAULT_PRIORITY, 3);
+    t.schedule_at = now;
+    s.create_task("q", t).unwrap();
+
+    let first = s.lease_due("q", now, 1).unwrap().remove(0);
+    assert_eq!(first.attempt, 1);
+
+    // Expire attempt 1
+    let expire_time = now + Duration::milliseconds(1_001);
+    let reclaimed = s.reclaim_expired("q", expire_time).unwrap();
+    assert_eq!(reclaimed, vec!["expired-task"]);
+
+    // Attempt 1 backoff: 1000ms
+    let scheduled_at = expire_time + Duration::milliseconds(1_000);
+    assert!(s
+        .lease_due("q", scheduled_at - Duration::milliseconds(1), 1)
+        .unwrap()
+        .is_empty());
+
+    let second = s.lease_due("q", scheduled_at, 1).unwrap().remove(0);
+    assert_eq!(second.attempt, 2);
+
+    // Expire attempt 2
+    let expire_time2 = scheduled_at + Duration::milliseconds(1_001);
+    let reclaimed2 = s.reclaim_expired("q", expire_time2).unwrap();
+    assert_eq!(reclaimed2, vec!["expired-task"]);
+
+    // Attempt 2 backoff: 1000 * 2^1 = 2000ms, capped at max_backoff_ms (1500ms)
+    let scheduled_at2 = expire_time2 + Duration::milliseconds(1_500);
+    assert!(s
+        .lease_due("q", scheduled_at2 - Duration::milliseconds(1), 1)
+        .unwrap()
+        .is_empty());
+    let third = s.lease_due("q", scheduled_at2, 1).unwrap().remove(0);
+    assert_eq!(third.attempt, 3);
+}
+
+#[test]
+fn list_tasks_ordering_cursor_and_state_filtering() {
+    let now = Utc::now();
+    let mut s = scheduler(QueuePolicy {
+        retry_backoff_ms: 1_000,
+        ..QueuePolicy::default()
+    });
+
+    // Verify missing queue returns SchedulerError::QueueMissing
+    assert!(matches!(
+        s.list_tasks("missing", None, None, 10),
+        Err(defer::SchedulerError::QueueMissing(q)) if q == "missing"
+    ));
+
+    // Verify empty queue returns empty list
+    let (tasks, has_more) = s.list_tasks("q", None, None, 10).unwrap();
+    assert!(tasks.is_empty());
+    assert!(!has_more);
+
+    // Create 5 tasks:
+    // task-1: Scheduled (future ETA, not due)
+    let t1 = task("task-1", 3_600_000, DEFAULT_PRIORITY, 3);
+    s.create_task("q", t1).unwrap();
+
+    // task-2: Leased (due now)
+    let mut t2 = task("task-2", 0, DEFAULT_PRIORITY, 3);
+    t2.schedule_at = now;
+    s.create_task("q", t2).unwrap();
+
+    // task-3: Succeeded (due now)
+    let mut t3 = task("task-3", 0, DEFAULT_PRIORITY, 3);
+    t3.schedule_at = now;
+    s.create_task("q", t3).unwrap();
+
+    // task-4: DeadLettered (due now, max_attempts 1)
+    let mut t4 = task("task-4", 0, DEFAULT_PRIORITY, 1);
+    t4.schedule_at = now;
+    s.create_task("q", t4).unwrap();
+
+    // task-5: Canceled (future ETA)
+    let t5 = task("task-5", 3_600_000, DEFAULT_PRIORITY, 3);
+    s.create_task("q", t5).unwrap();
+
+    // Lease task-2
+    let l2 = s.lease_due("q", now, 1).unwrap();
+    assert_eq!(l2.len(), 1);
+    assert_eq!(l2[0].task_id, "task-2");
+
+    // Lease task-3 and ack -> Succeeded
+    let l3 = s.lease_due("q", now, 1).unwrap();
+    assert_eq!(l3.len(), 1);
+    assert_eq!(l3[0].task_id, "task-3");
+    assert!(s.ack("q", &l3[0].attempt_id).unwrap());
+
+    // Lease task-4 and nack -> DeadLettered (max_attempts = 1)
+    let l4 = s.lease_due("q", now, 1).unwrap();
+    assert_eq!(l4.len(), 1);
+    assert_eq!(l4[0].task_id, "task-4");
+    assert_eq!(
+        s.nack("q", &l4[0].attempt_id, now).unwrap(),
+        Some(NackOutcome::DeadLettered)
+    );
+
+    // Cancel task-5 -> Canceled
+    assert!(s.cancel("q", "task-5").unwrap());
+
+    // Verify ordering across all tasks (ascending task_id)
+    let (all, has_more) = s.list_tasks("q", None, None, 10).unwrap();
+    assert!(!has_more);
+    assert_eq!(all.len(), 5);
+    assert_eq!(all[0].0, "task-1");
+    assert!(matches!(all[0].1, TaskStatus::Scheduled));
+    assert_eq!(all[1].0, "task-2");
+    assert!(matches!(all[1].1, TaskStatus::Leased { .. }));
+    assert_eq!(all[2].0, "task-3");
+    assert!(matches!(all[2].1, TaskStatus::Succeeded));
+    assert_eq!(all[3].0, "task-4");
+    assert!(matches!(all[3].1, TaskStatus::DeadLettered));
+    assert_eq!(all[4].0, "task-5");
+    assert!(matches!(all[4].1, TaskStatus::Canceled));
+
+    // Verify cursor paging with limit = 2
+    let (p1, more1) = s.list_tasks("q", None, None, 2).unwrap();
+    assert!(more1);
+    assert_eq!(p1.len(), 2);
+    assert_eq!(p1[0].0, "task-1");
+    assert_eq!(p1[1].0, "task-2");
+
+    let (p2, more2) = s.list_tasks("q", None, Some("task-2"), 2).unwrap();
+    assert!(more2);
+    assert_eq!(p2.len(), 2);
+    assert_eq!(p2[0].0, "task-3");
+    assert_eq!(p2[1].0, "task-4");
+
+    let (p3, more3) = s.list_tasks("q", None, Some("task-4"), 2).unwrap();
+    assert!(!more3);
+    assert_eq!(p3.len(), 1);
+    assert_eq!(p3[0].0, "task-5");
+
+    let (p4, more4) = s.list_tasks("q", None, Some("task-5"), 2).unwrap();
+    assert!(!more4);
+    assert!(p4.is_empty());
+
+    // Verify filtering by each state
+    for (filter, expected_id) in [
+        (TaskStateFilter::Scheduled, "task-1"),
+        (TaskStateFilter::Leased, "task-2"),
+        (TaskStateFilter::Succeeded, "task-3"),
+        (TaskStateFilter::DeadLettered, "task-4"),
+        (TaskStateFilter::Canceled, "task-5"),
+    ] {
+        let (filtered, more) = s.list_tasks("q", Some(filter), None, 10).unwrap();
+        assert!(!more);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].0, expected_id);
+    }
 }
 // HANDWRITE-END
