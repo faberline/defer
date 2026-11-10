@@ -169,6 +169,7 @@ async fn trusted_defer_peers_replicate_scheduler_state_over_mtls() {
                 schedule_at: Utc::now(),
                 priority: 10,
                 max_attempts: 3,
+                dispatch_deadline_ms: None,
             },
         )
         .await

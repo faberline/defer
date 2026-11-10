@@ -172,6 +172,10 @@ fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
         json!({"name": "DEFER_BODY_LIMIT_BYTES", "value": spec.body_limit_bytes.to_string()}),
         json!({"name": "DEFER_LOG_FORMAT", "value": "json"}),
     ];
+    if !spec.queues.is_empty() {
+        let declared = declared_queues_json(&spec.queues);
+        env.push(json!({"name": "DEFER_DECLARED_QUEUES", "value": declared}));
+    }
     if let Some(level) = &spec.log_level {
         env.push(json!({"name": "RUST_LOG", "value": level}));
     }
@@ -336,5 +340,49 @@ fn apply_pod_placement(pod_spec: &mut Value, defer: &Defer) {
         pod_spec["tolerations"] = json!(tolerations);
     }
     set_image_pull_secrets(pod_spec, defer);
+}
+
+#[derive(serde::Serialize)]
+struct ServeDeclaredQueue<'a> {
+    name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy: Option<ServeDeclaredQueuePolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    control: Option<&'static str>,
+}
+
+#[derive(serde::Serialize)]
+struct ServeDeclaredQueuePolicy {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_in_flight: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_dispatch_per_tick: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_dispatches_per_second: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_burst_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lease_ttl_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_backoff_ms: Option<u64>,
+}
+
+fn declared_queues_json(queues: &[super::crd::DeclaredQueueSpec]) -> String {
+    let serve_queues: Vec<ServeDeclaredQueue<'_>> = queues
+        .iter()
+        .map(|q| ServeDeclaredQueue {
+            name: &q.name,
+            policy: q.policy.as_ref().map(|p| ServeDeclaredQueuePolicy {
+                max_in_flight: p.max_in_flight,
+                max_dispatch_per_tick: p.max_dispatch_per_tick,
+                max_dispatches_per_second: p.max_dispatches_per_second,
+                max_burst_size: p.max_burst_size,
+                lease_ttl_ms: p.lease_ttl_ms,
+                retry_backoff_ms: p.retry_backoff_ms,
+            }),
+            control: q.control.as_ref().map(|c| c.as_str()),
+        })
+        .collect();
+    serde_json::to_string(&serve_queues).expect("valid declared queues JSON")
 }
 // HANDWRITE-END
