@@ -11,7 +11,7 @@ pub mod types;
 pub use scheduler::DeferScheduler;
 pub use types::{
     AttemptSettlement, CreateTask, DispatchLease, NackOutcome, QueueControlState, QueuePolicy,
-    QueueSnapshot, SchedulerError, SchedulerResult, SettlementOutcome, Target, TaskStatus,
-    DEFAULT_PRIORITY,
+    QueueSnapshot, SchedulerError, SchedulerResult, SettlementOutcome, Target, TaskStateFilter,
+    TaskStatus, DEFAULT_PRIORITY,
 };
 // HANDWRITE-END
