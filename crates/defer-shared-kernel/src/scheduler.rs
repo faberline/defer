@@ -380,6 +380,7 @@ mod tests {
             schedule_at: Utc::now() + Duration::milliseconds(due_offset_ms),
             priority: DEFAULT_PRIORITY,
             max_attempts,
+            dispatch_deadline_ms: None,
         }
     }
 
