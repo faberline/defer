@@ -132,6 +132,8 @@ async fn test_declared_queues_lifecycle_and_idempotence() {
         max_burst_size: 70,
         lease_ttl_ms: 15_000,
         retry_backoff_ms: 500,
+        max_backoff_ms: None,
+        max_doublings: None,
     };
     let declared = vec![DeclaredQueue {
         name: "declared-queue".to_string(),
