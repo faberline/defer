@@ -395,6 +395,8 @@ mod tests {
             max_burst_size: 20,
             lease_ttl_ms: 10_000,
             retry_backoff_ms: 500,
+            max_backoff_ms: None,
+            max_doublings: None,
         };
         s.configure_queue("jobs", custom_policy.clone());
 
