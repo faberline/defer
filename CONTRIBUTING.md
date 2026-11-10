@@ -4,12 +4,23 @@
 
 How to change `defer`. What it promises and the work roots it owns live in
 [README.md](README.md); repository-wide authoring and verification rules live
-in the root [CONTRIBUTING.md](https://github.com/faberline/workspace/blob/main/CONTRIBUTING.md).
+in [AW standards](https://github.com/faberline/aw/tree/main/docs/standards).
 
-Use `product-deliver` for authorized work. QA owns the red e2e case and its
-registration. Dev owns the red unit test and scoped implementation. A fresh
-`defer-qa` runs the declared complete gate. The controller owns Git, tracker,
-and acceptance. Legacy AW use is explicit-only.
+Use the shared Faberline `aw-worker` skill and the `aw` CLI from
+[AW](https://github.com/faberline/aw/tree/main/plugins/faberline/skills).
+One run plans, specs, implements or reviews one issue. `aw` owns the branch,
+the pull request, the review verdict, the squash merge and the signal comments.
+
+An issue moves through the labels `stage:spec`, `stage:tdd`, `stage:review`
+and `stage:done`. Spec writes the bounded issue contract. Tdd writes tests
+first, then code, and `aw` opens the pull request. Review reads the issue, the
+diff and current CI; it runs no tests. `aw` squash-merges a passed review.
+Local work is limited to affected unit/static checks; CI is the test evidence.
+
+Use the repository's existing complete gates for product claims. Keep local
+work limited to affected unit/static checks; functional, integration and
+performance execution belongs in authorized CI. Preserve all feature matrices,
+test selection checks, numeric limits and exact-head/base evidence.
 
 ## Verification
 

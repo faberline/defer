@@ -4,8 +4,7 @@
     "title": "Defer HTTP API",
     "description": "Raft-backed delayed HTTP push queue over HTTP/1.1 and h2c.",
     "contact": {
-      "name": "Chris Cheng",
-      "email": "chris.cheng.c4@gmail.com"
+      "name": "Faberline contributors"
     },
     "license": {
       "name": "MIT"
@@ -22,6 +21,59 @@
         "responses": {
           "200": {
             "description": "Exact Defer state-machine snapshot bytes"
+          }
+        }
+      }
+    },
+    "/v1/queues": {
+      "get": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "queue_list",
+        "parameters": [
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "Maximum number of queues to return (1..=1000, default 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "description": "Page token of previous page",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -59,7 +111,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -108,7 +160,39 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "queue_delete",
+        "parameters": [
+          {
+            "name": "queue",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -159,7 +243,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -190,7 +274,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/crate.DispatchReport"
+                  "$ref": "#/components/schemas/DispatchReport"
                 }
               }
             }
@@ -202,6 +286,86 @@
       }
     },
     "/v1/queues/{queue}/tasks": {
+      "get": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "task_list",
+        "parameters": [
+          {
+            "name": "queue",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Filter by task state (scheduled, leased, succeeded, dead_lettered, canceled)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of tasks to return (1..=1000, default 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Last task_id of previous page",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "crate::server"
@@ -232,12 +396,22 @@
           "201": {
             "description": ""
           },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -247,7 +421,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -297,7 +471,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -338,7 +512,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -384,12 +558,22 @@
               }
             }
           },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -399,7 +583,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/service_http.ErrorEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -418,6 +602,12 @@
           "schedule_at"
         ],
         "properties": {
+          "dispatch_deadline_ms": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "minimum": 0
+          },
           "max_attempts": {
             "type": "integer",
             "format": "int32",
@@ -430,13 +620,14 @@
             "minimum": 0
           },
           "schedule_at": {
-            "$ref": "#/components/schemas/DateTime"
+            "type": "string",
+            "format": "date-time"
           },
           "target": {
             "$ref": "#/components/schemas/Target"
           },
           "task_id": {
-            "$ref": "#/components/schemas/TaskId"
+            "type": "string"
           }
         }
       },
@@ -487,7 +678,8 @@
                 ],
                 "properties": {
                   "next_at": {
-                    "$ref": "#/components/schemas/DateTime"
+                    "type": "string",
+                    "format": "date-time"
                   }
                 }
               }
@@ -571,6 +763,24 @@
           "Disabled"
         ]
       },
+      "QueueListResponse": {
+        "type": "object",
+        "required": [
+          "queues"
+        ],
+        "properties": {
+          "next_page_token": {
+            "type": "string",
+            "nullable": true
+          },
+          "queues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueueSnapshot"
+            }
+          }
+        }
+      },
       "QueuePolicy": {
         "type": "object",
         "required": [
@@ -587,6 +797,12 @@
             "format": "int64",
             "minimum": 0
           },
+          "max_backoff_ms": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "minimum": 0
+          },
           "max_burst_size": {
             "type": "integer",
             "minimum": 0
@@ -598,6 +814,12 @@
           "max_dispatches_per_second": {
             "type": "integer",
             "format": "int32",
+            "minimum": 0
+          },
+          "max_doublings": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
             "minimum": 0
           },
           "max_in_flight": {
@@ -634,7 +856,7 @@
             "$ref": "#/components/schemas/QueuePolicy"
           },
           "queue": {
-            "$ref": "#/components/schemas/QueueName"
+            "type": "string"
           },
           "scheduled_count": {
             "type": "integer",
@@ -670,6 +892,24 @@
           }
         }
       },
+      "TaskListResponse": {
+        "type": "object",
+        "required": [
+          "tasks"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": "string",
+            "nullable": true
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskStatusResponse"
+            }
+          }
+        }
+      },
       "TaskStatus": {
         "oneOf": [
           {
@@ -694,7 +934,7 @@
                 ],
                 "properties": {
                   "attempt_id": {
-                    "$ref": "#/components/schemas/AttemptId"
+                    "type": "string"
                   },
                   "epoch": {
                     "type": "integer",
@@ -707,7 +947,8 @@
                     "minimum": 0
                   },
                   "expires_at": {
-                    "$ref": "#/components/schemas/DateTime"
+                    "type": "string",
+                    "format": "date-time"
                   }
                 }
               }
