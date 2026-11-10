@@ -135,6 +135,57 @@ spec:
                       type: object
                     type: array
                 type: object
+              queues:
+                description: Queues to provision on the cluster at startup. Forwarded to every serving pod as `DEFER_DECLARED_QUEUES` (#32).
+                items:
+                  description: One queue declared on the Defer custom resource, forwarded to every serving pod as `DEFER_DECLARED_QUEUES` (#32).
+                  properties:
+                    control:
+                      description: Control state for a declared queue.
+                      enum:
+                      - Running
+                      - Paused
+                      - Disabled
+                      nullable: true
+                      type: string
+                    name:
+                      type: string
+                    policy:
+                      description: Queue policy overrides in camelCase, matching the six `QueuePolicy` fields.
+                      nullable: true
+                      properties:
+                        leaseTtlMs:
+                          type: integer
+                          minimum: 0.0
+                          nullable: true
+                        maxBurstSize:
+                          format: uint
+                          minimum: 0.0
+                          nullable: true
+                          type: integer
+                        maxDispatchPerTick:
+                          format: uint
+                          minimum: 0.0
+                          nullable: true
+                          type: integer
+                        maxDispatchesPerSecond:
+                          type: integer
+                          minimum: 0.0
+                          nullable: true
+                        maxInFlight:
+                          format: uint
+                          minimum: 0.0
+                          nullable: true
+                          type: integer
+                        retryBackoffMs:
+                          type: integer
+                          minimum: 0.0
+                          nullable: true
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
               replicasPerShard:
                 default: 1
                 description: Starting/minimum members per shard. With startup-static raft-runtime membership this is also the fixed desired value; a future membership controller may plan whole replica layers above this floor.
