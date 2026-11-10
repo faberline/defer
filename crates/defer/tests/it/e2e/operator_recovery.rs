@@ -17,6 +17,10 @@ const SUITE: &str = "operator_recovery";
 const DEFER: &str = "defer";
 const POD: &str = "defer-0";
 const PVC: &str = "data-defer-0";
+/// The PVC request in k8s/overlays/gke-test/defer-cr.yaml. A
+/// hyperdisk-balanced disk on the N4 test pools is at least 4 GB.
+const STORAGE: &str = "4Gi";
+const STORAGE_GI: u64 = 4;
 const POOL: &str = "defer-server";
 const POOL_LABEL: &str = "faberline.dev/pool";
 const SERVER_LABEL: &str =
@@ -43,7 +47,7 @@ fn selector() -> Value {
 
 /// The operator renders StatefulSet/defer, its two Services, and its PDB as
 /// the shipped contract says, places defer-0 on pool-defer-server, binds a
-/// PVC of at least the requested 1Gi, and runs the image under test in the
+/// PVC of at least the requested 4Gi, and runs the image under test in the
 /// operator and in defer-0.
 #[test]
 #[ignore = "e2e: needs E2E_ENDPOINT"]
@@ -62,20 +66,19 @@ fn operator_renders_the_placed_topology() {
             Err(format!("phase {}", pvc["status"]["phase"]))
         }
     });
-    assert_eq!(pvc["spec"]["resources"]["requests"]["storage"], "1Gi");
+    assert_eq!(pvc["spec"]["resources"]["requests"]["storage"], STORAGE);
     let capacity = pvc["status"]["capacity"]["storage"]
         .as_str()
         .unwrap_or_default();
-    // A local-path provisioner gives exactly 1Gi; a cloud disk may round up,
-    // so the floor is the contract.
+    // A cloud disk may round up, so the floor is the contract.
     assert!(
-        gibibytes(capacity).is_some_and(|gi| gi >= 1),
-        "PVC {PVC} capacity {capacity:?} is under the requested 1Gi"
+        gibibytes(capacity).is_some_and(|gi| gi >= STORAGE_GI),
+        "PVC {PVC} capacity {capacity:?} is under the requested {STORAGE}"
     );
     evidence(
         SUITE,
         "PVC bound",
-        json!({ "pvc": PVC, "request": "1Gi", "capacity": capacity }),
+        json!({ "pvc": PVC, "request": STORAGE, "capacity": capacity }),
     );
 
     assert_statefulset();
@@ -352,7 +355,7 @@ fn assert_statefulset() {
     assert_eq!(data_mounts.len(), 1, "one writable data mount at /data");
     let claim = &spec["volumeClaimTemplates"][0];
     assert_eq!(claim["metadata"]["name"], "data");
-    assert_eq!(claim["spec"]["resources"]["requests"]["storage"], "1Gi");
+    assert_eq!(claim["spec"]["resources"]["requests"]["storage"], STORAGE);
 }
 
 fn assert_services_and_pdb() {
