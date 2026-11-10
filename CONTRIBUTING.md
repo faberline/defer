@@ -31,3 +31,17 @@ test selection checks, numeric limits and exact-head/base evidence.
 | lint | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |
 | operator | `cargo test -p defer --features operator --test operator` |
 | product documents | `python3 -B scripts/meta/project_docs_contract.py check .` |
+
+## Adding an HTTP route
+
+The OpenAPI document in `crates/defer-queue/src/openapi.rs` is the only route list.
+`defer spec --format routes` and the tests read it through `defer::openapi::operations()`.
+
+To add a route:
+
+1. Write the handler with `#[utoipa::path(...)]` in `crates/defer-queue/src/server.rs`.
+2. Add the `.route(...)` line to the router in the same file.
+3. Add the handler to `paths(...)` in `crates/defer-queue/src/openapi.rs`. This is the only route list. Do not edit a test list.
+4. Regenerate the snapshot with `DEFER_WRITE_OPENAPI=1 cargo test -p defer-queue --lib openapi::`, and commit `clients/openapi.json`.
+
+In `#[utoipa::path]`, write `body = ErrorEnvelope` with the bare name. Never write `service_http::ErrorEnvelope`: its `$ref` has no component and `every_schema_ref_resolves_to_a_component` fails. The `components(schemas(...))` entry in `openapi.rs` keeps the full path `service_http::ErrorEnvelope`.

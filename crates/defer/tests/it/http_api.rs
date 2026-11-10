@@ -78,19 +78,6 @@ fn http1_client() -> reqwest::Client {
         .unwrap()
 }
 
-const EXPECTED_DOMAIN_OPERATIONS: &[&str] = &[
-    "DELETE /v1/queues/{queue}/tasks/{task_id}",
-    "GET /admin/backup",
-    "GET /v1/queues/{queue}",
-    "GET /v1/queues/{queue}/tasks",
-    "GET /v1/queues/{queue}/tasks/{task_id}",
-    "POST /v1/queues/{queue}/control",
-    "POST /v1/queues/{queue}/dispatch",
-    "POST /v1/queues/{queue}/tasks",
-    "POST /v1/queues/{queue}/tasks:batch",
-    "PUT /v1/queues/{queue}",
-];
-
 fn assert_exact_domain_operations(spec: &serde_json::Value) {
     let paths = spec["paths"].as_object().expect("OpenAPI paths object");
     let mut actual = Vec::new();
@@ -105,13 +92,7 @@ fn assert_exact_domain_operations(spec: &serde_json::Value) {
         }
     }
     actual.sort();
-    assert_eq!(
-        actual,
-        EXPECTED_DOMAIN_OPERATIONS
-            .iter()
-            .map(|operation| (*operation).to_string())
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(actual, defer::openapi::operations());
 }
 
 /// #2490: every response carries a `Server-Timing: app;dur=<ms>` baseline
