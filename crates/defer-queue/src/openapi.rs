@@ -21,6 +21,7 @@ use utoipa::OpenApi;
         crate::server::task_list,
         crate::server::dispatch_one,
         crate::server::admin_backup,
+        crate::server::admin_membership,
     ),
     components(schemas(
         defer_shared_kernel::Target,
@@ -38,6 +39,9 @@ use utoipa::OpenApi;
         crate::server::TaskStatusResponse,
         crate::server::PurgeQueueResponse,
         crate::server::TaskListResponse,
+        crate::server::MembershipRequest,
+        crate::server::MembershipResponse,
+        crate::server::MembershipOp,
         service_http::ErrorEnvelope,
     ))
 )]
@@ -138,6 +142,7 @@ mod tests {
             "GET /v1/queues/{queue}",
             "GET /v1/queues/{queue}/tasks",
             "GET /v1/queues/{queue}/tasks/{task_id}",
+            "POST /v1/admin/membership",
             "POST /v1/queues/{queue}/control",
             "POST /v1/queues/{queue}/dispatch",
             "POST /v1/queues/{queue}/purge",
