@@ -78,19 +78,6 @@ fn http1_client() -> reqwest::Client {
         .unwrap()
 }
 
-const EXPECTED_DOMAIN_OPERATIONS: &[&str] = &[
-    "DELETE /v1/queues/{queue}/tasks/{task_id}",
-    "GET /admin/backup",
-    "GET /v1/queues/{queue}",
-    "GET /v1/queues/{queue}/tasks",
-    "GET /v1/queues/{queue}/tasks/{task_id}",
-    "POST /v1/queues/{queue}/control",
-    "POST /v1/queues/{queue}/dispatch",
-    "POST /v1/queues/{queue}/tasks",
-    "POST /v1/queues/{queue}/tasks:batch",
-    "PUT /v1/queues/{queue}",
-];
-
 fn assert_exact_domain_operations(spec: &serde_json::Value) {
     let paths = spec["paths"].as_object().expect("OpenAPI paths object");
     let mut actual = Vec::new();
@@ -105,13 +92,7 @@ fn assert_exact_domain_operations(spec: &serde_json::Value) {
         }
     }
     actual.sort();
-    assert_eq!(
-        actual,
-        EXPECTED_DOMAIN_OPERATIONS
-            .iter()
-            .map(|operation| (*operation).to_string())
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(actual, defer::openapi::operations());
 }
 
 /// #2490: every response carries a `Server-Timing: app;dur=<ms>` baseline
@@ -329,6 +310,87 @@ async fn h2c_routes_probes_openapi_metrics_dispatch_and_auth_are_live() {
         recovered.lock().unwrap().status("jobs", "hello").unwrap(),
         Some(defer::TaskStatus::Succeeded)
     ));
+
+    let purge_res: serde_json::Value = client
+        .post(format!("{url}/v1/queues/jobs/purge"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(purge_res["purged"], 2);
+
+    assert_eq!(
+        http1
+            .get(format!("{url}/v1/queues/jobs/tasks/hello"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let second_purge: serde_json::Value = client
+        .post(format!("{url}/v1/queues/jobs/purge"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(second_purge["purged"], 0);
+
+    assert_eq!(
+        client
+            .post(format!("{url}/v1/queues/missing-queue/purge"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        client
+            .delete(format!("{url}/v1/queues/jobs"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let gone = http1
+        .get(format!("{url}/v1/queues/jobs"))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(gone, StatusCode::NOT_FOUND, "not_found").await;
+    let gone = client
+        .delete(format!("{url}/v1/queues/jobs"))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(gone, StatusCode::NOT_FOUND, "not_found").await;
+    assert_eq!(
+        client
+            .put(format!("{url}/v1/queues/jobs"))
+            .json(&QueuePolicy::default())
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        http1
+            .get(format!("{url}/v1/queues/jobs"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+
     open_server.abort();
 
     let registry = serde_json::json!({
@@ -407,9 +469,29 @@ async fn h2c_routes_probes_openapi_metrics_dispatch_and_auth_are_live() {
     );
     assert_eq!(
         client
+            .post(format!("{auth_url}/v1/queues/jobs/purge"))
+            .bearer_auth("reader")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
             .put(format!("{auth_url}/v1/queues/jobs"))
             .bearer_auth("reader")
             .json(&QueuePolicy::default())
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .delete(format!("{auth_url}/v1/queues/jobs"))
+            .bearer_auth("reader")
             .send()
             .await
             .unwrap()
@@ -992,6 +1074,297 @@ async fn task_list_paged_filtered_and_authorized() {
     assert_eq!(res.status(), StatusCode::OK);
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["tasks"].as_array().unwrap().len(), 5);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queue_list_paged_and_read_filtered() {
+    let (_dir, raft) = raft().await;
+    let (url, _server) = start(raft.clone(), AuthConfig::open()).await;
+    let client = http1_client();
+
+    let res = client.get(format!("{url}/v1/queues")).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["queues"], serde_json::json!([]));
+    assert!(body.get("next_page_token").is_none() || body["next_page_token"].is_null());
+
+    let res = client
+        .get(format!("{url}/v1/queues?page_size=0"))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(res, StatusCode::BAD_REQUEST, "bad_request").await;
+
+    let res = client
+        .get(format!("{url}/v1/queues?page_size=1001"))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(res, StatusCode::BAD_REQUEST, "bad_request").await;
+
+    for q in ["q1", "q2", "q3", "q4", "q5"] {
+        let res = client
+            .put(format!("{url}/v1/queues/{q}"))
+            .json(&QueuePolicy::default())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    let res = client
+        .get(format!("{url}/v1/queues?page_size=2"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let p1: serde_json::Value = res.json().await.unwrap();
+    let q1 = p1["queues"].as_array().unwrap();
+    assert_eq!(q1.len(), 2);
+    assert_eq!(q1[0]["queue"], "q1");
+    assert_eq!(q1[1]["queue"], "q2");
+    assert_eq!(p1["next_page_token"], "q2");
+
+    let res = client
+        .get(format!("{url}/v1/queues?page_size=2&page_token=q2"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let p2: serde_json::Value = res.json().await.unwrap();
+    let q2 = p2["queues"].as_array().unwrap();
+    assert_eq!(q2.len(), 2);
+    assert_eq!(q2[0]["queue"], "q3");
+    assert_eq!(q2[1]["queue"], "q4");
+    assert_eq!(p2["next_page_token"], "q4");
+
+    let res = client
+        .get(format!("{url}/v1/queues?page_size=2&page_token=q4"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let p3: serde_json::Value = res.json().await.unwrap();
+    let q3 = p3["queues"].as_array().unwrap();
+    assert_eq!(q3.len(), 1);
+    assert_eq!(q3[0]["queue"], "q5");
+    assert!(p3.get("next_page_token").is_none() || p3["next_page_token"].is_null());
+
+    let registry = serde_json::json!({
+        "reader": {
+            "subject": "reader",
+            "roles": {
+                "q2": "read",
+                "q4": "read"
+            }
+        }
+    })
+    .to_string();
+    let auth = AuthConfig::resolve("required", None, Some(&registry)).unwrap();
+    let (auth_url, _auth_server) = start(raft, auth).await;
+
+    let res = client
+        .get(format!("{auth_url}/v1/queues"))
+        .bearer_auth("reader")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: serde_json::Value = res.json().await.unwrap();
+    let queues = body["queues"].as_array().unwrap();
+    assert_eq!(queues.len(), 2);
+    assert_eq!(queues[0]["queue"], "q2");
+    assert_eq!(queues[1]["queue"], "q4");
+    assert!(body.get("next_page_token").is_none() || body["next_page_token"].is_null());
+}
+
+/// #86 AC4: the membership route needs the `Admin` role on `*`. No token is
+/// 401 and a reader token is 403.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn membership_requires_admin_role() {
+    let (_dir, raft) = raft().await;
+    let registry = serde_json::json!({
+        "reader": {"subject": "reader", "roles": {"jobs": "read"}},
+        "admin": {"subject": "admin", "roles": {"*": "admin"}}
+    })
+    .to_string();
+    let auth = AuthConfig::resolve("required", None, Some(&registry)).unwrap();
+    let (url, server) = start(raft, auth).await;
+    let client = h2c_client();
+    let body = serde_json::json!({"op": "demote", "node": 0});
+
+    let anonymous = client
+        .post(format!("{url}/v1/admin/membership"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+
+    let reader = client
+        .post(format!("{url}/v1/admin/membership"))
+        .bearer_auth("reader")
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reader.status(), StatusCode::FORBIDDEN);
+
+    server.abort();
+}
+
+/// #86 AC2/AC3: `add_learner` without a `url` is a 400 `invalid_argument`.
+/// Without the route this is a 404.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn membership_add_learner_without_url_is_400() {
+    let (_dir, raft) = raft().await;
+    let (url, server) = start(raft, AuthConfig::resolve("off", None, None).unwrap()).await;
+    let response = h2c_client()
+        .post(format!("{url}/v1/admin/membership"))
+        .json(&serde_json::json!({"op": "add_learner", "node": 1}))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(response, StatusCode::BAD_REQUEST, "invalid_argument").await;
+    server.abort();
+}
+
+/// #86 AC3: the single voter is the leader, so demoting it is refused with
+/// 422 `membership_refused`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn membership_demote_leader_is_422() {
+    let (_dir, raft) = raft().await;
+    let (url, server) = start(raft, AuthConfig::resolve("off", None, None).unwrap()).await;
+    let response = h2c_client()
+        .post(format!("{url}/v1/admin/membership"))
+        .json(&serde_json::json!({"op": "demote", "node": 0}))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(
+        response,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "membership_refused",
+    )
+    .await;
+    server.abort();
+}
+
+/// #86 AC2: `add_learner` with a `url` registers the peer, admits it as a
+/// learner and returns the log `index` as a number.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn membership_add_learner_returns_index() {
+    let (_dir, raft) = raft().await;
+    let (url, server) = start(raft, AuthConfig::resolve("off", None, None).unwrap()).await;
+    let response = h2c_client()
+        .post(format!("{url}/v1/admin/membership"))
+        .json(&serde_json::json!({
+            "op": "add_learner",
+            "node": 1,
+            "url": "http://127.0.0.1:1"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert!(body["index"].is_u64(), "unexpected body: {body}");
+    server.abort();
+}
+// </HANDWRITE>
+
+// <HANDWRITE gap="missing-generator:unit-test" tracker="#766" reason="Assert per-queue depth gauges on /metrics across queue creation, task creation, and dispatch.">
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn metrics_expose_per_queue_task_depth_gauges() {
+    let target_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_url = format!("http://{}/target", target_listener.local_addr().unwrap());
+    let target = tokio::spawn(async move {
+        axum::serve(
+            target_listener,
+            Router::new().route("/target", post(|| async { StatusCode::NO_CONTENT })),
+        )
+        .await
+        .unwrap();
+    });
+
+    let (_dir, raft) = raft().await;
+    let (url, open_server) = start(raft.clone(), AuthConfig::open()).await;
+    let client = h2c_client();
+
+    let q1 = client
+        .put(format!("{url}/v1/queues/queue-one"))
+        .json(&QueuePolicy::default())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(q1.status(), StatusCode::OK);
+
+    let q2 = client
+        .put(format!("{url}/v1/queues/queue-two"))
+        .json(&QueuePolicy::default())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(q2.status(), StatusCode::OK);
+
+    let created_due = client
+        .post(format!("{url}/v1/queues/queue-one/tasks"))
+        .json(&serde_json::json!({
+            "task_id": "task-q1-due",
+            "target": {"url": target_url, "method": "POST", "headers": {}},
+            "payload": {"test": "metric"},
+            "schedule_at": Utc::now(),
+            "priority": 10,
+            "max_attempts": 2
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created_due.status(), StatusCode::CREATED);
+
+    let created_future1 = client
+        .post(format!("{url}/v1/queues/queue-one/tasks"))
+        .json(&task_body("task-q1-future"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created_future1.status(), StatusCode::CREATED);
+
+    let created_future2 = client
+        .post(format!("{url}/v1/queues/queue-two/tasks"))
+        .json(&task_body("task-q2-future"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created_future2.status(), StatusCode::CREATED);
+
+    let dispatched: serde_json::Value = client
+        .post(format!("{url}/v1/queues/queue-one/dispatch"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(dispatched["target_status"], 204);
+
+    let metrics = client
+        .get(format!("{url}/metrics"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(metrics.contains("defer_queue_tasks{queue=\"queue-one\",state=\"scheduled\"} 1"));
+    assert!(metrics.contains("defer_queue_tasks{queue=\"queue-one\",state=\"in_flight\"} 0"));
+    assert!(metrics.contains("defer_queue_tasks{queue=\"queue-one\",state=\"terminal\"} 1"));
+    assert!(metrics.contains("defer_queue_tasks{queue=\"queue-two\",state=\"scheduled\"} 1"));
+    assert!(metrics.contains("defer_queue_tasks{queue=\"queue-two\",state=\"in_flight\"} 0"));
+    assert!(metrics.contains("defer_queue_tasks{queue=\"queue-two\",state=\"terminal\"} 0"));
+
+    target.abort();
+    open_server.abort();
 }
 // </HANDWRITE>
 // HANDWRITE-END

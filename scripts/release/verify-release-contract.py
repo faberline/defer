@@ -119,11 +119,19 @@ APPS: Dict[str, App] = {
 }
 FIXTURE_APPS = ("defer",)
 FIXTURE_VERSION = {"defer": "0.4.13"}
-CI_WORKFLOW = WORKFLOWS / "defer-ci.yml"
+CI_WORKFLOW = WORKFLOWS / "ci.yml"
 # Every gate the candidate runs before it builds anything, and PR CI with it.
 STANDALONE_GATES = (
     "cargo fmt --all -- --check",
     "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
+    "cargo test --locked --workspace",
+    "cargo test --locked -p defer --features operator --test operator",
+    "python3 -B scripts/meta/project_docs_contract.py check .",
+)
+# The gates ci.yml runs. Its lint stage is fixed by aw docs/standards/ci.md, so its clippy line has no --all-features; the candidate keeps the stronger line in STANDALONE_GATES.
+CI_GATES = (
+    "cargo fmt --all -- --check",
+    "cargo clippy --workspace --all-targets --locked -- -D warnings",
     "cargo test --locked --workspace",
     "cargo test --locked -p defer --features operator --test operator",
     "python3 -B scripts/meta/project_docs_contract.py check .",
@@ -617,14 +625,14 @@ def check_standalone_gates(candidate: str, ci: str) -> None:
     for gate in STANDALONE_GATES + ("uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --app defer",):
         if gate not in gates:
             fail(f"defer candidate: release gates must run {gate!r}")
-    label = "defer-ci"
+    label = "ci"
     if workflow_triggers(ci) != ["pull_request", "push"]:
         fail(f"{label}: triggers must be pull_request and push, got {workflow_triggers(ci)}")
     if "    branches: [main]" not in top_block(ci, "on"):
         fail(f"{label}: push must be limited to main")
     assert_actions_pinned(label, ci)
     ci_gates = [line for script in all_run_scripts(ci) for line in gate_lines(script)]
-    for gate in STANDALONE_GATES:
+    for gate in CI_GATES:
         if gate not in ci_gates:
             fail(f"{label}: PR CI must run {gate!r}")
     if "permissions:\n  contents: read" not in ci:
@@ -908,13 +916,14 @@ def standalone_controls(candidate: str, ci: str) -> List[Tuple[str, Callable[[],
     controls: List[Tuple[str, Callable[[], None]]] = []
     for gate in STANDALONE_GATES:
         controls.append((f"defer candidate: gate dropped: {gate}", gates_with(candidate_text=replace_once(candidate, gate, "true", "defer candidate"))))
-        controls.append((f"defer-ci: gate dropped: {gate}", gates_with(ci_text=replace_once(ci, gate, "true", "defer-ci"))))
+    for gate in CI_GATES:
+        controls.append((f"ci: gate dropped: {gate}", gates_with(ci_text=replace_once(ci, gate, "true", "ci"))))
     controls.extend([
         ("defer candidate: release contract no longer checked", gates_with(candidate_text=replace_once(candidate, "verify-release-contract.py --app defer", "verify-release-contract.py --self-test", "defer candidate"))),
-        ("defer-ci: pull_request trigger dropped", gates_with(ci_text=replace_once(ci, "  pull_request:\n", "  workflow_dispatch:\n", "defer-ci"))),
-        ("defer-ci: push no longer limited to main", gates_with(ci_text=replace_once(ci, "    branches: [main]", "    branches: ['**']", "defer-ci"))),
-        ("defer-ci: action unpinned", gates_with(ci_text=unpin_first_action(ci, "defer-ci"))),
-        ("defer-ci: write permission granted", gates_with(ci_text=replace_once(ci, "permissions:\n  contents: read", "permissions:\n  contents: write", "defer-ci"))),
+        ("ci: pull_request trigger dropped", gates_with(ci_text=replace_once(ci, "  pull_request:\n", "  workflow_dispatch:\n", "ci"))),
+        ("ci: push no longer limited to main", gates_with(ci_text=replace_once(ci, "    branches: [main]", "    branches: ['**']", "ci"))),
+        ("ci: action unpinned", gates_with(ci_text=unpin_first_action(ci, "ci"))),
+        ("ci: write permission granted", gates_with(ci_text=replace_once(ci, "permissions:\n  contents: read", "permissions:\n  contents: write", "ci"))),
     ])
     return controls
 

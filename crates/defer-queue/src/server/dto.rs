@@ -1,9 +1,16 @@
 // HANDWRITE-BEGIN gap="missing-generator:logic:defer-http-api" tracker="#766" reason="Shared service-http/auth shell around Defer's Raft-backed domain commands."
 //! Request and response bodies of the queue/task routes.
 
-use defer_shared_kernel::{CreateTask, QueueControlState, TaskStatus};
+use defer_shared_kernel::{CreateTask, QueueControlState, QueueSnapshot, TaskStatus};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct QueueListResponse {
+    pub queues: Vec<QueueSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_page_token: Option<String>,
+}
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct QueueControlRequest {
@@ -26,9 +33,35 @@ pub struct TaskStatusResponse {
     pub status: TaskStatus,
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PurgeQueueResponse {
+    pub purged: usize,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct TaskListResponse {
     pub tasks: Vec<TaskStatusResponse>,
     pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct MembershipRequest {
+    pub op: MembershipOp,
+    pub node: u64,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MembershipOp {
+    AddLearner,
+    Promote,
+    Demote,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MembershipResponse {
+    pub index: u64,
 }
 // HANDWRITE-END

@@ -113,7 +113,9 @@ onto Cloud Tasks as follows.
 
 Two defer-only routes exist for operators: `POST /v1/queues/{queue}/dispatch`
 runs one dispatch tick by hand, and `GET /admin/backup` streams the state
-snapshot. Both require the admin role when auth is on.
+snapshot. Both require the admin role when auth is on. `POST /v1/admin/membership`
+changes the Raft membership (`add_learner`, `promote`, `demote`) and also needs the
+admin role.
 
 ## Contract discovery
 

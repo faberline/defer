@@ -148,8 +148,11 @@ owns four outcomes.
 - Promise: defer's request, dispatch, and Raft metrics and traces land in
   Sift with a shipped dashboard and alert pack; the pack imports against a
   live instance and its alerts fire in a GKE test-cluster run that forces
-  lease loss.
-- Non-goals: a new exporter; defer keeps Prometheus text and OTLP.
+  lease loss. The alert rules are data that defer's service profile returns
+  from `alerts()`, and core renders them beside its standard alerts and the
+  ServiceMonitor.
+- Non-goals: a new exporter; defer keeps Prometheus text and OTLP; rendering
+  the alert rules itself.
 - Open: the resource-attribute contract Sift expects from defer.
 - Neighbours: extends Health, metrics, traces, and drain.
 - Outcome: `sift-observability-integration`. Tracking: not assigned.

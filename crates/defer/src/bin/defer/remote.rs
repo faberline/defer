@@ -17,8 +17,20 @@ pub(crate) struct QueueArgs {
 #[derive(Subcommand)]
 enum QueueCommand {
     Get(RemoteQueue),
+    #[command(alias = "configure")]
     Put(QueuePutArgs),
     Control(QueueControlArgs),
+    List(QueueListArgs),
+}
+
+#[derive(clap::Args)]
+struct QueueListArgs {
+    #[arg(long)]
+    page_size: Option<usize>,
+    #[arg(long)]
+    page_token: Option<String>,
+    #[command(flatten)]
+    remote: Remote,
 }
 
 #[derive(clap::Args)]
@@ -45,6 +57,10 @@ struct QueuePutArgs {
     lease_ttl_ms: u64,
     #[arg(long, default_value_t = 1_000)]
     retry_backoff_ms: u64,
+    #[arg(long)]
+    max_backoff_ms: Option<u64>,
+    #[arg(long)]
+    max_doublings: Option<u32>,
     #[command(flatten)]
     remote: Remote,
 }
@@ -97,6 +113,8 @@ struct TaskCreateArgs {
     priority: u8,
     #[arg(long, default_value_t = 3)]
     max_attempts: u32,
+    #[arg(long)]
+    dispatch_deadline_ms: Option<u64>,
     #[command(flatten)]
     remote: Remote,
 }
@@ -169,6 +187,8 @@ pub(crate) async fn queue(args: QueueArgs) -> Result<()> {
                 max_burst_size: args.max_burst_size,
                 lease_ttl_ms: args.lease_ttl_ms,
                 retry_backoff_ms: args.retry_backoff_ms,
+                max_backoff_ms: args.max_backoff_ms,
+                max_doublings: args.max_doublings,
             };
             let response = client(&args.remote)?
                 .put(format!("{}/v1/queues/{}", args.remote.url, args.queue))
@@ -193,6 +213,17 @@ pub(crate) async fn queue(args: QueueArgs) -> Result<()> {
                 .await?;
             print_response(response, "done").await
         }
+        QueueCommand::List(args) => {
+            let mut req = client(&args.remote)?.get(format!("{}/v1/queues", args.remote.url));
+            if let Some(page_size) = args.page_size {
+                req = req.query(&[("page_size", page_size)]);
+            }
+            if let Some(page_token) = &args.page_token {
+                req = req.query(&[("page_token", page_token)]);
+            }
+            let response = req.send().await?;
+            print_response(response, "done").await
+        }
     }
 }
 
@@ -211,6 +242,7 @@ pub(crate) async fn task(args: TaskArgs) -> Result<()> {
                 schedule_at: args.schedule_at.unwrap_or_else(Utc::now),
                 priority: args.priority,
                 max_attempts: args.max_attempts,
+                dispatch_deadline_ms: args.dispatch_deadline_ms,
             };
             let response = client(&args.remote)?
                 .post(format!(

@@ -14,7 +14,7 @@ mod state;
 use std::sync::Arc;
 
 use axum::extract::{Extension, Path, Query, State};
-use axum::http::{header, Method, StatusCode};
+use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -26,9 +26,11 @@ use defer_access as auth;
 use defer_dispatch::DispatchDisposition;
 use defer_replication::ProposeError;
 use defer_shared_kernel::{CreateTask, QueuePolicy, SchedulerError};
+use raft_runtime::{AdmissionRefused, DemotionRefused, Index, PromotionRefused};
 
 pub use dto::{
-    CreateTasksRequest, CreateTasksResponse, QueueControlRequest, TaskListResponse,
+    CreateTasksRequest, CreateTasksResponse, MembershipOp, MembershipRequest, MembershipResponse,
+    PurgeQueueResponse, QueueControlRequest, QueueListResponse, TaskListResponse,
     TaskStatusResponse,
 };
 pub use state::AppState;
@@ -63,8 +65,13 @@ fn router_inner(
     let verifier = state.verifier.clone();
     let body_limit = state.body_limit_bytes();
     let data = Router::new()
-        .route("/v1/queues/{queue}", get(queue_get).put(queue_put))
+        .route("/v1/queues", get(queue_list))
+        .route(
+            "/v1/queues/{queue}",
+            get(queue_get).put(queue_put).delete(queue_delete),
+        )
         .route("/v1/queues/{queue}/control", post(queue_control))
+        .route("/v1/queues/{queue}/purge", post(queue_purge))
         .route("/v1/queues/{queue}/tasks", get(task_list).post(task_create))
         .route("/v1/queues/{queue}/tasks:batch", post(task_create_batch))
         .route(
@@ -73,6 +80,7 @@ fn router_inner(
         )
         .route("/v1/queues/{queue}/dispatch", post(dispatch_one))
         .route("/admin/backup", get(admin_backup))
+        .route("/v1/admin/membership", post(admin_membership))
         .route_layer(from_fn_with_state(
             verifier,
             service_auth::auth_middleware::<ReloadableRoleMapVerifier>,
@@ -160,6 +168,87 @@ fn internal(error: impl std::fmt::Display) -> Response {
     .into_response()
 }
 
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct QueueListQuery {
+    pub page_size: Option<String>,
+    pub page_token: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/queues",
+    params(
+        ("page_size" = Option<usize>, Query, description = "Maximum number of queues to return (1..=1000, default 100)"),
+        ("page_token" = Option<String>, Query, description = "Page token of previous page"),
+    ),
+    responses(
+        (status = 200, body = QueueListResponse),
+        (status = 400, body = ErrorEnvelope)
+    )
+)]
+pub async fn queue_list(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Query(query): Query<QueueListQuery>,
+) -> Response {
+    let page_size = match query.page_size.as_deref() {
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(size) if (1..=1000).contains(&size) => size as usize,
+            _ => {
+                return ApiErr::new(
+                    StatusCode::BAD_REQUEST,
+                    "bad_request",
+                    "page_size must be in range 1..=1000",
+                )
+                .into_response();
+            }
+        },
+        None => 100,
+    };
+
+    state.metrics.requests.incr();
+
+    let principal_inner = principal.into_inner();
+    let scheduler_arc = state.raft.scheduler();
+    let scheduler = scheduler_arc.lock().unwrap();
+    let all_queues = scheduler.queue_names();
+    let visible_queues: Vec<_> = all_queues
+        .into_iter()
+        .filter(|q| principal_inner.ensure(q, Role::Read).is_ok())
+        .collect();
+
+    let start_idx = match query.page_token.as_deref() {
+        Some(token) if !token.is_empty() => visible_queues
+            .iter()
+            .position(|q| q.as_str() > token)
+            .unwrap_or(visible_queues.len()),
+        _ => 0,
+    };
+
+    let remaining = &visible_queues[start_idx..];
+    let (page_queues, next_page_token) = if remaining.len() > page_size {
+        (
+            &remaining[..page_size],
+            Some(remaining[page_size - 1].clone()),
+        )
+    } else {
+        (remaining, None)
+    };
+
+    let mut queues = Vec::with_capacity(page_queues.len());
+    for name in page_queues {
+        if let Ok(snapshot) = scheduler.queue_snapshot(name) {
+            queues.push(snapshot);
+        }
+    }
+
+    Json(QueueListResponse {
+        queues,
+        next_page_token,
+    })
+    .into_response()
+}
+
 #[utoipa::path(
     get,
     path = "/v1/queues/{queue}",
@@ -211,6 +300,27 @@ pub async fn queue_put(
 }
 
 #[utoipa::path(
+    delete,
+    path = "/v1/queues/{queue}",
+    params(("queue" = String, Path, description = "Queue name")),
+    responses((status = 204), (status = 404, body = ErrorEnvelope))
+)]
+pub async fn queue_delete(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Path(queue): Path<String>,
+) -> Response {
+    if let Err(error) = authorize(&principal, &queue, Role::Write) {
+        return error.into_response();
+    }
+    state.metrics.requests.incr();
+    match state.raft.delete_queue(queue).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => propose_error(error),
+    }
+}
+
+#[utoipa::path(
     post,
     path = "/v1/queues/{queue}/control",
     params(("queue" = String, Path, description = "Queue name")),
@@ -230,6 +340,21 @@ pub async fn queue_control(
     match state.raft.set_queue_control(queue, request.state).await {
         Ok(snapshot) => Json(snapshot).into_response(),
         Err(error) => propose_error(error),
+    }
+}
+
+fn validate_dispatch_deadline(deadline_ms: Option<u64>) -> Option<Response> {
+    if deadline_ms == Some(0) {
+        Some(
+            ApiErr::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_argument",
+                "dispatch_deadline_ms must be greater than 0",
+            )
+            .into_response(),
+        )
+    } else {
+        None
     }
 }
 
@@ -328,10 +453,34 @@ pub async fn task_list(
 
 #[utoipa::path(
     post,
+    path = "/v1/queues/{queue}/purge",
+    params(("queue" = String, Path, description = "Queue name")),
+    responses(
+        (status = 200, body = PurgeQueueResponse),
+        (status = 404, body = ErrorEnvelope)
+    )
+)]
+pub async fn queue_purge(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Path(queue): Path<String>,
+) -> Response {
+    if let Err(error) = authorize(&principal, &queue, Role::Write) {
+        return error.into_response();
+    }
+    state.metrics.requests.incr();
+    match state.raft.purge_queue(queue).await {
+        Ok(purged) => Json(PurgeQueueResponse { purged }).into_response(),
+        Err(error) => propose_error(error),
+    }
+}
+
+#[utoipa::path(
+    post,
     path = "/v1/queues/{queue}/tasks",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = CreateTask,
-    responses((status = 201), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
+    responses((status = 201), (status = 400, body = ErrorEnvelope), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
 )]
 pub async fn task_create(
     State(state): State<AppState>,
@@ -341,6 +490,9 @@ pub async fn task_create(
 ) -> Response {
     if let Err(error) = authorize(&principal, &queue, Role::Write) {
         return error.into_response();
+    }
+    if let Some(response) = validate_dispatch_deadline(task.dispatch_deadline_ms) {
+        return response;
     }
     state.metrics.requests.incr();
     match state.raft.create_task(queue, task).await {
@@ -354,7 +506,7 @@ pub async fn task_create(
     path = "/v1/queues/{queue}/tasks:batch",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = CreateTasksRequest,
-    responses((status = 201, body = CreateTasksResponse), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
+    responses((status = 201, body = CreateTasksResponse), (status = 400, body = ErrorEnvelope), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
 )]
 pub async fn task_create_batch(
     State(state): State<AppState>,
@@ -364,6 +516,11 @@ pub async fn task_create_batch(
 ) -> Response {
     if let Err(error) = authorize(&principal, &queue, Role::Write) {
         return error.into_response();
+    }
+    for task in &request.tasks {
+        if let Some(response) = validate_dispatch_deadline(task.dispatch_deadline_ms) {
+            return response;
+        }
     }
     state.metrics.requests.incr();
     match state.raft.create_tasks(queue, request.tasks).await {
@@ -487,6 +644,115 @@ pub async fn admin_backup(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/admin/membership",
+    request_body = MembershipRequest,
+    responses(
+        (status = 200, body = MembershipResponse),
+        (status = 400, body = ErrorEnvelope),
+        (status = 403, body = ErrorEnvelope),
+        (status = 409, body = ErrorEnvelope),
+        (status = 422, body = ErrorEnvelope)
+    )
+)]
+pub async fn admin_membership(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Json(request): Json<MembershipRequest>,
+) -> Response {
+    if let Err(error) = authorize(&principal, "*", Role::Admin) {
+        return error.into_response();
+    }
+    state.metrics.requests.incr();
+    let outcome: Result<Index, MembershipError> = match request.op {
+        MembershipOp::AddLearner => match request.url.filter(|url| !url.is_empty()) {
+            None => Err((
+                StatusCode::BAD_REQUEST,
+                "invalid_argument",
+                "url is required for add_learner".to_string(),
+            )),
+            Some(url) => {
+                state.raft.upsert_peer(request.node, url).await;
+                state
+                    .raft
+                    .add_learner(request.node)
+                    .await
+                    .map_err(|error| admission_refusal(&error))
+            }
+        },
+        MembershipOp::Promote => state
+            .raft
+            .promote_learner(request.node)
+            .await
+            .map_err(|error| promotion_refusal(&error)),
+        MembershipOp::Demote => state
+            .raft
+            .demote_voter(request.node)
+            .await
+            .map_err(|error| demotion_refusal(&error)),
+    };
+    match outcome {
+        Ok(index) => Json(MembershipResponse { index }).into_response(),
+        Err((status, kind, message)) => {
+            let response = ApiErr::new(status, kind, message).into_response();
+            if kind == "not_leader" {
+                with_leader_hint(response, state.raft.leader().await)
+            } else {
+                response
+            }
+        }
+    }
+}
+
+/// A refused membership change: HTTP status, error kind and message.
+type MembershipError = (StatusCode, &'static str, String);
+
+fn admission_refusal(error: &AdmissionRefused) -> MembershipError {
+    let (status, kind) = match error {
+        AdmissionRefused::Unroutable { .. } => (StatusCode::BAD_REQUEST, "invalid_argument"),
+        AdmissionRefused::NotLeaderOrTransferInFlight => (StatusCode::CONFLICT, "not_leader"),
+    };
+    (status, kind, error.to_string())
+}
+
+fn promotion_refusal(error: &PromotionRefused) -> MembershipError {
+    let (status, kind) = match error {
+        PromotionRefused::NotLeader => (StatusCode::CONFLICT, "not_leader"),
+        PromotionRefused::NotCaughtUp { .. } | PromotionRefused::TransitionInFlight => {
+            (StatusCode::CONFLICT, "retry_later")
+        }
+    };
+    (status, kind, format!("{error:?}"))
+}
+
+fn demotion_refusal(error: &DemotionRefused) -> MembershipError {
+    let (status, kind) = match error {
+        DemotionRefused::NotLeader => (StatusCode::CONFLICT, "not_leader"),
+        DemotionRefused::TransitionInFlight => (StatusCode::CONFLICT, "retry_later"),
+        DemotionRefused::IsTheLeader { .. }
+        | DemotionRefused::NotAVoter { .. }
+        | DemotionRefused::ToleranceWouldDrop { .. }
+        | DemotionRefused::WouldEmptyVoterSet { .. } => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "membership_refused")
+        }
+    };
+    (status, kind, format!("{error:?}"))
+}
+
+/// Adds the `x-defer-leader` header (the leader's node id) to a 409
+/// `not_leader` response when the leader is known.
+fn with_leader_hint(mut response: Response, leader: Option<u64>) -> Response {
+    if let Some(id) = leader {
+        if let Ok(value) = HeaderValue::from_str(&id.to_string()) {
+            response
+                .headers_mut()
+                .insert(HeaderName::from_static("x-defer-leader"), value);
+        }
+    }
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,6 +765,40 @@ mod tests {
         assert_eq!(disabled.status(), StatusCode::CONFLICT);
         let infra = propose_error(anyhow::anyhow!("commit timed out").into());
         assert_eq!(infra.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn validate_dispatch_deadline_rejects_zero() {
+        let err = validate_dispatch_deadline(Some(0)).expect("0 must be rejected");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert!(validate_dispatch_deadline(None).is_none());
+        assert!(validate_dispatch_deadline(Some(100)).is_none());
+    }
+
+    #[test]
+    fn queue_list_response_construction() {
+        let response = QueueListResponse {
+            queues: vec![],
+            next_page_token: None,
+        };
+        assert!(response.queues.is_empty());
+        assert_eq!(response.next_page_token, None);
+
+        let response_with_token = QueueListResponse {
+            queues: vec![],
+            next_page_token: Some("q2".into()),
+        };
+        assert_eq!(response_with_token.next_page_token.as_deref(), Some("q2"));
+    }
+
+    #[test]
+    fn leader_hint_header_is_set_only_when_leader_is_known() {
+        let hinted = with_leader_hint(StatusCode::CONFLICT.into_response(), Some(7));
+        assert_eq!(hinted.status(), StatusCode::CONFLICT);
+        assert_eq!(hinted.headers().get("x-defer-leader").unwrap(), "7");
+        let unhinted = with_leader_hint(StatusCode::CONFLICT.into_response(), None);
+        assert_eq!(unhinted.status(), StatusCode::CONFLICT);
+        assert!(unhinted.headers().get("x-defer-leader").is_none());
     }
 }
 // HANDWRITE-END

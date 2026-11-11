@@ -10,19 +10,6 @@ fn defer() -> Command {
     Command::new(env!("CARGO_BIN_EXE_defer"))
 }
 
-const EXPECTED_DOMAIN_OPERATIONS: &[&str] = &[
-    "DELETE /v1/queues/{queue}/tasks/{task_id}",
-    "GET /admin/backup",
-    "GET /v1/queues/{queue}",
-    "GET /v1/queues/{queue}/tasks",
-    "GET /v1/queues/{queue}/tasks/{task_id}",
-    "POST /v1/queues/{queue}/control",
-    "POST /v1/queues/{queue}/dispatch",
-    "POST /v1/queues/{queue}/tasks",
-    "POST /v1/queues/{queue}/tasks:batch",
-    "PUT /v1/queues/{queue}",
-];
-
 fn chainable_json(output: std::process::Output, surface: &str) -> serde_json::Value {
     assert!(
         output.status.success(),
@@ -51,13 +38,7 @@ fn assert_exact_domain_operations(spec: &serde_json::Value) {
         }
     }
     actual.sort();
-    assert_eq!(
-        actual,
-        EXPECTED_DOMAIN_OPERATIONS
-            .iter()
-            .map(|operation| (*operation).to_string())
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(actual, defer::openapi::operations());
 }
 
 fn assert_generated_client(
@@ -66,24 +47,34 @@ fn assert_generated_client(
     client_file: &str,
     symbols: &[&str],
 ) {
-    let out = tempfile::tempdir().unwrap();
-    let generated = defer()
-        .args([
-            "spec",
-            "gen",
-            "--lang",
-            lang,
-            "--out",
-            out.path().to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        generated.status.success(),
-        "{lang} generation failed: {}",
-        String::from_utf8_lossy(&generated.stderr)
-    );
-    let mut actual = out
+    let out1 = tempfile::tempdir().unwrap();
+    let out2 = tempfile::tempdir().unwrap();
+    for out in [&out1, &out2] {
+        let generated = defer()
+            .args([
+                "spec",
+                "gen",
+                "--lang",
+                lang,
+                "--out",
+                out.path().to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            generated.status.success(),
+            "{lang} generation failed: {}",
+            String::from_utf8_lossy(&generated.stderr)
+        );
+        assert!(
+            String::from_utf8(generated.stdout)
+                .unwrap()
+                .ends_with("next: done\n"),
+            "{lang} generation must emit a terminal marker"
+        );
+    }
+
+    let mut actual = out1
         .path()
         .read_dir()
         .unwrap()
@@ -96,19 +87,33 @@ fn assert_generated_client(
         .collect::<Vec<_>>();
     expected.sort();
     assert_eq!(actual, expected, "{lang} generated file inventory");
-    let client = std::fs::read_to_string(out.path().join(client_file)).unwrap();
+
+    // Deterministic cold regeneration: two runs produce byte-identical files.
+    for file in expected_files {
+        let bytes1 = std::fs::read(out1.path().join(file)).unwrap();
+        let bytes2 = std::fs::read(out2.path().join(file)).unwrap();
+        assert_eq!(
+            bytes1, bytes2,
+            "{lang} cold regeneration produced non-identical bytes for {file}"
+        );
+    }
+
+    for file in expected_files {
+        let text = std::fs::read_to_string(out1.path().join(file)).unwrap();
+        assert!(!text.is_empty(), "{lang} {file} is empty");
+        assert!(
+            !text.contains("TODO"),
+            "{lang} {file} contains TODO scaffold"
+        );
+    }
+
+    let client = std::fs::read_to_string(out1.path().join(client_file)).unwrap();
     for symbol in symbols {
         assert!(
             client.contains(symbol),
             "{lang} generated client missing {symbol}"
         );
     }
-    assert!(
-        String::from_utf8(generated.stdout)
-            .unwrap()
-            .ends_with("next: done\n"),
-        "{lang} generation must emit a terminal marker"
-    );
 }
 
 // <HANDWRITE gap="missing-generator:unit-test" tracker="#2213" reason="Own the fail-closed behavior oracle for exact command grammar, offline llm, exact TypeScript client generation, and deployment-render exit status.">
@@ -135,7 +140,7 @@ fn help_exposes_standard_and_domain_surfaces() {
 
     for (group, expected) in [
         ("task", &["create", "status", "cancel"][..]),
-        ("queue", &["get", "put", "control"][..]),
+        ("queue", &["get", "put", "control", "list"][..]),
         ("issue", &["search", "view", "create"][..]),
     ] {
         let output = defer().args([group, "--help"]).output().unwrap();
@@ -163,6 +168,15 @@ fn serve_exposes_shared_structured_log_configuration() {
     assert!(stdout.contains("--log-format"));
     assert!(stdout.contains("pretty"));
     assert!(stdout.contains("json"));
+}
+
+#[test]
+fn serve_exposes_declared_queues_configuration() {
+    let output = defer().args(["serve", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("--declared-queues"));
+    assert!(stdout.contains("DEFER_DECLARED_QUEUES"));
 }
 
 #[test]
@@ -299,6 +313,39 @@ fn offline_spec_and_typed_client_generation_use_one_contract() {
     );
     assert_exact_domain_operations(&offline);
 
+    // Verify committed clients/openapi.json agrees with defer spec output
+    let committed_raw = include_str!("../../../../clients/openapi.json");
+    let mut committed: serde_json::Value =
+        serde_json::from_str(committed_raw).expect("clients/openapi.json valid JSON");
+    // Committed snapshot pins info.version = "snapshot"; harmonize version to compare contract body
+    committed["info"]["version"] = canonical["info"]["version"].clone();
+    assert_eq!(
+        offline, committed,
+        "defer spec --format openapi must match committed clients/openapi.json"
+    );
+
+    // Verify defer spec --format openapi-yaml parses and agrees with canonical IR
+    let yaml_output = defer()
+        .args(["spec", "--format", "openapi-yaml"])
+        .output()
+        .expect("defer spec --format openapi-yaml");
+    assert!(
+        yaml_output.status.success(),
+        "openapi-yaml failed: {}",
+        String::from_utf8_lossy(&yaml_output.stderr)
+    );
+    let yaml_stdout = String::from_utf8(yaml_output.stdout).unwrap();
+    let yaml_body = yaml_stdout
+        .strip_suffix("next: done\n")
+        .expect("chainable YAML ends with the terminal marker")
+        .trim_end();
+    let yaml_val: serde_json::Value =
+        serde_yaml::from_str(yaml_body).expect("parse openapi-yaml as YAML");
+    assert_eq!(
+        yaml_val, canonical,
+        "defer spec --format openapi-yaml must equal canonical IR"
+    );
+
     let routes = chainable_json(
         defer()
             .args(["spec", "--format", "routes"])
@@ -308,18 +355,8 @@ fn offline_spec_and_typed_client_generation_use_one_contract() {
     );
     assert_eq!(
         routes["routes"],
-        serde_json::json!([
-            "PUT /v1/queues/{queue}",
-            "GET /v1/queues/{queue}",
-            "POST /v1/queues/{queue}/control",
-            "POST /v1/queues/{queue}/tasks",
-            "GET /v1/queues/{queue}/tasks",
-            "POST /v1/queues/{queue}/tasks:batch",
-            "GET /v1/queues/{queue}/tasks/{task_id}",
-            "DELETE /v1/queues/{queue}/tasks/{task_id}",
-            "POST /v1/queues/{queue}/dispatch",
-            "GET /admin/backup"
-        ])
+        serde_json::json!(defer::openapi::operations()),
+        "routes output must equal the OpenAPI operations"
     );
 
     assert_generated_client(
@@ -338,6 +375,7 @@ fn offline_spec_and_typed_client_generation_use_one_contract() {
             "queueGet(data",
             "queuePut(data",
             "queueControl(data",
+            "queueList(data",
             "dispatchOne(data",
             "taskCreate(data",
             "taskStatus(data",
@@ -358,6 +396,7 @@ fn offline_spec_and_typed_client_generation_use_one_contract() {
             "def queue_get(",
             "def queue_put(",
             "def queue_control(",
+            "def queue_list(",
             "def dispatch_one(",
             "def task_create(",
             "def task_status(",
@@ -376,6 +415,7 @@ fn offline_spec_and_typed_client_generation_use_one_contract() {
             "pub fn queue_get(",
             "pub fn queue_put(",
             "pub fn queue_control(",
+            "pub fn queue_list(",
             "pub fn dispatch_one(",
             "pub fn task_create(",
             "pub fn task_status(",

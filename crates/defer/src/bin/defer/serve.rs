@@ -57,6 +57,9 @@ pub(crate) struct ServeArgs {
     /// are bounded mid-read. Defaults to 8 MiB (`DEFER_BODY_LIMIT_BYTES`).
     #[arg(long, env = "DEFER_BODY_LIMIT_BYTES", default_value_t = 8 * 1024 * 1024)]
     body_limit_bytes: usize,
+    /// JSON array of declared queues to provision at start-up on the Raft leader.
+    #[arg(long, env = "DEFER_DECLARED_QUEUES")]
+    declared_queues: Option<String>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -66,6 +69,8 @@ enum LogFormat {
 }
 
 pub(crate) async fn run(args: ServeArgs) -> Result<()> {
+    let declared_queues =
+        defer::parse_declared_queues(args.declared_queues.as_deref().unwrap_or(""))?;
     let log_format = match args.log_format {
         LogFormat::Pretty => service_http::LogFormat::Pretty,
         LogFormat::Json => service_http::LogFormat::Json,
@@ -223,6 +228,17 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
         },
     )?;
 
+    if !declared_queues.is_empty() {
+        let declared_raft = raft.clone();
+        let declared_drain = state.drain_signal();
+        tokio::spawn(async move {
+            provision_declared_queues_until_complete(declared_queues.len(), declared_drain, || {
+                defer::ensure_declared_queues(&declared_raft, &declared_queues)
+            })
+            .await;
+        });
+    }
+
     let listener = tokio::net::TcpListener::bind(&args.bind).await?;
     tracing::info!(
         event = "service_listening",
@@ -304,11 +320,123 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
     Ok(())
 }
 
+async fn provision_declared_queues_until_complete<F, Fut>(
+    declared_count: usize,
+    mut drain: server_lifecycle::DrainSignal,
+    mut reconcile: F,
+) where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<defer::DeclaredQueueOutcome>>>,
+{
+    let mut interval = tokio::time::interval(Duration::from_millis(50));
+    loop {
+        tokio::select! {
+            _ = drain.changed() => break,
+            _ = interval.tick() => {
+                match reconcile().await {
+                    Ok(outcomes) => {
+                        // A follower skip is Ok([]), including a leadership race.
+                        // Stop only after every declaration has been reconciled.
+                        let complete = outcomes.len() == declared_count;
+                        for outcome in outcomes {
+                            tracing::info!(
+                                queue = %outcome.name,
+                                decision = ?outcome.decision,
+                                "declared queue provisioned"
+                            );
+                        }
+                        if complete {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        tracing::error!(error = %error, "failed to provision declared queues");
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn peer_bind_address(bind: &str, raft_port: u16) -> Result<String> {
     let (host, _) = bind
         .rsplit_once(':')
         .with_context(|| format!("cannot derive peer bind from {bind}"))?;
     anyhow::ensure!(!host.is_empty(), "DEFER_BIND must include a host");
     Ok(format!("{host}:{raft_port}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn complete() -> Vec<defer::DeclaredQueueOutcome> {
+        vec![defer::DeclaredQueueOutcome {
+            name: "cold-install".into(),
+            decision: defer::DeclaredQueueDecision::Created,
+        }]
+    }
+
+    async fn assert_retries(first: Result<Vec<defer::DeclaredQueueOutcome>>) {
+        let drain = server_lifecycle::DrainController::new();
+        let attempts = AtomicUsize::new(0);
+        let mut first = Some(first);
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            provision_declared_queues_until_complete(1, drain.signal(), || {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                std::future::ready(first.take().unwrap_or_else(|| Ok(complete())))
+            }),
+        )
+        .await
+        .expect("provisioning should eventually complete");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn declared_queues_retry_transient_failure() {
+        assert_retries(Err(anyhow::anyhow!("temporary proposal failure"))).await;
+    }
+
+    #[tokio::test]
+    async fn declared_queues_retry_leadership_race() {
+        // ensure_declared_queues returns no outcomes when leadership is lost
+        // before its own leader check, even if the caller observed a leader.
+        assert_retries(Ok(Vec::new())).await;
+    }
+
+    #[tokio::test]
+    async fn declared_queues_stop_after_success() {
+        let drain = server_lifecycle::DrainController::new();
+        let attempts = AtomicUsize::new(0);
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            provision_declared_queues_until_complete(1, drain.signal(), || {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                std::future::ready(Ok(complete()))
+            }),
+        )
+        .await
+        .expect("successful provisioning should stop");
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn declared_queues_stop_retrying_on_drain() {
+        let drain = server_lifecycle::DrainController::new();
+        let attempts = AtomicUsize::new(0);
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            provision_declared_queues_until_complete(1, drain.signal(), || {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                drain.start_drain();
+                std::future::ready(Err(anyhow::anyhow!("temporary proposal failure")))
+            }),
+        )
+        .await
+        .expect("draining should stop retries");
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
 }
 // HANDWRITE-END

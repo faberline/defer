@@ -2,10 +2,13 @@
 pub mod crd;
 pub mod reconcile;
 pub mod render;
+pub mod topology_plan;
 
 pub use crd::{
-    crd_yaml, Defer, DeferBackupSpec, DeferPlacement, DeferSpec, DeferStatus, LocalObjectReference,
-    Toleration,
+    crd_yaml, DeclaredQueueControl, DeclaredQueuePolicySpec, DeclaredQueueSpec, Defer,
+    DeferBackupSpec, DeferPlacement, DeferResourceLimits, DeferSpec, DeferStatus,
+    LocalObjectReference, Toleration,
 };
 pub use reconcile::run;
+pub use topology_plan::{plan_replica_change, MemberSet, PlanError, Step};
 // HANDWRITE-END

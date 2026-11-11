@@ -16,8 +16,8 @@ use defer_shared_kernel::{
     QueuePolicy, QueueSnapshot, SettlementOutcome,
 };
 use raft_runtime::{
-    ClusterTopology, HostConfig, Index, Membership, NodeId, PeerTransport, RaftHost,
-    RaftStateMachine, SnapshotPolicy,
+    AdmissionRefused, ClusterTopology, DemotionRefused, HostConfig, Index, Membership, NodeId,
+    PeerTransport, PromotionRefused, RaftHost, RaftStateMachine, SnapshotPolicy,
 };
 
 use super::command::{DeferCommand, DeferEnvelope, DeferOutcome, ProposalId};
@@ -193,6 +193,13 @@ impl DeferRaft {
         }
     }
 
+    pub async fn delete_queue(&self, queue: String) -> ProposeResult<()> {
+        match self.propose(DeferCommand::DeleteQueue { queue }).await? {
+            DeferOutcome::QueueDeleted(result) => Ok(result?),
+            other => Err(mismatch("delete queue", other)),
+        }
+    }
+
     pub async fn update_queue_policy(
         &self,
         queue: String,
@@ -351,6 +358,13 @@ impl DeferRaft {
         }
     }
 
+    pub async fn purge_queue(&self, queue: String) -> ProposeResult<usize> {
+        match self.propose(DeferCommand::PurgeQueue { queue }).await? {
+            DeferOutcome::QueuePurged(result) => Ok(result?),
+            other => Err(mismatch("purge_queue", other)),
+        }
+    }
+
     pub fn scheduler(&self) -> Arc<Mutex<DeferScheduler>> {
         self.sm.scheduler()
     }
@@ -365,6 +379,22 @@ impl DeferRaft {
 
     pub async fn leader(&self) -> Option<NodeId> {
         self.host.leader().await
+    }
+
+    pub async fn upsert_peer(&self, peer: NodeId, url: String) {
+        self.host.upsert_peer(peer, url).await
+    }
+
+    pub async fn add_learner(&self, target: NodeId) -> Result<Index, AdmissionRefused> {
+        self.host.add_learner(target).await
+    }
+
+    pub async fn promote_learner(&self, target: NodeId) -> Result<Index, PromotionRefused> {
+        self.host.promote_learner(target).await
+    }
+
+    pub async fn demote_voter(&self, target: NodeId) -> Result<Index, DemotionRefused> {
+        self.host.demote_voter(target).await
     }
 
     pub fn applied_index(&self) -> Index {
