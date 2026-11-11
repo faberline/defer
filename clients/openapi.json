@@ -996,6 +996,12 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "terminal_retention_ms": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "minimum": 0
           }
         }
       },
