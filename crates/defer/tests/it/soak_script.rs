@@ -141,6 +141,99 @@ fn autostart_fails_closed_when_upstream_is_occupied_answering_healthz() {
     );
 }
 
+/// Runs `scripts/soak.sh` against a fake upstream that answers every request
+/// with `200 ok`, so the script passes its reachability check and reaches the
+/// argument validation. Each request is answered; the thread stops after the run.
+fn run_with_fake_healthz(env: &[(&str, &str)]) -> std::process::Output {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind tcp listener");
+    let port = listener.local_addr().expect("local addr").port();
+    let stop = Arc::new(AtomicBool::new(false));
+
+    let listener_stop = Arc::clone(&stop);
+    listener.set_nonblocking(true).expect("set nonblocking");
+    let server_thread = std::thread::spawn(move || {
+        while !listener_stop.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut buf = [0u8; 1024];
+                    let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+                    let _ = stream.read(&mut buf);
+                    let response =
+                        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+                    let _ = stream.write_all(response.as_bytes());
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let mut command = Command::new("bash");
+    command
+        .arg("scripts/soak.sh")
+        .current_dir(workspace_root())
+        .env_remove("DEFER_SOAK_AUTOSTART")
+        .env("DEFER_UPSTREAM", format!("127.0.0.1:{port}"))
+        .env("DEFER_SOAK_PID", std::process::id().to_string());
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let output = command.output().expect("run scripts/soak.sh");
+
+    stop.store(true, Ordering::SeqCst);
+    let _ = server_thread.join();
+    output
+}
+
+#[test]
+fn rejects_zero_cache_batch_rounds() {
+    let output = run_with_fake_healthz(&[("DEFER_SOAK_CACHE_BATCH_ROUNDS", "0")]);
+    assert!(!output.status.success(), "expected non-zero exit code");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("DEFER_SOAK_CACHE_BATCH_ROUNDS must be an integer >= 1"),
+        "expected batch rounds validation in stderr, got: {stderr}"
+    );
+}
+
+#[test]
+fn rejects_non_numeric_cache_max_batches() {
+    let output = run_with_fake_healthz(&[("DEFER_SOAK_CACHE_MAX_BATCHES", "abc")]);
+    assert!(!output.status.success(), "expected non-zero exit code");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("DEFER_SOAK_CACHE_MAX_BATCHES must be an integer >= 1"),
+        "expected max batches validation in stderr, got: {stderr}"
+    );
+}
+
+#[test]
+fn rejects_zero_rss_sample_secs() {
+    let output = run_with_fake_healthz(&[("DEFER_SOAK_RSS_SAMPLE_SECS", "0")]);
+    assert!(!output.status.success(), "expected non-zero exit code");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("DEFER_SOAK_RSS_SAMPLE_SECS must be an integer >= 1"),
+        "expected RSS sample validation in stderr, got: {stderr}"
+    );
+}
+
+#[test]
+fn rejects_rss_sample_secs_longer_than_window() {
+    let output = run_with_fake_healthz(&[
+        ("DEFER_SOAK_DURATION_SECS", "2"),
+        ("DEFER_SOAK_RSS_SAMPLE_SECS", "5"),
+    ]);
+    assert!(!output.status.success(), "expected non-zero exit code");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("DEFER_SOAK_RSS_SAMPLE_SECS must not exceed the window length"),
+        "expected window length validation in stderr, got: {stderr}"
+    );
+}
+
 #[test]
 fn soak_script_passes_bash_n_syntax_check() {
     let output = Command::new("bash")
