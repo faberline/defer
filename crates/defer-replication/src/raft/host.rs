@@ -193,6 +193,13 @@ impl DeferRaft {
         }
     }
 
+    pub async fn delete_queue(&self, queue: String) -> ProposeResult<()> {
+        match self.propose(DeferCommand::DeleteQueue { queue }).await? {
+            DeferOutcome::QueueDeleted(result) => Ok(result?),
+            other => Err(mismatch("delete queue", other)),
+        }
+    }
+
     pub async fn update_queue_policy(
         &self,
         queue: String,
@@ -348,6 +355,13 @@ impl DeferRaft {
         {
             DeferOutcome::Canceled(result) => Ok(result?),
             other => Err(mismatch("cancel", other)),
+        }
+    }
+
+    pub async fn purge_queue(&self, queue: String) -> ProposeResult<usize> {
+        match self.propose(DeferCommand::PurgeQueue { queue }).await? {
+            DeferOutcome::QueuePurged(result) => Ok(result?),
+            other => Err(mismatch("purge_queue", other)),
         }
     }
 

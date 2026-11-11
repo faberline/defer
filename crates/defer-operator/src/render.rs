@@ -172,6 +172,10 @@ fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
         json!({"name": "DEFER_BODY_LIMIT_BYTES", "value": spec.body_limit_bytes.to_string()}),
         json!({"name": "DEFER_LOG_FORMAT", "value": "json"}),
     ];
+    if !spec.queues.is_empty() {
+        let declared = declared_queues_json(&spec.queues);
+        env.push(json!({"name": "DEFER_DECLARED_QUEUES", "value": declared}));
+    }
     if let Some(level) = &spec.log_level {
         env.push(json!({"name": "RUST_LOG", "value": level}));
     }
@@ -292,6 +296,10 @@ fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
         }),
     });
     set_image_pull_secrets(&mut sts["spec"]["template"]["spec"], defer);
+    apply_limits(
+        &mut sts["spec"]["template"]["spec"]["containers"][0],
+        &defer.spec.limits,
+    );
     sts
 }
 
@@ -336,5 +344,151 @@ fn apply_pod_placement(pod_spec: &mut Value, defer: &Defer) {
         pod_spec["tolerations"] = json!(tolerations);
     }
     set_image_pull_secrets(pod_spec, defer);
+}
+
+/// Parse a CPU quantity to millicores for plain `m` and decimal forms.
+fn parse_cpu_millis(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Some(m) = s.strip_suffix('m') {
+        m.trim().parse::<u64>().ok()
+    } else if let Ok(cores) = s.parse::<u64>() {
+        cores.checked_mul(1000)
+    } else if let Ok(cores) = s.parse::<f64>() {
+        if cores >= 0.0 {
+            Some((cores * 1000.0).round() as u64)
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+/// Parse a memory quantity to bytes for plain `Ki`, `Mi`, `Gi` forms.
+fn parse_memory_bytes(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Some(num) = s.strip_suffix("Gi") {
+        num.trim()
+            .parse::<u64>()
+            .ok()
+            .and_then(|v| v.checked_mul(1024 * 1024 * 1024))
+    } else if let Some(num) = s.strip_suffix("Mi") {
+        num.trim()
+            .parse::<u64>()
+            .ok()
+            .and_then(|v| v.checked_mul(1024 * 1024))
+    } else if let Some(num) = s.strip_suffix("Ki") {
+        num.trim()
+            .parse::<u64>()
+            .ok()
+            .and_then(|v| v.checked_mul(1024))
+    } else {
+        s.parse::<u64>().ok()
+    }
+}
+
+/// Enforce that a set limit is not lower than the matching request.
+/// If lower, the operator raises the limit to the request quantity.
+fn enforce_limit(
+    limit_val: &str,
+    req_val: Option<&str>,
+    parser: fn(&str) -> Option<u64>,
+) -> String {
+    if let Some(req) = req_val {
+        if let (Some(limit_qty), Some(req_qty)) = (parser(limit_val), parser(req)) {
+            if limit_qty < req_qty {
+                return req.to_string();
+            }
+        }
+    }
+    limit_val.to_string()
+}
+
+/// Render `spec.limits` as `resources.limits` on the container.
+///
+/// Unset or empty leaves `resources.limits` omitted. When a limit is lower than
+/// the matching request, the operator raises the limit to the request.
+fn apply_limits(container: &mut Value, limits: &Option<crate::crd::DeferResourceLimits>) {
+    let Some(limits) = limits.as_ref() else {
+        return;
+    };
+    let req_cpu = container["resources"]["requests"]["cpu"]
+        .as_str()
+        .map(str::trim);
+    let req_mem = container["resources"]["requests"]["memory"]
+        .as_str()
+        .map(str::trim);
+
+    let mut map = serde_json::Map::new();
+
+    if let Some(cpu) = &limits.cpu {
+        let cpu_trimmed = cpu.trim();
+        if !cpu_trimmed.is_empty() {
+            let final_cpu = enforce_limit(cpu_trimmed, req_cpu, parse_cpu_millis);
+            map.insert("cpu".into(), json!(final_cpu));
+        }
+    }
+
+    if let Some(mem) = &limits.memory {
+        let mem_trimmed = mem.trim();
+        if !mem_trimmed.is_empty() {
+            let final_mem = enforce_limit(mem_trimmed, req_mem, parse_memory_bytes);
+            map.insert("memory".into(), json!(final_mem));
+        }
+    }
+
+    if !map.is_empty() {
+        container["resources"]["limits"] = Value::Object(map);
+    }
+}
+
+#[derive(serde::Serialize)]
+struct ServeDeclaredQueue<'a> {
+    name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy: Option<ServeDeclaredQueuePolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    control: Option<&'static str>,
+}
+
+#[derive(serde::Serialize)]
+struct ServeDeclaredQueuePolicy {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_in_flight: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_dispatch_per_tick: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_dispatches_per_second: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_burst_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lease_ttl_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_backoff_ms: Option<u64>,
+}
+
+fn declared_queues_json(queues: &[super::crd::DeclaredQueueSpec]) -> String {
+    let serve_queues: Vec<ServeDeclaredQueue<'_>> = queues
+        .iter()
+        .map(|q| ServeDeclaredQueue {
+            name: &q.name,
+            policy: q.policy.as_ref().map(|p| ServeDeclaredQueuePolicy {
+                max_in_flight: p.max_in_flight,
+                max_dispatch_per_tick: p.max_dispatch_per_tick,
+                max_dispatches_per_second: p.max_dispatches_per_second,
+                max_burst_size: p.max_burst_size,
+                lease_ttl_ms: p.lease_ttl_ms,
+                retry_backoff_ms: p.retry_backoff_ms,
+            }),
+            control: q.control.as_ref().map(|c| c.as_str()),
+        })
+        .collect();
+    serde_json::to_string(&serve_queues).expect("valid declared queues JSON")
 }
 // HANDWRITE-END

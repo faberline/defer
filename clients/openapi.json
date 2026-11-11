@@ -4,8 +4,7 @@
     "title": "Defer HTTP API",
     "description": "Raft-backed delayed HTTP push queue over HTTP/1.1 and h2c.",
     "contact": {
-      "name": "Chris Cheng",
-      "email": "chris.cheng.c4@gmail.com"
+      "name": "Faberline contributors"
     },
     "license": {
       "name": "MIT"
@@ -22,6 +21,59 @@
         "responses": {
           "200": {
             "description": "Exact Defer state-machine snapshot bytes"
+          }
+        }
+      }
+    },
+    "/v1/queues": {
+      "get": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "queue_list",
+        "parameters": [
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "Maximum number of queues to return (1..=1000, default 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "description": "Page token of previous page",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -104,6 +156,38 @@
             }
           },
           "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "queue_delete",
+        "parameters": [
+          {
+            "name": "queue",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
             "description": "",
             "content": {
               "application/json": {
@@ -197,6 +281,47 @@
           },
           "204": {
             "description": ""
+          }
+        }
+      }
+    },
+    "/v1/queues/{queue}/purge": {
+      "post": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "queue_purge",
+        "parameters": [
+          {
+            "name": "queue",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurgeQueueResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -311,6 +436,16 @@
         "responses": {
           "201": {
             "description": ""
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           },
           "404": {
             "description": "",
@@ -464,6 +599,16 @@
               }
             }
           },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "",
             "content": {
@@ -498,6 +643,12 @@
           "schedule_at"
         ],
         "properties": {
+          "dispatch_deadline_ms": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "minimum": 0
+          },
           "max_attempts": {
             "type": "integer",
             "format": "int32",
@@ -634,6 +785,18 @@
           }
         }
       },
+      "PurgeQueueResponse": {
+        "type": "object",
+        "required": [
+          "purged"
+        ],
+        "properties": {
+          "purged": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "QueueControlRequest": {
         "type": "object",
         "required": [
@@ -653,6 +816,24 @@
           "Disabled"
         ]
       },
+      "QueueListResponse": {
+        "type": "object",
+        "required": [
+          "queues"
+        ],
+        "properties": {
+          "next_page_token": {
+            "type": "string",
+            "nullable": true
+          },
+          "queues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueueSnapshot"
+            }
+          }
+        }
+      },
       "QueuePolicy": {
         "type": "object",
         "required": [
@@ -669,6 +850,12 @@
             "format": "int64",
             "minimum": 0
           },
+          "max_backoff_ms": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "minimum": 0
+          },
           "max_burst_size": {
             "type": "integer",
             "minimum": 0
@@ -680,6 +867,12 @@
           "max_dispatches_per_second": {
             "type": "integer",
             "format": "int32",
+            "minimum": 0
+          },
+          "max_doublings": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
             "minimum": 0
           },
           "max_in_flight": {
