@@ -248,4 +248,101 @@ fn soak_script_passes_bash_n_syntax_check() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// Serves the queue state that `inspect_fixed` reads on a loopback port.
+/// `task_count` is the value of `/v1/queues/soak-jobs`. Returns the port,
+/// a stop flag and the server thread.
+fn serve_fake_upstream(task_count: u64) -> (u16, Arc<AtomicBool>, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind tcp listener");
+    let port = listener.local_addr().expect("local addr").port();
+    listener.set_nonblocking(true).expect("set nonblocking");
+    let stop = Arc::new(AtomicBool::new(false));
+    let listener_stop = Arc::clone(&stop);
+    let server_thread = std::thread::spawn(move || {
+        while !listener_stop.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let _ = stream.set_nonblocking(false);
+                    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+                    let mut buf = [0u8; 2048];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buf[..n]);
+                    let path = request.split_whitespace().nth(1).unwrap_or("");
+                    let body = match path {
+                        "/v1/queues/soak-jobs" => {
+                            format!("{{\"task_count\": {task_count}, \"terminal_count\": 1}}")
+                        }
+                        "/v1/queues/soak-jobs/tasks/fixed" => {
+                            "{\"status\": \"Succeeded\"}".to_string()
+                        }
+                        "/v1/queues/soak-jobs/tasks/fixed-retry" => {
+                            "{\"status\": \"Scheduled\"}".to_string()
+                        }
+                        _ => "ok".to_string(),
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    (port, stop, server_thread)
+}
+
+/// Runs the real `inspect_fixed` from `scripts/soak.sh` in an `if` context,
+/// where bash turns off `set -e`, and returns its stdout. The marker is
+/// `INSPECT_OK` or `INSPECT_FAILED`.
+fn run_inspect_fixed(port: u16) -> String {
+    let script = r#"set -euo pipefail
+source <(grep '^healthy() ' scripts/soak.sh; awk '/^inspect_fixed\(\) \{/,/^}/' scripts/soak.sh)
+UPSTREAM="127.0.0.1:$1"; QUEUE="soak-jobs"
+if inspect_fixed; then echo INSPECT_OK; else echo INSPECT_FAILED; fi
+"#;
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(script)
+        .arg("bash")
+        .arg(port.to_string())
+        .current_dir(workspace_root())
+        .output()
+        .expect("run bash for inspect_fixed");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        stdout.contains("INSPECT_OK") || stdout.contains("INSPECT_FAILED"),
+        "inspect_fixed harness did not finish: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    stdout
+}
+
+#[test]
+fn inspect_fixed_fails_when_queue_state_is_wrong() {
+    let (port, stop, server_thread) = serve_fake_upstream(3);
+    let stdout = run_inspect_fixed(port);
+    stop.store(true, Ordering::SeqCst);
+    let _ = server_thread.join();
+    assert!(
+        stdout.contains("INSPECT_FAILED") && !stdout.contains("INSPECT_OK"),
+        "inspect_fixed must fail when task_count is 3, got: {stdout}"
+    );
+}
+
+#[test]
+fn inspect_fixed_passes_when_queue_state_is_right() {
+    let (port, stop, server_thread) = serve_fake_upstream(2);
+    let stdout = run_inspect_fixed(port);
+    stop.store(true, Ordering::SeqCst);
+    let _ = server_thread.join();
+    assert!(
+        stdout.contains("INSPECT_OK"),
+        "inspect_fixed must pass when task_count is 2, got: {stdout}"
+    );
+}
 // HANDWRITE-END
