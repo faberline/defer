@@ -53,18 +53,19 @@ Boundaries that every section inherits:
 | Horizon | Outcome | Section |
 |---|---|---|
 | H1 | `declarative-queues` | [operations.md](operations.md) § Declarative queues |
-| H1 | `live-topology-transitions` | [replication-and-availability.md](replication-and-availability.md) § Live topology transitions |
+| H1 | `live-replica-membership` | [replication-and-availability.md](replication-and-availability.md) § Live replica membership |
 | H1 | `gke-acceptance-in-repo` | [operations.md](operations.md) § GKE acceptance in repo |
 | H1 | `reliable-soak-gate` | [operations.md](operations.md) § Reliable soak gate |
 | H2 | `retry-config-and-dispatch-deadline` | [dispatch-and-delivery.md](dispatch-and-delivery.md) § Retry config and dispatch deadline |
 | H2 | `resource-listing-and-retention` | [tasks-and-queues.md](tasks-and-queues.md) § Resource listing and retention |
 | H2 | `capacity-policy` | [replication-and-availability.md](replication-and-availability.md) § Capacity policy |
 | H2 | `sift-observability-integration` | [operations.md](operations.md) § Sift observability integration |
+| H2 | `live-topology-transitions` | [replication-and-availability.md](replication-and-availability.md) § Live topology transitions |
 
 H1 is ordered by dependency, not by value: declarative queues first, which
 the GKE runs need so a fresh instance serves something; then the
-topology and soak gates, which are the evidence the H2 capacity work builds
-on.
+replica-membership and soak gates, which are the evidence the H2 capacity
+and shard work builds on.
 
 ## Section index
 
@@ -78,6 +79,7 @@ on.
 | Retry config and dispatch deadline | dispatch-and-delivery.md | outcome | ROADMAP `retry-config-and-dispatch-deadline` |
 | Replicated group with peer mTLS | replication-and-availability.md | shipped | STATUS `raft-replication`, `raft-peer-mtls` |
 | Snapshot backup and cold seed | replication-and-availability.md | shipped | STATUS `admin-backup`, `cold-seed-bootstrap` |
+| Live replica membership | replication-and-availability.md | outcome | ROADMAP `live-replica-membership` |
 | Live topology transitions | replication-and-availability.md | outcome | ROADMAP `live-topology-transitions` |
 | Capacity policy | replication-and-availability.md | outcome | ROADMAP `capacity-policy` |
 | Grants, admission, and body limit | operations.md | shipped, limited | STATUS `per-queue-authorization`, `request-admission`, `request-body-limit` |
