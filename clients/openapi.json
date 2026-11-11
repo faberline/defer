@@ -25,6 +25,76 @@
         }
       }
     },
+    "/v1/admin/membership": {
+      "post": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "admin_membership",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MembershipRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/queues": {
       "get": {
         "tags": [
@@ -782,6 +852,48 @@
           },
           "message": {
             "type": "string"
+          }
+        }
+      },
+      "MembershipOp": {
+        "type": "string",
+        "enum": [
+          "add_learner",
+          "promote",
+          "demote"
+        ]
+      },
+      "MembershipRequest": {
+        "type": "object",
+        "required": [
+          "op",
+          "node"
+        ],
+        "properties": {
+          "node": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "op": {
+            "$ref": "#/components/schemas/MembershipOp"
+          },
+          "url": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "MembershipResponse": {
+        "type": "object",
+        "required": [
+          "index"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },

@@ -14,7 +14,7 @@ mod state;
 use std::sync::Arc;
 
 use axum::extract::{Extension, Path, Query, State};
-use axum::http::{header, Method, StatusCode};
+use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -26,10 +26,12 @@ use defer_access as auth;
 use defer_dispatch::DispatchDisposition;
 use defer_replication::ProposeError;
 use defer_shared_kernel::{CreateTask, QueuePolicy, SchedulerError};
+use raft_runtime::{AdmissionRefused, DemotionRefused, Index, PromotionRefused};
 
 pub use dto::{
-    CreateTasksRequest, CreateTasksResponse, PurgeQueueResponse, QueueControlRequest,
-    QueueListResponse, TaskListResponse, TaskStatusResponse,
+    CreateTasksRequest, CreateTasksResponse, MembershipOp, MembershipRequest, MembershipResponse,
+    PurgeQueueResponse, QueueControlRequest, QueueListResponse, TaskListResponse,
+    TaskStatusResponse,
 };
 pub use state::AppState;
 
@@ -78,6 +80,7 @@ fn router_inner(
         )
         .route("/v1/queues/{queue}/dispatch", post(dispatch_one))
         .route("/admin/backup", get(admin_backup))
+        .route("/v1/admin/membership", post(admin_membership))
         .route_layer(from_fn_with_state(
             verifier,
             service_auth::auth_middleware::<ReloadableRoleMapVerifier>,
@@ -641,6 +644,115 @@ pub async fn admin_backup(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/admin/membership",
+    request_body = MembershipRequest,
+    responses(
+        (status = 200, body = MembershipResponse),
+        (status = 400, body = ErrorEnvelope),
+        (status = 403, body = ErrorEnvelope),
+        (status = 409, body = ErrorEnvelope),
+        (status = 422, body = ErrorEnvelope)
+    )
+)]
+pub async fn admin_membership(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Json(request): Json<MembershipRequest>,
+) -> Response {
+    if let Err(error) = authorize(&principal, "*", Role::Admin) {
+        return error.into_response();
+    }
+    state.metrics.requests.incr();
+    let outcome: Result<Index, MembershipError> = match request.op {
+        MembershipOp::AddLearner => match request.url.filter(|url| !url.is_empty()) {
+            None => Err((
+                StatusCode::BAD_REQUEST,
+                "invalid_argument",
+                "url is required for add_learner".to_string(),
+            )),
+            Some(url) => {
+                state.raft.upsert_peer(request.node, url).await;
+                state
+                    .raft
+                    .add_learner(request.node)
+                    .await
+                    .map_err(|error| admission_refusal(&error))
+            }
+        },
+        MembershipOp::Promote => state
+            .raft
+            .promote_learner(request.node)
+            .await
+            .map_err(|error| promotion_refusal(&error)),
+        MembershipOp::Demote => state
+            .raft
+            .demote_voter(request.node)
+            .await
+            .map_err(|error| demotion_refusal(&error)),
+    };
+    match outcome {
+        Ok(index) => Json(MembershipResponse { index }).into_response(),
+        Err((status, kind, message)) => {
+            let response = ApiErr::new(status, kind, message).into_response();
+            if kind == "not_leader" {
+                with_leader_hint(response, state.raft.leader().await)
+            } else {
+                response
+            }
+        }
+    }
+}
+
+/// A refused membership change: HTTP status, error kind and message.
+type MembershipError = (StatusCode, &'static str, String);
+
+fn admission_refusal(error: &AdmissionRefused) -> MembershipError {
+    let (status, kind) = match error {
+        AdmissionRefused::Unroutable { .. } => (StatusCode::BAD_REQUEST, "invalid_argument"),
+        AdmissionRefused::NotLeaderOrTransferInFlight => (StatusCode::CONFLICT, "not_leader"),
+    };
+    (status, kind, error.to_string())
+}
+
+fn promotion_refusal(error: &PromotionRefused) -> MembershipError {
+    let (status, kind) = match error {
+        PromotionRefused::NotLeader => (StatusCode::CONFLICT, "not_leader"),
+        PromotionRefused::NotCaughtUp { .. } | PromotionRefused::TransitionInFlight => {
+            (StatusCode::CONFLICT, "retry_later")
+        }
+    };
+    (status, kind, format!("{error:?}"))
+}
+
+fn demotion_refusal(error: &DemotionRefused) -> MembershipError {
+    let (status, kind) = match error {
+        DemotionRefused::NotLeader => (StatusCode::CONFLICT, "not_leader"),
+        DemotionRefused::TransitionInFlight => (StatusCode::CONFLICT, "retry_later"),
+        DemotionRefused::IsTheLeader { .. }
+        | DemotionRefused::NotAVoter { .. }
+        | DemotionRefused::ToleranceWouldDrop { .. }
+        | DemotionRefused::WouldEmptyVoterSet { .. } => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "membership_refused")
+        }
+    };
+    (status, kind, format!("{error:?}"))
+}
+
+/// Adds the `x-defer-leader` header (the leader's node id) to a 409
+/// `not_leader` response when the leader is known.
+fn with_leader_hint(mut response: Response, leader: Option<u64>) -> Response {
+    if let Some(id) = leader {
+        if let Ok(value) = HeaderValue::from_str(&id.to_string()) {
+            response
+                .headers_mut()
+                .insert(HeaderName::from_static("x-defer-leader"), value);
+        }
+    }
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,6 +789,16 @@ mod tests {
             next_page_token: Some("q2".into()),
         };
         assert_eq!(response_with_token.next_page_token.as_deref(), Some("q2"));
+    }
+
+    #[test]
+    fn leader_hint_header_is_set_only_when_leader_is_known() {
+        let hinted = with_leader_hint(StatusCode::CONFLICT.into_response(), Some(7));
+        assert_eq!(hinted.status(), StatusCode::CONFLICT);
+        assert_eq!(hinted.headers().get("x-defer-leader").unwrap(), "7");
+        let unhinted = with_leader_hint(StatusCode::CONFLICT.into_response(), None);
+        assert_eq!(unhinted.status(), StatusCode::CONFLICT);
+        assert!(unhinted.headers().get("x-defer-leader").is_none());
     }
 }
 // HANDWRITE-END
