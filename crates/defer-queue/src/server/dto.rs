@@ -58,6 +58,7 @@ pub enum MembershipOp {
     AddLearner,
     Promote,
     Demote,
+    Remove,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

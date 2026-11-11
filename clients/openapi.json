@@ -860,7 +860,8 @@
         "enum": [
           "add_learner",
           "promote",
-          "demote"
+          "demote",
+          "remove"
         ]
       },
       "MembershipRequest": {
