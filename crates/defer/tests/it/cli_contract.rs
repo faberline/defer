@@ -18,6 +18,7 @@ const EXPECTED_DOMAIN_OPERATIONS: &[&str] = &[
     "GET /v1/queues/{queue}",
     "GET /v1/queues/{queue}/tasks",
     "GET /v1/queues/{queue}/tasks/{task_id}",
+    "POST /v1/admin/membership",
     "POST /v1/queues/{queue}/control",
     "POST /v1/queues/{queue}/dispatch",
     "POST /v1/queues/{queue}/purge",
@@ -390,7 +391,8 @@ fn offline_spec_and_typed_client_generation_use_one_contract() {
             "GET /v1/queues/{queue}/tasks/{task_id}",
             "DELETE /v1/queues/{queue}/tasks/{task_id}",
             "POST /v1/queues/{queue}/dispatch",
-            "GET /admin/backup"
+            "GET /admin/backup",
+            "POST /v1/admin/membership"
         ])
     );
     let mut route_ops = routes["routes"]

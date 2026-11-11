@@ -21,6 +21,7 @@ use utoipa::OpenApi;
         crate::server::task_list,
         crate::server::dispatch_one,
         crate::server::admin_backup,
+        crate::server::admin_membership,
     ),
     components(schemas(
         defer_shared_kernel::Target,
@@ -38,6 +39,9 @@ use utoipa::OpenApi;
         crate::server::TaskStatusResponse,
         crate::server::PurgeQueueResponse,
         crate::server::TaskListResponse,
+        crate::server::MembershipRequest,
+        crate::server::MembershipResponse,
+        crate::server::MembershipOp,
         service_http::ErrorEnvelope,
     ))
 )]

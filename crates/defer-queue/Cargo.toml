@@ -17,6 +17,7 @@ defer-dispatch.workspace = true
 defer-replication.workspace = true
 defer-shared-kernel.workspace = true
 metrics-prometheus.workspace = true
+raft-runtime.workspace = true
 serde.workspace = true
 server-lifecycle.workspace = true
 service-auth.workspace = true

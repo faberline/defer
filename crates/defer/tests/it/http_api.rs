@@ -86,6 +86,7 @@ const EXPECTED_DOMAIN_OPERATIONS: &[&str] = &[
     "GET /v1/queues/{queue}",
     "GET /v1/queues/{queue}/tasks",
     "GET /v1/queues/{queue}/tasks/{task_id}",
+    "POST /v1/admin/membership",
     "POST /v1/queues/{queue}/control",
     "POST /v1/queues/{queue}/dispatch",
     "POST /v1/queues/{queue}/purge",
@@ -1293,6 +1294,95 @@ async fn metrics_expose_per_queue_task_depth_gauges() {
 
     target.abort();
     open_server.abort();
+}
+
+/// #86: `POST /v1/admin/membership` needs the Admin role on `*`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn membership_requires_admin_role() {
+    let (_dir, raft) = raft().await;
+    let registry = serde_json::json!({
+        "reader": {"subject": "reader", "roles": {"jobs": "read"}},
+        "admin": {"subject": "admin", "roles": {"*": "admin"}}
+    })
+    .to_string();
+    let auth = AuthConfig::resolve("required", None, Some(&registry)).unwrap();
+    let (url, server) = start(raft, auth).await;
+    let client = h2c_client();
+    let body = serde_json::json!({"op": "demote", "node": 0});
+
+    let no_token = client
+        .post(format!("{url}/v1/admin/membership"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(no_token.status(), StatusCode::UNAUTHORIZED);
+
+    let reader = client
+        .post(format!("{url}/v1/admin/membership"))
+        .bearer_auth("reader")
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reader.status(), StatusCode::FORBIDDEN);
+    server.abort();
+}
+
+/// #86: `add_learner` needs a `url` for the new peer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn membership_add_learner_without_url_is_400() {
+    let (_dir, raft) = raft().await;
+    let (url, server) = start(raft, AuthConfig::resolve("off", None, None).unwrap()).await;
+    let response = h2c_client()
+        .post(format!("{url}/v1/admin/membership"))
+        .json(&serde_json::json!({"op": "add_learner", "node": 1}))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(response, StatusCode::BAD_REQUEST, "invalid_argument").await;
+    server.abort();
+}
+
+/// #86: the single voter cannot demote itself; the refusal is 422.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn membership_demote_leader_is_422() {
+    let (_dir, raft) = raft().await;
+    let (url, server) = start(raft, AuthConfig::resolve("off", None, None).unwrap()).await;
+    let response = h2c_client()
+        .post(format!("{url}/v1/admin/membership"))
+        .json(&serde_json::json!({"op": "demote", "node": 0}))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(
+        response,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "membership_refused",
+    )
+    .await;
+    server.abort();
+}
+
+/// #86: a routable learner is admitted and the response carries the log index.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn membership_add_learner_returns_index() {
+    let (_dir, raft) = raft().await;
+    let (url, server) = start(raft, AuthConfig::resolve("off", None, None).unwrap()).await;
+    let response = h2c_client()
+        .post(format!("{url}/v1/admin/membership"))
+        .json(&serde_json::json!({
+            "op": "add_learner",
+            "node": 1,
+            "url": "http://127.0.0.1:1"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert!(body["index"].is_u64(), "index must be a number: {body}");
+    server.abort();
 }
 // </HANDWRITE>
 // HANDWRITE-END

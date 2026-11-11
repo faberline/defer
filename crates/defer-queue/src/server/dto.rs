@@ -38,6 +38,27 @@ pub struct PurgeQueueResponse {
     pub purged: usize,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct MembershipRequest {
+    pub op: MembershipOp,
+    pub node: u64,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MembershipOp {
+    AddLearner,
+    Promote,
+    Demote,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MembershipResponse {
+    pub index: u64,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct TaskListResponse {
     pub tasks: Vec<TaskStatusResponse>,

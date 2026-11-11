@@ -100,7 +100,8 @@ pub(crate) fn run(args: SpecArgs) -> Result<()> {
                     "GET /v1/queues/{queue}/tasks",
                     "POST /v1/queues/{queue}/tasks:batch",
                     "GET /v1/queues/{queue}/tasks/{task_id}", "DELETE /v1/queues/{queue}/tasks/{task_id}",
-                    "POST /v1/queues/{queue}/dispatch", "GET /admin/backup"
+                    "POST /v1/queues/{queue}/dispatch", "GET /admin/backup",
+                    "POST /v1/admin/membership"
                 ]
             }))?
         ),
