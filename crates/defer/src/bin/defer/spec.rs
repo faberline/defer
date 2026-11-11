@@ -50,7 +50,7 @@ enum GenHttp {
     Axios,
 }
 
-// <HANDWRITE gap="missing-generator:logic" tracker="#2219" reason="Own the offline OpenAPI/routes projection and exact nine-operation route twin emitted from the Defer CLI.">
+// <HANDWRITE gap="missing-generator:logic" tracker="#2219" reason="Own the offline OpenAPI/routes projection and the route twin derived from the OpenAPI document, emitted from the Defer CLI.">
 pub(crate) fn run(args: SpecArgs) -> Result<()> {
     let json = defer::openapi::openapi().to_pretty_json()?;
     if let Some(SpecSubcommand::Gen(args)) = args.gen {
@@ -93,15 +93,7 @@ pub(crate) fn run(args: SpecArgs) -> Result<()> {
         SpecFormat::Routes => println!(
             "{}",
             serde_json::to_string_pretty(&json!({
-                "routes": [
-                    "GET /v1/queues", "PUT /v1/queues/{queue}", "GET /v1/queues/{queue}", "DELETE /v1/queues/{queue}",
-                    "POST /v1/queues/{queue}/control", "POST /v1/queues/{queue}/purge",
-                    "POST /v1/queues/{queue}/tasks",
-                    "GET /v1/queues/{queue}/tasks",
-                    "POST /v1/queues/{queue}/tasks:batch",
-                    "GET /v1/queues/{queue}/tasks/{task_id}", "DELETE /v1/queues/{queue}/tasks/{task_id}",
-                    "POST /v1/queues/{queue}/dispatch", "GET /admin/backup"
-                ]
+                "routes": defer::openapi::operations()
             }))?
         ),
     }

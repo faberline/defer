@@ -1425,6 +1425,7 @@ dependencies = [
  "defer-shared-kernel",
  "metrics-prometheus",
  "serde",
+ "serde_json",
  "server-lifecycle",
  "service-auth",
  "service-http",
