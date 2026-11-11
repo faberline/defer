@@ -26,7 +26,7 @@ use defer_access as auth;
 use defer_dispatch::DispatchDisposition;
 use defer_replication::ProposeError;
 use defer_shared_kernel::{CreateTask, QueuePolicy, SchedulerError};
-use raft_runtime::{AdmissionRefused, DemotionRefused, Index, PromotionRefused};
+use raft_runtime::{AdmissionRefused, DemotionRefused, Index, PromotionRefused, RemovalRefused};
 
 pub use dto::{
     CreateTasksRequest, CreateTasksResponse, MembershipOp, MembershipRequest, MembershipResponse,
@@ -691,6 +691,11 @@ pub async fn admin_membership(
             .demote_voter(request.node)
             .await
             .map_err(|error| demotion_refusal(&error)),
+        MembershipOp::Remove => state
+            .raft
+            .remove_member(request.node)
+            .await
+            .map_err(|error| removal_refusal(&error)),
     };
     match outcome {
         Ok(index) => Json(MembershipResponse { index }).into_response(),
@@ -734,6 +739,20 @@ fn demotion_refusal(error: &DemotionRefused) -> MembershipError {
         | DemotionRefused::NotAVoter { .. }
         | DemotionRefused::ToleranceWouldDrop { .. }
         | DemotionRefused::WouldEmptyVoterSet { .. } => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "membership_refused")
+        }
+    };
+    (status, kind, format!("{error:?}"))
+}
+
+fn removal_refusal(error: &RemovalRefused) -> MembershipError {
+    let (status, kind) = match error {
+        RemovalRefused::NotLeader => (StatusCode::CONFLICT, "not_leader"),
+        RemovalRefused::TransitionInFlight => (StatusCode::CONFLICT, "retry_later"),
+        RemovalRefused::NotAMember { .. }
+        | RemovalRefused::IsTheLeader { .. }
+        | RemovalRefused::ToleranceWouldDrop { .. }
+        | RemovalRefused::WouldEmptyVoterSet { .. } => {
             (StatusCode::UNPROCESSABLE_ENTITY, "membership_refused")
         }
     };

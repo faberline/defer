@@ -17,7 +17,7 @@ use defer_shared_kernel::{
 };
 use raft_runtime::{
     AdmissionRefused, ClusterTopology, DemotionRefused, HostConfig, Index, Membership, NodeId,
-    PeerTransport, PromotionRefused, RaftHost, RaftStateMachine, SnapshotPolicy,
+    PeerTransport, PromotionRefused, RaftHost, RaftStateMachine, RemovalRefused, SnapshotPolicy,
 };
 
 use super::command::{DeferCommand, DeferEnvelope, DeferOutcome, ProposalId};
@@ -395,6 +395,10 @@ impl DeferRaft {
 
     pub async fn demote_voter(&self, target: NodeId) -> Result<Index, DemotionRefused> {
         self.host.demote_voter(target).await
+    }
+
+    pub async fn remove_member(&self, target: NodeId) -> Result<Index, RemovalRefused> {
+        self.host.remove_member(target).await
     }
 
     pub fn applied_index(&self) -> Index {
