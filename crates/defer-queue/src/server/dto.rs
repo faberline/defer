@@ -43,4 +43,25 @@ pub struct TaskListResponse {
     pub tasks: Vec<TaskStatusResponse>,
     pub next_cursor: Option<String>,
 }
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct MembershipRequest {
+    pub op: MembershipOp,
+    pub node: u64,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MembershipOp {
+    AddLearner,
+    Promote,
+    Demote,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MembershipResponse {
+    pub index: u64,
+}
 // HANDWRITE-END

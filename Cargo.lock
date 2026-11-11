@@ -1424,6 +1424,7 @@ dependencies = [
  "defer-replication",
  "defer-shared-kernel",
  "metrics-prometheus",
+ "raft-runtime",
  "serde",
  "serde_json",
  "server-lifecycle",
