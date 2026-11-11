@@ -38,7 +38,7 @@ custom resource and the shared Raft runtime carry the state they need.
 - Boundary: Defer carries no membership-change engine of its own; the
   renderer lifts the `shardCount: 1` pin only when the shared Raft runtime
   offers a live membership actuator defer can call. Task identity and
-  idempotency keys do not change shape when a queue moves between shards.
+  idempotency keys do not change shape when a queue moves between shards. The operator drives replica changes; the first pull request adds only the pure step plan, and the actuator wiring waits for the shared runtime (#84).
 - Completion evidence: A cluster acceptance run drives the 1x1 to 3x3 to 1x1
   path under load and proves every task created before the transition
   reaches exactly one terminal state afterwards.

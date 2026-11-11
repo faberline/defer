@@ -61,8 +61,7 @@ not carry yet.
 - Non-goals: a membership-change engine of defer's own; the renderer lifts
   the `shardCount: 1` pin only when the shared Raft runtime offers a live
   membership actuator defer can call.
-- Open: whether the transition is driven by the operator alone or needs a
-  queue-to-shard placement map in the custom resource.
+- Decided: the replica-change driver runs in the operator (reconcile step), one whole replica layer per generation. The pure plan is `defer_operator::plan_replica_change`. Wiring it to a live membership actuator is [#84](https://github.com/faberline/defer/issues/84) and waits for the answer in faberline/core#181. Shard split and merge is [#83](https://github.com/faberline/defer/issues/83).
 - Neighbours: extends Replicated group with peer mTLS; the evidence is a
   cluster run from [operations.md](operations.md) § Kubernetes operator and
   direct install.

@@ -1,0 +1,30 @@
+# What the suite does in the run's namespace, and nothing cluster-wide: it
+# only reads pod defer-0 (`kubectl get pod defer-0`) to wait for it to be
+# Ready. It does not exec into or delete any pod.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: defer-e2e
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: defer-e2e
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: defer-e2e
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: defer-e2e
+subjects:
+  - kind: ServiceAccount
+    name: defer-e2e
+    namespace: defer
