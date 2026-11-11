@@ -1402,14 +1402,17 @@ name = "defer-operator"
 version = "0.4.13"
 dependencies = [
  "anyhow",
+ "axum 0.8.9",
  "k8s-openapi",
  "kube",
+ "reqwest",
  "schemars",
  "serde",
  "serde_json",
  "serde_yaml",
  "service-backup",
  "service-k8s",
+ "tokio",
 ]
 
 [[package]]
