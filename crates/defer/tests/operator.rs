@@ -393,4 +393,256 @@ fn tokens_secret_csi_driver_overrides_the_default_csi_driver_name() {
         "defer-registry-csi"
     );
 }
+
+#[test]
+fn generated_crd_carries_limits() {
+    let yaml = operator::crd_yaml();
+    for field in ["limits:", "cpu:", "memory:"] {
+        assert!(yaml.contains(field), "CRD is missing {field}");
+    }
+}
+
+/// Specifying `spec.limits` renders `resources.limits` on the StatefulSet
+/// serving container while keeping the configured `requests`. Omitting
+/// `limits` or providing empty entries renders no `limits` key.
+#[test]
+fn render_limits_on_statefulset_container() {
+    // 1. When limits are set, they appear alongside existing requests.
+    let mut defer = production();
+    defer.spec.limits = Some(operator::DeferResourceLimits {
+        cpu: Some("4".into()),
+        memory: Some("16Gi".into()),
+    });
+    let objects = operator::render::render(&defer);
+    let stateful = object(&objects, "StatefulSet", "jobs");
+    let container = &stateful["spec"]["template"]["spec"]["containers"][0];
+    assert_eq!(
+        container["resources"]["requests"],
+        json!({"cpu": "2", "memory": "8Gi"})
+    );
+    assert_eq!(
+        container["resources"]["limits"],
+        json!({"cpu": "4", "memory": "16Gi"})
+    );
+
+    // 2. When limits is unset (production default), no limits key is rendered.
+    let objects_unset = operator::render::render(&production());
+    let stateful_unset = object(&objects_unset, "StatefulSet", "jobs");
+    let container_unset = &stateful_unset["spec"]["template"]["spec"]["containers"][0];
+    assert_eq!(
+        container_unset["resources"]["requests"],
+        json!({"cpu": "2", "memory": "8Gi"})
+    );
+    assert!(
+        container_unset["resources"].get("limits").is_none(),
+        "limits key must be absent when unset"
+    );
+
+    // 3. When limits has both entries None or empty, no limits key is rendered.
+    let mut defer_empty = production();
+    defer_empty.spec.limits = Some(operator::DeferResourceLimits {
+        cpu: None,
+        memory: None,
+    });
+    let objects_empty = operator::render::render(&defer_empty);
+    let stateful_empty = object(&objects_empty, "StatefulSet", "jobs");
+    let container_empty = &stateful_empty["spec"]["template"]["spec"]["containers"][0];
+    assert!(
+        container_empty["resources"].get("limits").is_none(),
+        "limits key must be absent when entries are None"
+    );
+
+    let mut defer_blank = production();
+    defer_blank.spec.limits = Some(operator::DeferResourceLimits {
+        cpu: Some("  ".into()),
+        memory: Some("".into()),
+    });
+    let objects_blank = operator::render::render(&defer_blank);
+    let stateful_blank = object(&objects_blank, "StatefulSet", "jobs");
+    let container_blank = &stateful_blank["spec"]["template"]["spec"]["containers"][0];
+    assert!(
+        container_blank["resources"].get("limits").is_none(),
+        "limits key must be absent when entries are whitespace/empty"
+    );
+}
+
+/// When a limit quantity is lower than the matching request (e.g. CPU 500m < 2
+/// or memory 4Gi < 8Gi), the operator does not render the lower limit silently:
+/// it raises the limit to the request quantity.
+#[test]
+fn limits_lower_than_requests_are_raised_to_requests() {
+    let mut defer = production();
+    // Requests in production() are cpu: "2" (2000m) and memory: "8Gi"
+    defer.spec.limits = Some(operator::DeferResourceLimits {
+        cpu: Some("500m".into()),
+        memory: Some("4Gi".into()),
+    });
+    let objects = operator::render::render(&defer);
+    let stateful = object(&objects, "StatefulSet", "jobs");
+    let container = &stateful["spec"]["template"]["spec"]["containers"][0];
+    assert_eq!(
+        container["resources"]["requests"],
+        json!({"cpu": "2", "memory": "8Gi"})
+    );
+    assert_eq!(
+        container["resources"]["limits"],
+        json!({"cpu": "2", "memory": "8Gi"}),
+        "limits lower than requests must be raised to match the request"
+    );
+
+    // Also verify plain cores form: limit 1 core < request 2 cores
+    let mut defer_cores = production();
+    defer_cores.spec.limits = Some(operator::DeferResourceLimits {
+        cpu: Some("1".into()),
+        memory: Some("16Gi".into()),
+    });
+    let objects_cores = operator::render::render(&defer_cores);
+    let stateful_cores = object(&objects_cores, "StatefulSet", "jobs");
+    let container_cores = &stateful_cores["spec"]["template"]["spec"]["containers"][0];
+    assert_eq!(container_cores["resources"]["limits"]["cpu"], "2");
+    assert_eq!(container_cores["resources"]["limits"]["memory"], "16Gi");
+}
+
+/// #32: Two declared queues reach the pod env with policy and control translated to the serve shape.
+#[test]
+fn declared_queues_reach_the_pod_env_with_policy_and_control_translated() {
+    let defer: Defer = serde_json::from_value(json!({
+        "apiVersion": "defer.dev/v1alpha1",
+        "kind": "Defer",
+        "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+        "spec": {
+            "image": "registry/defer:1",
+            "replicasPerShard": 3,
+            "voterCount": 3,
+            "queues": [
+                {
+                    "name": "high-priority",
+                    "policy": {
+                        "maxInFlight": 50,
+                        "leaseTtlMs": 10000
+                    },
+                    "control": "Running"
+                },
+                {
+                    "name": "background",
+                    "policy": {
+                        "maxBurstSize": 200,
+                        "retryBackoffMs": 5000
+                    },
+                    "control": "Paused"
+                }
+            ]
+        }
+    }))
+    .unwrap();
+    let objects = operator::render::render(&defer);
+    let stateful = object(&objects, "StatefulSet", "jobs");
+    let env = &stateful["spec"]["template"]["spec"]["containers"][0]["env"];
+    let env_entry = named(env, "DEFER_DECLARED_QUEUES");
+    let val: serde_json::Value =
+        serde_json::from_str(env_entry["value"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        val,
+        json!([
+            {
+                "name": "high-priority",
+                "policy": {
+                    "max_in_flight": 50,
+                    "lease_ttl_ms": 10000
+                },
+                "control": "Running"
+            },
+            {
+                "name": "background",
+                "policy": {
+                    "max_burst_size": 200,
+                    "retry_backoff_ms": 5000
+                },
+                "control": "Paused"
+            }
+        ])
+    );
+}
+
+/// #32: An empty or omitted `queues` adds no `DEFER_DECLARED_QUEUES` env var.
+#[test]
+fn empty_or_omitted_queues_adds_no_env_var() {
+    let defer_omitted: Defer = serde_json::from_value(json!({
+        "apiVersion": "defer.dev/v1alpha1",
+        "kind": "Defer",
+        "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+        "spec": {
+            "image": "registry/defer:1",
+            "replicasPerShard": 3,
+            "voterCount": 3
+        }
+    }))
+    .unwrap();
+    let objects_omitted = operator::render::render(&defer_omitted);
+    let stateful_omitted = object(&objects_omitted, "StatefulSet", "jobs");
+    let env_omitted = &stateful_omitted["spec"]["template"]["spec"]["containers"][0]["env"];
+    assert!(env_omitted
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["name"] != "DEFER_DECLARED_QUEUES"));
+
+    let defer_empty: Defer = serde_json::from_value(json!({
+        "apiVersion": "defer.dev/v1alpha1",
+        "kind": "Defer",
+        "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+        "spec": {
+            "image": "registry/defer:1",
+            "replicasPerShard": 3,
+            "voterCount": 3,
+            "queues": []
+        }
+    }))
+    .unwrap();
+    let objects_empty = operator::render::render(&defer_empty);
+    let stateful_empty = object(&objects_empty, "StatefulSet", "jobs");
+    let env_empty = &stateful_empty["spec"]["template"]["spec"]["containers"][0]["env"];
+    assert!(env_empty
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["name"] != "DEFER_DECLARED_QUEUES"));
+}
+
+/// #32: A CR fixture without `queues` still deserializes.
+#[test]
+fn cr_fixture_without_queues_still_deserializes() {
+    let defer: Defer = serde_json::from_value(json!({
+        "apiVersion": "defer.dev/v1alpha1",
+        "kind": "Defer",
+        "metadata": {"name": "legacy", "namespace": "default"},
+        "spec": {
+            "image": "registry/defer:1",
+            "replicasPerShard": 1,
+            "voterCount": 1
+        }
+    }))
+    .expect("CR fixture without queues must deserialize");
+    assert!(defer.spec.queues.is_empty());
+}
+
+/// #32: The generated CRD carries the schema for `spec.queues`.
+#[test]
+fn generated_crd_carries_declared_queues_schema() {
+    let yaml = operator::crd_yaml();
+    for field in [
+        "queues:",
+        "maxInFlight:",
+        "maxDispatchPerTick:",
+        "maxDispatchesPerSecond:",
+        "maxBurstSize:",
+        "leaseTtlMs:",
+        "retryBackoffMs:",
+        "Running",
+        "Paused",
+        "Disabled",
+    ] {
+        assert!(yaml.contains(field), "CRD is missing {field}");
+    }
+}
 // HANDWRITE-END

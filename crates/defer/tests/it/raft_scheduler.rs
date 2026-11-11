@@ -4,7 +4,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
-use defer::{CreateTask, DeferRaft, DeferScheduler, NackOutcome, QueuePolicy, Target, TaskStatus};
+use defer::{
+    ensure_declared_queues, CreateTask, DeclaredQueue, DeclaredQueueDecision, DeferRaft,
+    DeferScheduler, NackOutcome, QueueControlState, QueuePolicy, Target, TaskStatus,
+};
 use raft_runtime::Membership;
 
 struct Node {
@@ -196,6 +199,7 @@ fn task(id: &str, at: chrono::DateTime<Utc>) -> CreateTask {
         schedule_at: at,
         priority: 10,
         max_attempts: 3,
+        dispatch_deadline_ms: None,
     }
 }
 
@@ -603,6 +607,274 @@ async fn dead_letter_terminal_state_converges_and_survives_restart() {
 
     cluster.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn queue_purge_converges_on_followers_and_survives_restart() {
+    let now = Utc.timestamp_millis_opt(30_000).unwrap();
+    let mut cluster = Cluster::new(3).await;
+    cluster.start_all();
+    let leader = cluster.wait_leader().await;
+    let follower = cluster
+        .live()
+        .map(|(id, _)| id)
+        .find(|id| *id != leader)
+        .unwrap();
+
+    let custom_policy = QueuePolicy {
+        max_in_flight: 42,
+        ..QueuePolicy::default()
+    };
+    cluster
+        .raft(leader)
+        .configure_queue("jobs".into(), custom_policy.clone())
+        .await
+        .unwrap();
+    cluster
+        .raft(leader)
+        .create_task("jobs".into(), task("task-one", now))
+        .await
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let count = cluster
+            .raft(follower)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot("jobs")
+            .map(|s| s.task_count)
+            .unwrap_or(0);
+        if count == 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "task did not appear on follower before purge"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let purged = cluster
+        .raft(leader)
+        .purge_queue("jobs".into())
+        .await
+        .unwrap();
+    assert_eq!(purged, 1);
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let snap = cluster
+            .raft(follower)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot("jobs");
+        if let Ok(snap) = snap {
+            if snap.task_count == 0 {
+                assert_eq!(snap.policy, custom_policy);
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "queue did not become empty on follower"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    // A task created after the purge is later in the log. Wait for it on the
+    // restarted node before asserting the purge, so the check runs only after
+    // that node has replayed past `PurgeQueue`.
+    cluster
+        .raft(leader)
+        .create_task("jobs".into(), task("task-two", now))
+        .await
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let present = cluster
+            .raft(follower)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .status("jobs", "task-two")
+            .unwrap()
+            .is_some();
+        if present {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "task-two did not appear on follower after purge"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let restart_id = follower;
+    cluster.kill(restart_id).await;
+    cluster.start_node(restart_id);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let present = cluster
+            .raft(restart_id)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .status("jobs", "task-two")
+            .unwrap()
+            .is_some();
+        if present {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "task-two did not replicate to restarted node"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    {
+        let scheduler = cluster.raft(restart_id).scheduler();
+        let scheduler = scheduler.lock().unwrap();
+        let snap = scheduler.queue_snapshot("jobs").unwrap();
+        assert_eq!(snap.task_count, 1, "purge was lost on restart");
+        assert_eq!(snap.policy, custom_policy);
+        assert!(scheduler.status("jobs", "task-one").unwrap().is_none());
+    }
+
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn queue_delete_converges_on_followers_and_survives_restart() {
+    let now = Utc.timestamp_millis_opt(30_000).unwrap();
+    let mut cluster = Cluster::new(3).await;
+    cluster.start_all();
+    let leader = cluster.wait_leader().await;
+    let follower = cluster
+        .live()
+        .map(|(id, _)| id)
+        .find(|id| *id != leader)
+        .unwrap();
+
+    cluster
+        .raft(leader)
+        .configure_queue("jobs".into(), QueuePolicy::default())
+        .await
+        .unwrap();
+    cluster
+        .raft(leader)
+        .create_task("jobs".into(), task("task-one", now))
+        .await
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let count = cluster
+            .raft(follower)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot("jobs")
+            .map(|s| s.task_count)
+            .unwrap_or(0);
+        if count == 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "task did not appear on follower before delete"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    cluster
+        .raft(leader)
+        .delete_queue("jobs".into())
+        .await
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let exists = cluster
+            .raft(follower)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot("jobs")
+            .is_ok();
+        if !exists {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "queue did not disappear on follower"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    // A marker queue created after the delete is later in the log. Wait for it
+    // on each node before asserting that `jobs` is gone, so the check runs only
+    // after that node has replayed past the delete.
+    cluster
+        .raft(leader)
+        .configure_queue("marker".into(), QueuePolicy::default())
+        .await
+        .unwrap();
+
+    let restart_id = follower;
+    cluster.kill(restart_id).await;
+    cluster.start_node(restart_id);
+    wait_queue_present(&cluster, restart_id, "marker").await;
+    assert!(
+        cluster
+            .raft(restart_id)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot("jobs")
+            .is_err(),
+        "deleted queue reappeared on restarted node"
+    );
+
+    let live: Vec<usize> = cluster.live().map(|(id, _)| id).collect();
+    for id in live {
+        wait_queue_present(&cluster, id, "marker").await;
+        assert!(
+            cluster
+                .raft(id)
+                .scheduler()
+                .lock()
+                .unwrap()
+                .queue_snapshot("jobs")
+                .is_err(),
+            "deleted queue must be gone on live node {id}"
+        );
+    }
+
+    cluster.shutdown().await;
+}
+
+async fn wait_queue_present(cluster: &Cluster, id: usize, queue: &str) {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let present = cluster
+            .raft(id)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot(queue)
+            .is_ok();
+        if present {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "queue {queue} did not replicate to node {id}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
 // </HANDWRITE>
 
 // <HANDWRITE gap="missing-generator:unit-test" tracker="#12" reason="Own repeated leader failover, full cluster restart, and progress convergence across replicas.">
@@ -791,6 +1063,212 @@ async fn repeated_failover_and_full_restart_keep_committed_state_and_progress() 
     cluster
         .wait_status("t3", |status| matches!(status, TaskStatus::Scheduled))
         .await;
+
+    cluster.shutdown().await;
+}
+// </HANDWRITE>
+
+// <HANDWRITE gap="missing-generator:unit-test" tracker="#17" reason="Own real three-node proofs that declared queues go through the Raft log, reach followers, survive restarts with no client traffic, and that a changed declaration converges on every node.">
+async fn wait_queue(
+    cluster: &Cluster,
+    queue: &str,
+    policy: &QueuePolicy,
+    control: QueueControlState,
+) {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let converged = cluster.live().all(|(_, node)| {
+            node.raft
+                .scheduler()
+                .lock()
+                .unwrap()
+                .queue_snapshot(queue)
+                .is_ok_and(|s| s.policy == *policy && s.control_state == control)
+        });
+        if converged {
+            return;
+        }
+        assert!(Instant::now() < deadline, "declared queue did not converge");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn declared_queues_go_through_the_log_reach_followers_and_survive_restarts() {
+    let declared = vec![
+        DeclaredQueue {
+            name: "jobs".into(),
+            policy: QueuePolicy {
+                retry_backoff_ms: 7,
+                ..QueuePolicy::default()
+            },
+            control: QueueControlState::Paused,
+        },
+        DeclaredQueue {
+            name: "mail".into(),
+            policy: QueuePolicy::default(),
+            control: QueueControlState::Running,
+        },
+    ];
+    let mut cluster = Cluster::new(3).await;
+    cluster.start_all();
+    let leader = cluster.wait_leader().await;
+    let follower = cluster
+        .live()
+        .map(|(id, _)| id)
+        .find(|id| *id != leader)
+        .unwrap();
+
+    let before = cluster.raft(follower).applied_index();
+    let outcomes = ensure_declared_queues(cluster.raft(leader).as_ref(), &declared)
+        .await
+        .unwrap();
+    assert_eq!(outcomes.len(), 2);
+    assert!(outcomes
+        .iter()
+        .all(|outcome| outcome.decision == DeclaredQueueDecision::Created));
+
+    // The queues exist on the follower, not only on the leader.
+    wait_queue(
+        &cluster,
+        "jobs",
+        &declared[0].policy,
+        QueueControlState::Paused,
+    )
+    .await;
+    wait_queue(
+        &cluster,
+        "mail",
+        &declared[1].policy,
+        QueueControlState::Running,
+    )
+    .await;
+
+    // The follower's Raft log advanced: the state came through the log.
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while cluster.raft(follower).applied_index() <= before {
+        assert!(
+            Instant::now() < deadline,
+            "follower applied index did not advance"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    // A restarted follower replays its log with no client traffic.
+    cluster.kill(follower).await;
+    cluster.start_node(follower);
+    wait_queue(
+        &cluster,
+        "jobs",
+        &declared[0].policy,
+        QueueControlState::Paused,
+    )
+    .await;
+    wait_queue(
+        &cluster,
+        "mail",
+        &declared[1].policy,
+        QueueControlState::Running,
+    )
+    .await;
+
+    // A full restart of all three nodes keeps the queues from durable state only.
+    for id in 0..3 {
+        cluster.kill(id).await;
+    }
+    cluster.start_all();
+    cluster.wait_leader().await;
+    wait_queue(
+        &cluster,
+        "jobs",
+        &declared[0].policy,
+        QueueControlState::Paused,
+    )
+    .await;
+    wait_queue(
+        &cluster,
+        "mail",
+        &declared[1].policy,
+        QueueControlState::Running,
+    )
+    .await;
+
+    for (_, node) in cluster.live() {
+        let task_count = node
+            .raft
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot("jobs")
+            .unwrap()
+            .task_count;
+        assert_eq!(task_count, 0);
+    }
+
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn changed_declaration_converges_on_every_node_after_a_restart() {
+    let first = vec![DeclaredQueue {
+        name: "jobs".into(),
+        policy: QueuePolicy {
+            retry_backoff_ms: 7,
+            ..QueuePolicy::default()
+        },
+        control: QueueControlState::Paused,
+    }];
+    let mut cluster = Cluster::new(3).await;
+    cluster.start_all();
+    let leader = cluster.wait_leader().await;
+    ensure_declared_queues(cluster.raft(leader).as_ref(), &first)
+        .await
+        .unwrap();
+    wait_queue(
+        &cluster,
+        "jobs",
+        &first[0].policy,
+        QueueControlState::Paused,
+    )
+    .await;
+
+    // Restart the leader, then change the declaration on the new leader.
+    cluster.kill(leader).await;
+    cluster.start_node(leader);
+    let new_leader = cluster.wait_leader().await;
+
+    let second = vec![DeclaredQueue {
+        name: "jobs".into(),
+        policy: QueuePolicy {
+            retry_backoff_ms: 9,
+            ..QueuePolicy::default()
+        },
+        control: QueueControlState::Running,
+    }];
+    let outcomes = ensure_declared_queues(cluster.raft(new_leader).as_ref(), &second)
+        .await
+        .unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].decision, DeclaredQueueDecision::Updated);
+
+    let changed_policy = QueuePolicy {
+        retry_backoff_ms: 9,
+        ..QueuePolicy::default()
+    };
+    wait_queue(
+        &cluster,
+        "jobs",
+        &changed_policy,
+        QueueControlState::Running,
+    )
+    .await;
+
+    // The same declaration again changes nothing.
+    let repeat = ensure_declared_queues(cluster.raft(new_leader).as_ref(), &second)
+        .await
+        .unwrap();
+    assert_eq!(repeat.len(), 1);
+    assert_eq!(repeat[0].decision, DeclaredQueueDecision::Unchanged);
 
     cluster.shutdown().await;
 }

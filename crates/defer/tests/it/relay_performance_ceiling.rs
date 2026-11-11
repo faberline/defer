@@ -16,7 +16,7 @@ use service_observability::process_usage;
 const BATCHES: usize = 10;
 const BATCH_SIZE: usize = 100;
 const PAYLOAD_BYTES: usize = 128;
-const MIN_DEFER_TO_RELAY_RATIO: f64 = 0.80;
+pub(crate) const MIN_DEFER_TO_RELAY_RATIO: f64 = 0.80;
 const CONTRACT: &str = include_str!("../../../../benchmarks/relay-performance-ceiling.md");
 
 fn sole_voter() -> Membership {
@@ -136,6 +136,7 @@ async fn defer_stays_within_twenty_percent_of_relay_scheduler_ceiling() {
                 max_burst_size: total,
                 lease_ttl_ms: 30_000,
                 retry_backoff_ms: 1_000,
+                ..QueuePolicy::default()
             },
         )
         .await
@@ -178,6 +179,7 @@ async fn defer_stays_within_twenty_percent_of_relay_scheduler_ceiling() {
                 schedule_at: now,
                 priority: 10,
                 max_attempts: 3,
+                dispatch_deadline_ms: None,
             })
             .collect();
         assert_eq!(

@@ -11,7 +11,9 @@ use utoipa::OpenApi;
         crate::server::queue_list,
         crate::server::queue_get,
         crate::server::queue_put,
+        crate::server::queue_delete,
         crate::server::queue_control,
+        crate::server::queue_purge,
         crate::server::task_create,
         crate::server::task_create_batch,
         crate::server::task_status,
@@ -34,6 +36,7 @@ use utoipa::OpenApi;
         crate::server::CreateTasksResponse,
         crate::server::QueueListResponse,
         crate::server::TaskStatusResponse,
+        crate::server::PurgeQueueResponse,
         crate::server::TaskListResponse,
         service_http::ErrorEnvelope,
     ))
@@ -128,6 +131,7 @@ mod tests {
         sorted.sort();
         assert_eq!(ops, sorted, "operations() must be sorted");
         let expected: Vec<String> = [
+            "DELETE /v1/queues/{queue}",
             "DELETE /v1/queues/{queue}/tasks/{task_id}",
             "GET /admin/backup",
             "GET /v1/queues",
@@ -136,6 +140,7 @@ mod tests {
             "GET /v1/queues/{queue}/tasks/{task_id}",
             "POST /v1/queues/{queue}/control",
             "POST /v1/queues/{queue}/dispatch",
+            "POST /v1/queues/{queue}/purge",
             "POST /v1/queues/{queue}/tasks",
             "POST /v1/queues/{queue}/tasks:batch",
             "PUT /v1/queues/{queue}",

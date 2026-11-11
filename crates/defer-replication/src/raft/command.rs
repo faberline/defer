@@ -68,12 +68,19 @@ pub enum DeferCommand {
         queue: String,
         task_id: String,
     },
+    PurgeQueue {
+        queue: String,
+    },
+    DeleteQueue {
+        queue: String,
+    },
 }
 
 /// Read-your-write outcome retained by proposal id across snapshots.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DeferOutcome {
     Queue(Result<QueueSnapshot, SchedulerError>),
+    QueueDeleted(Result<(), SchedulerError>),
     Created(Result<(), SchedulerError>),
     CreatedBatch(Result<usize, SchedulerError>),
     Leased(Result<Vec<DispatchLease>, SchedulerError>),
@@ -82,6 +89,7 @@ pub enum DeferOutcome {
     Settled(Result<Vec<SettlementOutcome>, SchedulerError>),
     Reclaimed(Result<Vec<String>, SchedulerError>),
     Canceled(Result<bool, SchedulerError>),
+    QueuePurged(Result<usize, SchedulerError>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

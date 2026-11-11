@@ -140,7 +140,7 @@ fn help_exposes_standard_and_domain_surfaces() {
 
     for (group, expected) in [
         ("task", &["create", "status", "cancel"][..]),
-        ("queue", &["get", "put", "control"][..]),
+        ("queue", &["get", "put", "control", "list"][..]),
         ("issue", &["search", "view", "create"][..]),
     ] {
         let output = defer().args([group, "--help"]).output().unwrap();
@@ -375,6 +375,7 @@ fn offline_spec_and_typed_client_generation_use_one_contract() {
             "queueGet(data",
             "queuePut(data",
             "queueControl(data",
+            "queueList(data",
             "dispatchOne(data",
             "taskCreate(data",
             "taskStatus(data",
@@ -395,6 +396,7 @@ fn offline_spec_and_typed_client_generation_use_one_contract() {
             "def queue_get(",
             "def queue_put(",
             "def queue_control(",
+            "def queue_list(",
             "def dispatch_one(",
             "def task_create(",
             "def task_status(",
@@ -413,6 +415,7 @@ fn offline_spec_and_typed_client_generation_use_one_contract() {
             "pub fn queue_get(",
             "pub fn queue_put(",
             "pub fn queue_control(",
+            "pub fn queue_list(",
             "pub fn dispatch_one(",
             "pub fn task_create(",
             "pub fn task_status(",

@@ -28,8 +28,8 @@ use defer_replication::ProposeError;
 use defer_shared_kernel::{CreateTask, QueuePolicy, SchedulerError};
 
 pub use dto::{
-    CreateTasksRequest, CreateTasksResponse, QueueControlRequest, QueueListResponse,
-    TaskListResponse, TaskStatusResponse,
+    CreateTasksRequest, CreateTasksResponse, PurgeQueueResponse, QueueControlRequest,
+    QueueListResponse, TaskListResponse, TaskStatusResponse,
 };
 pub use state::AppState;
 
@@ -64,8 +64,12 @@ fn router_inner(
     let body_limit = state.body_limit_bytes();
     let data = Router::new()
         .route("/v1/queues", get(queue_list))
-        .route("/v1/queues/{queue}", get(queue_get).put(queue_put))
+        .route(
+            "/v1/queues/{queue}",
+            get(queue_get).put(queue_put).delete(queue_delete),
+        )
         .route("/v1/queues/{queue}/control", post(queue_control))
+        .route("/v1/queues/{queue}/purge", post(queue_purge))
         .route("/v1/queues/{queue}/tasks", get(task_list).post(task_create))
         .route("/v1/queues/{queue}/tasks:batch", post(task_create_batch))
         .route(
@@ -293,6 +297,27 @@ pub async fn queue_put(
 }
 
 #[utoipa::path(
+    delete,
+    path = "/v1/queues/{queue}",
+    params(("queue" = String, Path, description = "Queue name")),
+    responses((status = 204), (status = 404, body = ErrorEnvelope))
+)]
+pub async fn queue_delete(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Path(queue): Path<String>,
+) -> Response {
+    if let Err(error) = authorize(&principal, &queue, Role::Write) {
+        return error.into_response();
+    }
+    state.metrics.requests.incr();
+    match state.raft.delete_queue(queue).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => propose_error(error),
+    }
+}
+
+#[utoipa::path(
     post,
     path = "/v1/queues/{queue}/control",
     params(("queue" = String, Path, description = "Queue name")),
@@ -312,6 +337,21 @@ pub async fn queue_control(
     match state.raft.set_queue_control(queue, request.state).await {
         Ok(snapshot) => Json(snapshot).into_response(),
         Err(error) => propose_error(error),
+    }
+}
+
+fn validate_dispatch_deadline(deadline_ms: Option<u64>) -> Option<Response> {
+    if deadline_ms == Some(0) {
+        Some(
+            ApiErr::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_argument",
+                "dispatch_deadline_ms must be greater than 0",
+            )
+            .into_response(),
+        )
+    } else {
+        None
     }
 }
 
@@ -410,10 +450,34 @@ pub async fn task_list(
 
 #[utoipa::path(
     post,
+    path = "/v1/queues/{queue}/purge",
+    params(("queue" = String, Path, description = "Queue name")),
+    responses(
+        (status = 200, body = PurgeQueueResponse),
+        (status = 404, body = ErrorEnvelope)
+    )
+)]
+pub async fn queue_purge(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Path(queue): Path<String>,
+) -> Response {
+    if let Err(error) = authorize(&principal, &queue, Role::Write) {
+        return error.into_response();
+    }
+    state.metrics.requests.incr();
+    match state.raft.purge_queue(queue).await {
+        Ok(purged) => Json(PurgeQueueResponse { purged }).into_response(),
+        Err(error) => propose_error(error),
+    }
+}
+
+#[utoipa::path(
+    post,
     path = "/v1/queues/{queue}/tasks",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = CreateTask,
-    responses((status = 201), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
+    responses((status = 201), (status = 400, body = ErrorEnvelope), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
 )]
 pub async fn task_create(
     State(state): State<AppState>,
@@ -423,6 +487,9 @@ pub async fn task_create(
 ) -> Response {
     if let Err(error) = authorize(&principal, &queue, Role::Write) {
         return error.into_response();
+    }
+    if let Some(response) = validate_dispatch_deadline(task.dispatch_deadline_ms) {
+        return response;
     }
     state.metrics.requests.incr();
     match state.raft.create_task(queue, task).await {
@@ -436,7 +503,7 @@ pub async fn task_create(
     path = "/v1/queues/{queue}/tasks:batch",
     params(("queue" = String, Path, description = "Queue name")),
     request_body = CreateTasksRequest,
-    responses((status = 201, body = CreateTasksResponse), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
+    responses((status = 201, body = CreateTasksResponse), (status = 400, body = ErrorEnvelope), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope))
 )]
 pub async fn task_create_batch(
     State(state): State<AppState>,
@@ -446,6 +513,11 @@ pub async fn task_create_batch(
 ) -> Response {
     if let Err(error) = authorize(&principal, &queue, Role::Write) {
         return error.into_response();
+    }
+    for task in &request.tasks {
+        if let Some(response) = validate_dispatch_deadline(task.dispatch_deadline_ms) {
+            return response;
+        }
     }
     state.metrics.requests.incr();
     match state.raft.create_tasks(queue, request.tasks).await {
@@ -581,6 +653,14 @@ mod tests {
         assert_eq!(disabled.status(), StatusCode::CONFLICT);
         let infra = propose_error(anyhow::anyhow!("commit timed out").into());
         assert_eq!(infra.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn validate_dispatch_deadline_rejects_zero() {
+        let err = validate_dispatch_deadline(Some(0)).expect("0 must be rejected");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert!(validate_dispatch_deadline(None).is_none());
+        assert!(validate_dispatch_deadline(Some(100)).is_none());
     }
 
     #[test]

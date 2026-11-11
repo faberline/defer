@@ -50,7 +50,7 @@ enum GenHttp {
     Axios,
 }
 
-// <HANDWRITE gap="missing-generator:logic" tracker="#2219" reason="Own the offline OpenAPI/routes projection and exact operation route twin emitted from the Defer CLI.">
+// <HANDWRITE gap="missing-generator:logic" tracker="#2219" reason="Own the offline OpenAPI/routes projection and the route twin derived from the OpenAPI document, emitted from the Defer CLI.">
 pub(crate) fn run(args: SpecArgs) -> Result<()> {
     let json = defer::openapi::openapi().to_pretty_json()?;
     if let Some(SpecSubcommand::Gen(args)) = args.gen {

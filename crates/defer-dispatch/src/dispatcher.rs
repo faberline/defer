@@ -82,6 +82,7 @@ pub struct DispatchReport {
 
 pub struct HttpDispatcher {
     client: reqwest::Client,
+    timeout: Duration,
     signing_key: Option<TargetSigningKey>,
 }
 
@@ -102,6 +103,7 @@ impl HttpDispatcher {
             .context("build Defer target HTTP client")?;
         Ok(Self {
             client,
+            timeout,
             signing_key,
         })
     }
@@ -197,9 +199,14 @@ impl HttpDispatcher {
 
         let response = match method {
             Ok(method) => {
+                let request_timeout = match lease.dispatch_deadline_ms {
+                    Some(ms) => std::cmp::min(Duration::from_millis(ms), self.timeout),
+                    None => self.timeout,
+                };
                 let mut request = self
                     .client
                     .request(method, &lease.target.url)
+                    .timeout(request_timeout)
                     .header(IDEMPOTENCY_HEADER, &lease.idempotency_key)
                     .header(ATTEMPT_HEADER, &lease.attempt_id)
                     .header(ATTEMPT_NUMBER_HEADER, lease.attempt.to_string())
