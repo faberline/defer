@@ -1,7 +1,42 @@
 // HANDWRITE-BEGIN gap="missing-generator:unit-test:defer-competitor-feature-matrix" tracker="#2216" reason="Machine-check the deliberately scoped Google Cloud Tasks comparison and explicit non-goals without treating prose as runtime behavior proof."
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const MATRIX: &str = include_str!("../../../../benchmarks/competitor-feature-matrix.md");
+const RELAY_CEILING_DOC: &str = include_str!("../../../../benchmarks/relay-performance-ceiling.md");
+
+const TASK_LIFECYCLE_SRC: &str = include_str!("task_lifecycle.rs");
+const HTTP_DISPATCH_SRC: &str = include_str!("http_dispatch.rs");
+const HTTP_API_SRC: &str = include_str!("http_api.rs");
+const RATE_LIMITS_SRC: &str = include_str!("rate_limits.rs");
+const RAFT_SCHEDULER_SRC: &str = include_str!("raft_scheduler.rs");
+
+fn scan_test_functions(sources: &[&str]) -> BTreeSet<String> {
+    let mut fns = BTreeSet::new();
+    for source in sources {
+        let mut in_test = false;
+        for line in source.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("#[test") || trimmed.starts_with("#[tokio::test") {
+                in_test = true;
+                continue;
+            }
+            if in_test {
+                if let Some(rest) = trimmed
+                    .strip_prefix("async fn ")
+                    .or_else(|| trimmed.strip_prefix("fn "))
+                {
+                    if let Some(name) = rest.split('(').next() {
+                        fns.insert(name.trim().to_string());
+                        in_test = false;
+                    }
+                } else if !trimmed.starts_with('#') {
+                    in_test = false;
+                }
+            }
+        }
+    }
+    fns
+}
 
 fn rows() -> BTreeMap<&'static str, Vec<&'static str>> {
     let mut rows = BTreeMap::new();
@@ -150,6 +185,119 @@ fn cloud_tasks_shaped_contract_and_exclusions_are_explicit() {
     );
     assert!(normalized
         .contains("Google Cloud Tasks versus Pub/Sub assigns dead-letter topics to Pub/Sub:"));
+}
+// </HANDWRITE>
+
+// <HANDWRITE gap="missing-generator:unit-test" tracker="#2318" reason="Verify that claimed Cloud Tasks matrix rows map to existing tests, exclusions stay unmapped, and Relay ceiling ratio matches the benchmark contract.">
+#[test]
+fn claimed_matrix_rows_map_to_existing_tests_and_relay_ratio_matches_contract() {
+    let mapping: BTreeMap<&'static str, &'static str> = BTreeMap::from([
+        ("Future schedule / ETA", "eta_is_checked_before_priority"),
+        (
+            "HTTP target dispatch",
+            "dispatches_real_http_and_retries_with_stable_task_idempotency",
+        ),
+        (
+            "Success deletes/completes task",
+            "dispatches_real_http_and_retries_with_stable_task_idempotency",
+        ),
+        (
+            "At-least-once retry",
+            "nack_reschedules_then_dead_letters_after_max_attempts",
+        ),
+        (
+            "Queue rate / burst / max in-flight",
+            "per_queue_rate_bucket_limits_dispatch_over_time",
+        ),
+        (
+            "Pause / resume / disable",
+            "queue_pause_resume_is_per_queue_control",
+        ),
+        (
+            "Per-task target headers and method",
+            "dispatches_real_http_and_retries_with_stable_task_idempotency",
+        ),
+        (
+            "DLQ terminal state",
+            "dead_letter_terminal_state_converges_and_survives_restart",
+        ),
+        ("Task cancellation / inspection", "cancel_prevents_dispatch"),
+    ]);
+
+    let test_fns = scan_test_functions(&[
+        TASK_LIFECYCLE_SRC,
+        HTTP_DISPATCH_SRC,
+        HTTP_API_SRC,
+        RATE_LIMITS_SRC,
+        RAFT_SCHEDULER_SRC,
+    ]);
+
+    for (capability, test_fn) in &mapping {
+        assert!(
+            test_fns.contains(*test_fn),
+            "mapped test fn `{test_fn}` for `{capability}` not found in scanned module sources"
+        );
+    }
+
+    let all_rows = rows();
+    let mut claimed_count = 0;
+    for (capability, cells) in &all_rows {
+        let defer_val = cells[2];
+        let decision = cells[3];
+        let is_claimed = matches!(
+            defer_val,
+            "yes" | "native" | "2xx" | "explicit replicated terminal state"
+        );
+        if is_claimed {
+            claimed_count += 1;
+            assert!(
+                mapping.contains_key(*capability),
+                "row `{capability}` added to benchmarks/competitor-feature-matrix.md without a mapping"
+            );
+        }
+        if decision.contains("excluded:") {
+            assert!(
+                !mapping.contains_key(*capability),
+                "excluded row `{capability}` must not have a mapped test"
+            );
+        }
+    }
+
+    assert_eq!(
+        claimed_count,
+        mapping.len(),
+        "every claimed capability must have exactly one mapping"
+    );
+
+    for excluded in [
+        "Force-run bypass",
+        "Arbitrary language worker execution",
+        "Periodic/cron schedules",
+        "Workflow/batches",
+    ] {
+        assert!(
+            !mapping.contains_key(excluded),
+            "excluded feature `{excluded}` must stay absent from mapping"
+        );
+    }
+
+    let contract_yaml = RELAY_CEILING_DOC
+        .split_once("```yaml\n")
+        .and_then(|(_, rest)| rest.split_once("\n```").map(|(yaml, _)| yaml))
+        .expect("machine-readable benchmark contract exists");
+    let contract: serde_yaml::Value = serde_yaml::from_str(contract_yaml).unwrap();
+    let min_ratio = contract["benchmark_contract"]["minimum_ratio"]
+        .as_f64()
+        .expect("minimum_ratio is a float");
+    assert_eq!(
+        min_ratio, 0.8,
+        "benchmarks/relay-performance-ceiling.md states minimum_ratio: 0.8"
+    );
+    assert_eq!(
+        min_ratio,
+        crate::relay_performance_ceiling::MIN_DEFER_TO_RELAY_RATIO,
+        "doc minimum_ratio must equal MIN_DEFER_TO_RELAY_RATIO constant in relay_performance_ceiling.rs"
+    );
 }
 // </HANDWRITE>
 // HANDWRITE-END

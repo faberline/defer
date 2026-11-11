@@ -13,6 +13,7 @@ use utoipa::OpenApi;
         crate::server::queue_put,
         crate::server::queue_delete,
         crate::server::queue_control,
+        crate::server::queue_purge,
         crate::server::task_create,
         crate::server::task_create_batch,
         crate::server::task_status,
@@ -35,6 +36,7 @@ use utoipa::OpenApi;
         crate::server::CreateTasksResponse,
         crate::server::QueueListResponse,
         crate::server::TaskStatusResponse,
+        crate::server::PurgeQueueResponse,
         crate::server::TaskListResponse,
         service_http::ErrorEnvelope,
     ))
