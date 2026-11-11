@@ -112,6 +112,40 @@ impl Cluster {
             .filter_map(|(id, node)| node.as_ref().map(|node| (id, node)))
     }
 
+    async fn diagnostics(&self) -> String {
+        let mut pieces = Vec::new();
+        for (id, node) in self.live() {
+            pieces.push(format!(
+                "node={id} is_leader={} leader={:?} applied={}",
+                node.raft.is_leader().await,
+                node.raft.leader().await,
+                node.raft.applied_index()
+            ));
+        }
+        let joined = pieces.join("; ");
+        format!("nodes=[{joined}] term=unavailable commit=unavailable")
+    }
+
+    async fn expect_ok<T>(
+        &self,
+        what: &str,
+        started: Instant,
+        result: Result<T, defer::raft::ProposeError>,
+    ) -> T {
+        match result {
+            Ok(value) => value,
+            Err(error) => {
+                let line = format!(
+                    "aw-diag raft_scheduler: op={what} elapsed_ms={} error={error} {}",
+                    started.elapsed().as_millis(),
+                    self.diagnostics().await
+                );
+                eprintln!("{line}");
+                panic!("{line}");
+            }
+        }
+    }
+
     async fn wait_leader(&self) -> usize {
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut stable = None;
@@ -911,12 +945,15 @@ async fn repeated_failover_and_full_restart_keep_committed_state_and_progress() 
     assert_ne!(second_leader, leader);
 
     let after_expiry = stale_lease.expires_at + chrono::Duration::milliseconds(1);
+    let started = Instant::now();
+    let reclaimed = cluster
+        .raft(second_leader)
+        .reclaim_expired("jobs".into(), after_expiry)
+        .await;
     assert_eq!(
         cluster
-            .raft(second_leader)
-            .reclaim_expired("jobs".into(), after_expiry)
-            .await
-            .unwrap(),
+            .expect_ok("reclaim_expired(t0)", started, reclaimed)
+            .await,
         vec!["t0".to_string()]
     );
     cluster
@@ -924,11 +961,12 @@ async fn repeated_failover_and_full_restart_keep_committed_state_and_progress() 
         .await;
 
     // Create t1 through the new leader and wait for Scheduled convergence across live nodes.
-    cluster
+    let started = Instant::now();
+    let created = cluster
         .raft(second_leader)
         .create_task("jobs".into(), task("t1", now))
-        .await
-        .unwrap();
+        .await;
+    cluster.expect_ok("create_task(t1)", started, created).await;
     cluster
         .wait_status("t1", |status| matches!(status, TaskStatus::Scheduled))
         .await;
@@ -949,11 +987,12 @@ async fn repeated_failover_and_full_restart_keep_committed_state_and_progress() 
     assert_ne!(third_leader, third_leader_target);
 
     // Create t2 through it and wait until Scheduled on every live node.
-    cluster
+    let started = Instant::now();
+    let created = cluster
         .raft(third_leader)
         .create_task("jobs".into(), task("t2", now))
-        .await
-        .unwrap();
+        .await;
+    cluster.expect_ok("create_task(t2)", started, created).await;
     cluster
         .wait_status("t2", |status| matches!(status, TaskStatus::Scheduled))
         .await;
@@ -1270,6 +1309,48 @@ async fn changed_declaration_converges_on_every_node_after_a_restart() {
     assert_eq!(repeat.len(), 1);
     assert_eq!(repeat[0].decision, DeclaredQueueDecision::Unchanged);
 
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[should_panic(expected = "aw-diag raft_scheduler: op=probe")]
+async fn expect_ok_prints_node_state_when_the_operation_fails() {
+    let mut cluster = Cluster::new(1).await;
+    cluster.start_all();
+    cluster.wait_leader().await;
+    cluster
+        .expect_ok(
+            "probe",
+            Instant::now(),
+            Err::<(), defer::raft::ProposeError>(anyhow::anyhow!("boom").into()),
+        )
+        .await;
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn expect_ok_returns_the_value_and_prints_nothing_on_success() {
+    let mut cluster = Cluster::new(1).await;
+    cluster.start_all();
+    cluster.wait_leader().await;
+    assert_eq!(
+        cluster
+            .expect_ok(
+                "probe",
+                Instant::now(),
+                Ok::<u32, defer::raft::ProposeError>(7)
+            )
+            .await,
+        7
+    );
+    assert!(cluster
+        .diagnostics()
+        .await
+        .starts_with("nodes=[node=0 is_leader=true"));
+    assert!(cluster
+        .diagnostics()
+        .await
+        .ends_with("term=unavailable commit=unavailable"));
     cluster.shutdown().await;
 }
 // </HANDWRITE>

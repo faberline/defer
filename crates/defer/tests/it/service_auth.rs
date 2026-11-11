@@ -4,7 +4,7 @@ use defer::AuthConfig;
 use service_auth::{Role, Verifier};
 use std::net::TcpListener;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const REGISTRY: &str = r#"{
     "writer-token": {"subject": "producer", "roles": {"jobs": "write"}},
@@ -58,6 +58,24 @@ fn malformed_rotation_keeps_the_last_known_good_registry() {
 }
 
 // <HANDWRITE gap="missing-generator:e2e-test:defer-auth-runtime-wiring" tracker="#2215" reason="Exercise the shipped Defer process so removing its registry watcher or structured audit sink makes the security gate fail.">
+fn timeout_diagnostic(elapsed: Duration, readyz: &str, stderr_tail: &str) -> String {
+    format!(
+        "aw-diag service_auth: first PUT /v1/queues/jobs failed after {} ms; readyz={}; defer stderr tail:\n{}",
+        elapsed.as_millis(),
+        readyz,
+        stderr_tail
+    )
+}
+
+fn tail_lines(path: &std::path::Path, count: usize) -> String {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return "<unreadable>".to_string();
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(count);
+    lines[start..].join("\n")
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn defer_serve_watches_registry_and_emits_redacted_audit_events() {
     let dir = tempfile::tempdir().unwrap();
@@ -113,14 +131,26 @@ async fn defer_serve_watches_registry_and_emits_redacted_audit_events() {
     }
 
     let old_status = if ready {
-        client
+        let started = Instant::now();
+        let response = client
             .put(format!("{url}/v1/queues/jobs"))
             .bearer_auth("old-secret-token")
             .json(&defer::QueuePolicy::default())
             .send()
-            .await
-            .unwrap()
-            .status()
+            .await;
+        match response {
+            Ok(response) => response.status(),
+            Err(error) => {
+                let readyz = match client.get(format!("{url}/readyz")).send().await {
+                    Ok(response) => format!("{}", response.status()),
+                    Err(readyz_error) => format!("error: {readyz_error}"),
+                };
+                panic!(
+                    "{}\nerror: {error}",
+                    timeout_diagnostic(started.elapsed(), &readyz, &tail_lines(&stderr_path, 40))
+                );
+            }
+        }
     } else {
         axum::http::StatusCode::SERVICE_UNAVAILABLE
     };
@@ -209,6 +239,18 @@ async fn defer_serve_watches_registry_and_emits_redacted_audit_events() {
     assert!(
         !logs.contains("new-secret-token"),
         "audit leaked new bearer"
+    );
+}
+
+#[test]
+fn timeout_diagnostic_names_elapsed_readyz_and_log_tail() {
+    assert_eq!(
+        timeout_diagnostic(
+            Duration::from_millis(2001),
+            "503 Service Unavailable",
+            "line one\nline two"
+        ),
+        "aw-diag service_auth: first PUT /v1/queues/jobs failed after 2001 ms; readyz=503 Service Unavailable; defer stderr tail:\nline one\nline two"
     );
 }
 // </HANDWRITE>
