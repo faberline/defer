@@ -33,6 +33,11 @@ pub struct TaskStatusResponse {
     pub status: TaskStatus,
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PurgeQueueResponse {
+    pub purged: usize,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct TaskListResponse {
     pub tasks: Vec<TaskStatusResponse>,

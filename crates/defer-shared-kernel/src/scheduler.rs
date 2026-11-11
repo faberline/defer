@@ -320,6 +320,21 @@ impl DeferScheduler {
         Ok(())
     }
 
+    pub fn purge_queue(&mut self, queue: &str) -> SchedulerResult<usize> {
+        let state = self
+            .queues
+            .get_mut(queue)
+            .ok_or_else(|| SchedulerError::QueueMissing(queue.to_string()))?;
+        let count = state.tasks.len();
+        state.tasks.clear();
+        state.due.clear();
+        for ready in &mut state.ready {
+            ready.clear();
+        }
+        state.in_flight.clear();
+        Ok(count)
+    }
+
     pub fn delete_queue(&mut self, queue: &str) -> SchedulerResult<()> {
         if self.queues.remove(queue).is_some() {
             Ok(())
@@ -354,8 +369,28 @@ fn millis(value: DateTime<Utc>) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Target;
-    use chrono::TimeZone;
+    use crate::types::{CreateTask, Target, DEFAULT_PRIORITY};
+    use chrono::{Duration, TimeZone, Utc};
+
+    fn test_target() -> Target {
+        Target {
+            url: "http://example.com/worker".into(),
+            method: "POST".into(),
+            headers: Default::default(),
+        }
+    }
+
+    fn test_task(id: &str, due_offset_ms: i64, max_attempts: u32) -> CreateTask {
+        CreateTask {
+            task_id: id.into(),
+            target: test_target(),
+            payload: serde_json::json!({ "id": id }),
+            schedule_at: Utc::now() + Duration::milliseconds(due_offset_ms),
+            priority: DEFAULT_PRIORITY,
+            max_attempts,
+            dispatch_deadline_ms: None,
+        }
+    }
 
     fn sample_task(id: &str, at: DateTime<Utc>) -> CreateTask {
         CreateTask {
@@ -371,6 +406,113 @@ mod tests {
             max_attempts: 3,
             dispatch_deadline_ms: None,
         }
+    }
+
+    #[test]
+    fn purge_queue_removes_tasks_in_every_state_and_preserves_policy_and_control() {
+        let now = Utc::now();
+        let mut s = DeferScheduler::new();
+        let custom_policy = QueuePolicy {
+            max_in_flight: 5,
+            max_dispatch_per_tick: 5,
+            max_dispatches_per_second: 50,
+            max_burst_size: 20,
+            lease_ttl_ms: 10_000,
+            retry_backoff_ms: 500,
+            max_backoff_ms: None,
+            max_doublings: None,
+        };
+        s.configure_queue("jobs", custom_policy.clone());
+
+        // 1. Scheduled task
+        s.create_task("jobs", test_task("t-sched", 0, 3)).unwrap();
+
+        // 2. Leased task
+        s.create_task("jobs", test_task("t-leased", 0, 3)).unwrap();
+        let leased = s.lease_due("jobs", now, 1).unwrap().remove(0);
+        let leased_attempt_id = leased.attempt_id.clone();
+        assert_eq!(leased.task_id, "t-sched"); // t-sched was first
+
+        // Lease the second one as well
+        let leased2 = s.lease_due("jobs", now, 1).unwrap().remove(0);
+        assert_eq!(leased2.task_id, "t-leased");
+
+        // 3. Succeeded task (ack leased2)
+        assert!(s.ack("jobs", &leased2.attempt_id).unwrap());
+        assert_eq!(
+            s.status("jobs", "t-leased").unwrap(),
+            Some(TaskStatus::Succeeded)
+        );
+
+        // 4. DeadLettered task (create with max_attempts=1, lease, nack)
+        s.create_task("jobs", test_task("t-dead", 0, 1)).unwrap();
+        let leased_dead = s.lease_due("jobs", now, 1).unwrap().remove(0);
+        assert_eq!(leased_dead.task_id, "t-dead");
+        s.nack("jobs", &leased_dead.attempt_id, now).unwrap();
+        assert_eq!(
+            s.status("jobs", "t-dead").unwrap(),
+            Some(TaskStatus::DeadLettered)
+        );
+
+        // 5. Canceled task
+        s.create_task("jobs", test_task("t-cancel", 0, 3)).unwrap();
+        assert!(s.cancel("jobs", "t-cancel").unwrap());
+        assert_eq!(
+            s.status("jobs", "t-cancel").unwrap(),
+            Some(TaskStatus::Canceled)
+        );
+
+        // Pause the queue to test control state preservation
+        s.pause_queue("jobs").unwrap();
+
+        // Verify snapshot before purge has 4 tasks (t-sched, t-leased, t-dead, t-cancel)
+        let snap_before = s.queue_snapshot("jobs").unwrap();
+        assert_eq!(snap_before.task_count, 4);
+        assert_eq!(snap_before.control_state, QueueControlState::Paused);
+        assert_eq!(snap_before.policy, custom_policy);
+
+        // Consume tokens / record token state before purge
+        let tokens_before = s.queues.get("jobs").unwrap().dispatch_tokens_milli;
+
+        // Perform purge
+        let count = s.purge_queue("jobs").unwrap();
+        assert_eq!(count, 4);
+
+        // Snapshot after purge
+        let snap_after = s.queue_snapshot("jobs").unwrap();
+        assert_eq!(snap_after.task_count, 0);
+        assert_eq!(snap_after.scheduled_count, 0);
+        assert_eq!(snap_after.in_flight_count, 0);
+        assert_eq!(snap_after.terminal_count, 0);
+        assert_eq!(snap_after.control_state, QueueControlState::Paused);
+        assert_eq!(snap_after.policy, custom_policy);
+
+        // Rate limit bucket is preserved
+        let tokens_after = s.queues.get("jobs").unwrap().dispatch_tokens_milli;
+        assert_eq!(tokens_after, tokens_before);
+
+        // All task statuses are None
+        for id in ["t-sched", "t-leased", "t-dead", "t-cancel"] {
+            assert_eq!(s.status("jobs", id).unwrap(), None);
+        }
+
+        // A purged task_id can be created again
+        s.resume_queue("jobs").unwrap();
+        assert!(s.create_task("jobs", test_task("t-sched", 0, 3)).is_ok());
+        assert_eq!(
+            s.status("jobs", "t-sched").unwrap(),
+            Some(TaskStatus::Scheduled)
+        );
+
+        // Purge on an unknown queue returns QueueMissing
+        assert!(matches!(
+            s.purge_queue("nonexistent"),
+            Err(SchedulerError::QueueMissing(ref q)) if q == "nonexistent"
+        ));
+
+        // Ack / nack of a previously leased attempt after purge returns false/None without panic
+        assert!(!s.ack("jobs", &leased_attempt_id).unwrap());
+        assert_eq!(s.nack("jobs", &leased_attempt_id, now).unwrap(), None);
     }
 
     #[test]

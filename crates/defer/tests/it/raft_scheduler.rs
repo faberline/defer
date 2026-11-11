@@ -609,6 +609,143 @@ async fn dead_letter_terminal_state_converges_and_survives_restart() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn queue_purge_converges_on_followers_and_survives_restart() {
+    let now = Utc.timestamp_millis_opt(30_000).unwrap();
+    let mut cluster = Cluster::new(3).await;
+    cluster.start_all();
+    let leader = cluster.wait_leader().await;
+    let follower = cluster
+        .live()
+        .map(|(id, _)| id)
+        .find(|id| *id != leader)
+        .unwrap();
+
+    let custom_policy = QueuePolicy {
+        max_in_flight: 42,
+        ..QueuePolicy::default()
+    };
+    cluster
+        .raft(leader)
+        .configure_queue("jobs".into(), custom_policy.clone())
+        .await
+        .unwrap();
+    cluster
+        .raft(leader)
+        .create_task("jobs".into(), task("task-one", now))
+        .await
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let count = cluster
+            .raft(follower)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot("jobs")
+            .map(|s| s.task_count)
+            .unwrap_or(0);
+        if count == 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "task did not appear on follower before purge"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let purged = cluster
+        .raft(leader)
+        .purge_queue("jobs".into())
+        .await
+        .unwrap();
+    assert_eq!(purged, 1);
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let snap = cluster
+            .raft(follower)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .queue_snapshot("jobs");
+        if let Ok(snap) = snap {
+            if snap.task_count == 0 {
+                assert_eq!(snap.policy, custom_policy);
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "queue did not become empty on follower"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    // A task created after the purge is later in the log. Wait for it on the
+    // restarted node before asserting the purge, so the check runs only after
+    // that node has replayed past `PurgeQueue`.
+    cluster
+        .raft(leader)
+        .create_task("jobs".into(), task("task-two", now))
+        .await
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let present = cluster
+            .raft(follower)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .status("jobs", "task-two")
+            .unwrap()
+            .is_some();
+        if present {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "task-two did not appear on follower after purge"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let restart_id = follower;
+    cluster.kill(restart_id).await;
+    cluster.start_node(restart_id);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let present = cluster
+            .raft(restart_id)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .status("jobs", "task-two")
+            .unwrap()
+            .is_some();
+        if present {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "task-two did not replicate to restarted node"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    {
+        let scheduler = cluster.raft(restart_id).scheduler();
+        let scheduler = scheduler.lock().unwrap();
+        let snap = scheduler.queue_snapshot("jobs").unwrap();
+        assert_eq!(snap.task_count, 1, "purge was lost on restart");
+        assert_eq!(snap.policy, custom_policy);
+        assert!(scheduler.status("jobs", "task-one").unwrap().is_none());
+    }
+
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn queue_delete_converges_on_followers_and_survives_restart() {
     let now = Utc.timestamp_millis_opt(30_000).unwrap();
     let mut cluster = Cluster::new(3).await;
