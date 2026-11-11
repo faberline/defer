@@ -183,6 +183,20 @@ core outcome that does that work, and keep defer's own proof.
   created before the split reaches exactly one terminal state afterwards.
 - Tracking: Not assigned.
 
+### Public API certificate rotation
+
+- ID: `public-api-certificate-rotation`
+- Outcome: The public API's TLS certificate and key can change while
+  `defer serve` runs, without a restart, and a client certificate can be
+  required on the public port.
+- Boundary: Today the files given by `--tls-cert-file` and `--tls-key-file`
+  are read once at start, and the public port checks no client certificate.
+  Peer (Raft) TLS is a separate listener and is not part of this outcome.
+- Completion evidence: A test replaces the certificate on disk, triggers a
+  reload, and proves new handshakes use the new certificate while existing
+  connections keep the old one.
+- Tracking: Not assigned.
+
 ## Non-goals
 
 ### Cloud Tasks wire compatibility

@@ -52,6 +52,16 @@ owns four outcomes.
 - Status rows: `k8s-deployment-assets`, `k8s-operator`,
   `gke-operator-acceptance`.
 
+## Public API TLS
+
+- `defer serve --tls-cert-file <pem> --tls-key-file <pem>` (env
+  `DEFER_TLS_CERT_FILE`, `DEFER_TLS_KEY_FILE`) serves the public API on
+  `--bind` over HTTPS. Set both or neither; one alone is a startup error.
+- The files are read once at start. Restart to rotate them.
+- There is no client-certificate check on the public port. Peer (Raft) TLS
+  is separate and uses `DEFER_PEER_*`.
+- Status row: `public-api-tls`.
+
 ## Health, metrics, traces, and drain
 
 - Problem: none open as shipped; the soak's reliability is the outcome
