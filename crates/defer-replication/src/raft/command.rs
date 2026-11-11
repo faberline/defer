@@ -68,6 +68,9 @@ pub enum DeferCommand {
         queue: String,
         task_id: String,
     },
+    PurgeQueue {
+        queue: String,
+    },
     DeleteQueue {
         queue: String,
     },
@@ -86,6 +89,7 @@ pub enum DeferOutcome {
     Settled(Result<Vec<SettlementOutcome>, SchedulerError>),
     Reclaimed(Result<Vec<String>, SchedulerError>),
     Canceled(Result<bool, SchedulerError>),
+    QueuePurged(Result<usize, SchedulerError>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

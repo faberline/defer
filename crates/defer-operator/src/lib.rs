@@ -6,7 +6,8 @@ pub mod topology_plan;
 
 pub use crd::{
     crd_yaml, DeclaredQueueControl, DeclaredQueuePolicySpec, DeclaredQueueSpec, Defer,
-    DeferBackupSpec, DeferPlacement, DeferSpec, DeferStatus, LocalObjectReference, Toleration,
+    DeferBackupSpec, DeferPlacement, DeferResourceLimits, DeferSpec, DeferStatus,
+    LocalObjectReference, Toleration,
 };
 pub use reconcile::run;
 pub use topology_plan::{plan_replica_change, MemberSet, PlanError, Step};
