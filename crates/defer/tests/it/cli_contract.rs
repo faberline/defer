@@ -10,22 +10,6 @@ fn defer() -> Command {
     Command::new(env!("CARGO_BIN_EXE_defer"))
 }
 
-const EXPECTED_DOMAIN_OPERATIONS: &[&str] = &[
-    "DELETE /v1/queues/{queue}",
-    "DELETE /v1/queues/{queue}/tasks/{task_id}",
-    "GET /admin/backup",
-    "GET /v1/queues",
-    "GET /v1/queues/{queue}",
-    "GET /v1/queues/{queue}/tasks",
-    "GET /v1/queues/{queue}/tasks/{task_id}",
-    "POST /v1/queues/{queue}/control",
-    "POST /v1/queues/{queue}/dispatch",
-    "POST /v1/queues/{queue}/purge",
-    "POST /v1/queues/{queue}/tasks",
-    "POST /v1/queues/{queue}/tasks:batch",
-    "PUT /v1/queues/{queue}",
-];
-
 fn chainable_json(output: std::process::Output, surface: &str) -> serde_json::Value {
     assert!(
         output.status.success(),
@@ -54,13 +38,7 @@ fn assert_exact_domain_operations(spec: &serde_json::Value) {
         }
     }
     actual.sort();
-    assert_eq!(
-        actual,
-        EXPECTED_DOMAIN_OPERATIONS
-            .iter()
-            .map(|operation| (*operation).to_string())
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(actual, defer::openapi::operations());
 }
 
 fn assert_generated_client(
@@ -377,36 +355,8 @@ fn offline_spec_and_typed_client_generation_use_one_contract() {
     );
     assert_eq!(
         routes["routes"],
-        serde_json::json!([
-            "GET /v1/queues",
-            "PUT /v1/queues/{queue}",
-            "GET /v1/queues/{queue}",
-            "DELETE /v1/queues/{queue}",
-            "POST /v1/queues/{queue}/control",
-            "POST /v1/queues/{queue}/purge",
-            "POST /v1/queues/{queue}/tasks",
-            "GET /v1/queues/{queue}/tasks",
-            "POST /v1/queues/{queue}/tasks:batch",
-            "GET /v1/queues/{queue}/tasks/{task_id}",
-            "DELETE /v1/queues/{queue}/tasks/{task_id}",
-            "POST /v1/queues/{queue}/dispatch",
-            "GET /admin/backup"
-        ])
-    );
-    let mut route_ops = routes["routes"]
-        .as_array()
-        .expect("routes array")
-        .iter()
-        .map(|r| r.as_str().unwrap().to_string())
-        .collect::<Vec<_>>();
-    route_ops.sort();
-    assert_eq!(
-        route_ops,
-        EXPECTED_DOMAIN_OPERATIONS
-            .iter()
-            .map(|op| (*op).to_string())
-            .collect::<Vec<_>>(),
-        "routes output must match expected domain operations"
+        serde_json::json!(defer::openapi::operations()),
+        "routes output must equal the OpenAPI operations"
     );
 
     assert_generated_client(
