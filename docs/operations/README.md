@@ -3,6 +3,8 @@
 How to run, configure, and test defer. What each operational feature promises
 is in [product/operations.md](../product/operations.md).
 
+Start with [install.md](install.md): build, run one node, quickstart, and the 3-replica Kubernetes install.
+
 ## Serve
 
 `defer serve` runs one node. Its main settings (flag, or environment

@@ -42,6 +42,8 @@ behaviour.
 
 ## Primary workflow
 
+Build, install and a quickstart that ends in a succeeded task are in [Install and quickstart](docs/operations/install.md).
+
 1. Run one node. `--data-dir` holds the Raft log and snapshots. Auth is off by
    default, so the calls below need no token.
 
