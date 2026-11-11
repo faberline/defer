@@ -175,8 +175,9 @@ core outcome that does that work, and keep defer's own proof.
   supplies the data-plane hooks: they classify each request by its queue,
   merge the results of a request that spans shards, and export and import
   the tasks of a bucket. Task identity and idempotency keys do not change
-  shape when a queue moves between shards. Merging shards back into fewer is
-  outside this outcome, and shards never appear in the public API.
+  shape when a queue moves between shards. Merging shards back into fewer and
+  a queue-to-shard map in the custom resource are outside this outcome, and
+  shards never appear in the public API.
 - Completion evidence: A cluster acceptance run splits one shard into two
   while clients keep creating and settling tasks, and proves every task
   created before the split reaches exactly one terminal state afterwards.
