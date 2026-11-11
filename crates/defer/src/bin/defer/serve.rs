@@ -110,8 +110,8 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
     let scheduler = Arc::new(Mutex::new(DeferScheduler::new()));
     let mut peer_transport = None;
     let raft = if raft_runtime::replica_mode() {
-        let transport = defer::peer_tls::from_env()?
-            .map(|config| defer::peer_tls::peer_transport(&config))
+        let transport = peer_tls::PeerTlsConfig::from_env("DEFER_PEER")?
+            .map(|config| raft_runtime::PeerTransport::from_config(&config))
             .transpose()?;
         let (port, scheme) = match transport.as_ref() {
             Some(_) => (args.raft_port, "https"),
