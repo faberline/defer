@@ -23,3 +23,4 @@ mod service_admission;
 mod service_auth;
 mod soak_script;
 mod task_lifecycle;
+mod tls_public_api;

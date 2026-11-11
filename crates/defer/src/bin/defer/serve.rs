@@ -17,6 +17,12 @@ use server_lifecycle::{HookStage, HookStatus, TaskSupervisor};
 pub(crate) struct ServeArgs {
     #[arg(long, env = "DEFER_BIND", default_value = "0.0.0.0:7141")]
     bind: String,
+    /// PEM certificate chain for the public API. Both or neither.
+    #[arg(long, env = "DEFER_TLS_CERT_FILE")]
+    tls_cert_file: Option<PathBuf>,
+    /// PEM private key for the public API. Both or neither.
+    #[arg(long, env = "DEFER_TLS_KEY_FILE")]
+    tls_key_file: Option<PathBuf>,
     #[arg(long, env = "DEFER_DATA_DIR", default_value = ".defer/data")]
     data_dir: PathBuf,
     #[arg(long, env = "DEFER_PEER_SERVICE", default_value = "defer")]
@@ -69,6 +75,21 @@ enum LogFormat {
 }
 
 pub(crate) async fn run(args: ServeArgs) -> Result<()> {
+    let tls = tls_files(args.tls_cert_file.as_ref(), args.tls_key_file.as_ref())?;
+    let tls_server = match tls {
+        Some((cert, key)) => {
+            let mut server = peer_tls::PeerTlsConfig {
+                cert,
+                key,
+                ca: PathBuf::new(),
+                required: false,
+            }
+            .rustls_server_config()?;
+            server.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+            Some(Arc::new(server))
+        }
+        None => None,
+    };
     let declared_queues =
         defer::parse_declared_queues(args.declared_queues.as_deref().unwrap_or(""))?;
     let log_format = match args.log_format {
@@ -240,10 +261,16 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
     }
 
     let listener = tokio::net::TcpListener::bind(&args.bind).await?;
+    let listening = if tls_server.is_some() {
+        "defer listening (HTTPS)"
+    } else {
+        "defer listening (HTTP/1.1 + HTTP/2 cleartext)"
+    };
     tracing::info!(
         event = "service_listening",
         addr = %listener.local_addr()?,
-        "defer listening (HTTP/1.1 + HTTP/2 cleartext)"
+        "{}",
+        listening
     );
     let app = if peer_transport.is_some() {
         defer::server::router_without_raft_routes_with_admission(state.clone(), admission)
@@ -287,13 +314,38 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
             .shutdown("signal", "defer shutdown signal received")
             .await
     });
-    let http_report = service_http::serve_with_lifecycle(
-        listener,
-        app,
-        service_http::HttpServerOptions::default(),
-        supervisor.lifecycle(),
-    )
-    .await;
+    let http_report = if let Some(server) = tls_server {
+        let (stop, shutdown_rx) = tokio::sync::oneshot::channel();
+        let serve = tokio::spawn(async move {
+            service_http::serve_tls(
+                listener,
+                app,
+                service_http::config_source(move || Some(server.clone())),
+                async move {
+                    let _ = shutdown_rx.await;
+                },
+            )
+            .await;
+            Ok::<(), anyhow::Error>(())
+        });
+        supervisor.register_oneshot_task(
+            HookStage::TransportDrain,
+            "defer-public-tls-listener",
+            stop,
+            serve,
+        )?;
+        None
+    } else {
+        Some(
+            service_http::serve_with_lifecycle(
+                listener,
+                app,
+                service_http::HttpServerOptions::default(),
+                supervisor.lifecycle(),
+            )
+            .await,
+        )
+    };
     let shutdown_report = shutdown.await.context("join defer shutdown supervisor")?;
     let failures = shutdown_report
         .outcomes
@@ -310,10 +362,10 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
         failures.join(", ")
     );
     tracing::info!(
-        accepted = http_report.accepted,
-        completed = http_report.completed,
-        failed = http_report.failed,
-        timed_out = http_report.timed_out,
+        accepted = http_report.as_ref().map_or(0, |r| r.accepted),
+        completed = http_report.as_ref().map_or(0, |r| r.completed),
+        failed = http_report.as_ref().map_or(0, |r| r.failed),
+        timed_out = http_report.as_ref().map_or(0, |r| r.timed_out),
         hooks = shutdown_report.outcomes.len(),
         "defer stopped"
     );
@@ -358,6 +410,14 @@ async fn provision_declared_queues_until_complete<F, Fut>(
     }
 }
 
+fn tls_files(cert: Option<&PathBuf>, key: Option<&PathBuf>) -> Result<Option<(PathBuf, PathBuf)>> {
+    match (cert, key) {
+        (Some(cert), Some(key)) => Ok(Some((cert.clone(), key.clone()))),
+        (None, None) => Ok(None),
+        _ => anyhow::bail!("--tls-cert-file and --tls-key-file must be set together"),
+    }
+}
+
 fn peer_bind_address(bind: &str, raft_port: u16) -> Result<String> {
     let (host, _) = bind
         .rsplit_once(':')
@@ -370,6 +430,26 @@ fn peer_bind_address(bind: &str, raft_port: u16) -> Result<String> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn tls_files_accepts_both_or_neither() {
+        assert!(tls_files(None, None).unwrap().is_none());
+        let cert = PathBuf::from("tls.crt");
+        let key = PathBuf::from("tls.key");
+        assert_eq!(
+            tls_files(Some(&cert), Some(&key)).unwrap(),
+            Some((cert.clone(), key.clone()))
+        );
+    }
+
+    #[test]
+    fn tls_files_rejects_one_alone() {
+        let path = PathBuf::from("tls.crt");
+        let cert_only = tls_files(Some(&path), None).unwrap_err();
+        assert!(cert_only.to_string().contains("must be set together"));
+        let key_only = tls_files(None, Some(&path)).unwrap_err();
+        assert!(key_only.to_string().contains("must be set together"));
+    }
 
     fn complete() -> Vec<defer::DeclaredQueueOutcome> {
         vec![defer::DeclaredQueueOutcome {
