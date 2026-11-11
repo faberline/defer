@@ -195,13 +195,13 @@ control() {
 
 inspect_fixed() {
   curl -fsS --max-time 10 "http://${UPSTREAM}/v1/queues/${QUEUE}" |
-    jq -e '.task_count == 2 and .terminal_count == 1' >/dev/null
+    jq -e '.task_count == 2 and .terminal_count == 1' >/dev/null || return 1
   curl -fsS --max-time 10 "http://${UPSTREAM}/v1/queues/${QUEUE}/tasks/fixed" |
-    jq -e '.status == "Succeeded"' >/dev/null
+    jq -e '.status == "Succeeded"' >/dev/null || return 1
   curl -fsS --max-time 10 "http://${UPSTREAM}/v1/queues/${QUEUE}/tasks/fixed-retry" |
-    jq -e '.status == "Scheduled" or ((.status | type) == "object" and (.status.Leased != null))' >/dev/null
-  curl -fsS --max-time 10 "http://${UPSTREAM}/metrics" >/dev/null
-  healthy
+    jq -e '.status == "Scheduled" or ((.status | type) == "object" and (.status.Leased != null))' >/dev/null || return 1
+  curl -fsS --max-time 10 "http://${UPSTREAM}/metrics" >/dev/null || return 1
+  healthy || return 1
 }
 
 latency_probe() {
