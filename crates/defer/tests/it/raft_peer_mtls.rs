@@ -75,6 +75,15 @@ struct Node {
     serve: tokio::task::JoinHandle<anyhow::Result<()>>,
 }
 
+/// True when the task is scheduled. A missing queue (a peer that has not
+/// applied it yet) is "not yet", not an error.
+fn task_is_scheduled(scheduler: &DeferScheduler, queue: &str, task_id: &str) -> bool {
+    matches!(
+        scheduler.status(queue, task_id),
+        Ok(Some(TaskStatus::Scheduled))
+    )
+}
+
 // <HANDWRITE gap="missing-generator:unit-test" tracker="#2221" reason="Own the positive peer-identity oracle that trusted Defer voters replicate committed scheduler state over the shared authenticated peer transport.">
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn trusted_defer_peers_replicate_scheduler_state_over_mtls() {
@@ -176,17 +185,10 @@ async fn trusted_defer_peers_replicate_scheduler_state_over_mtls() {
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(8);
     loop {
-        if nodes.iter().all(|node| {
-            matches!(
-                node.raft
-                    .scheduler()
-                    .lock()
-                    .unwrap()
-                    .status("jobs", "secure")
-                    .unwrap(),
-                Some(TaskStatus::Scheduled)
-            )
-        }) {
+        if nodes
+            .iter()
+            .all(|node| task_is_scheduled(&node.raft.scheduler().lock().unwrap(), "jobs", "secure"))
+        {
             break;
         }
         assert!(Instant::now() < deadline, "secure state did not converge");
@@ -271,6 +273,14 @@ async fn untrusted_defer_server_certificate_is_rejected() {
         error.to_string().contains("peer TLS client handshake"),
         "unexpected rejection: {error:#}"
     );
+}
+
+/// #89: a peer that has not applied the queue yet must read as "not converged",
+/// not panic on `QueueMissing`.
+#[test]
+fn task_is_scheduled_is_false_when_queue_is_missing() {
+    let scheduler = DeferScheduler::new();
+    assert!(!task_is_scheduled(&scheduler, "jobs", "secure"));
 }
 // </HANDWRITE>
 // HANDWRITE-END
