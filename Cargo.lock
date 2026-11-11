@@ -1441,7 +1441,6 @@ dependencies = [
  "chrono",
  "defer-shared-kernel",
  "defer-storage",
- "peer-tls",
  "raft-runtime",
  "serde",
  "serde_json",

@@ -38,7 +38,7 @@ Cargo.toml                      virtual workspace: [workspace.package],
 crates/
   defer-shared-kernel/src/      scheduler.rs + scheduler/, types.rs
   defer-storage/src/            data_dir.rs
-  defer-replication/src/        raft.rs + raft/, peer_tls.rs
+  defer-replication/src/        raft.rs + raft/
   defer-dispatch/src/           dispatcher.rs
   defer-access/src/             policy.rs
   defer-queue/src/              server.rs + server/, openapi.rs, metrics.rs

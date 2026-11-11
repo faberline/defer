@@ -28,8 +28,8 @@ reaches the same state.
 `defer-replication` makes every scheduler mutation a `DeferCommand` committed
 through `raft-runtime`. `DeferStateMachine` applies committed commands on every
 replica; `DeferRaft` hosts the node. A bootstrap seed restores a snapshot only
-into an empty data directory. `peer_tls` reads the `DEFER_PEER_TLS_*`
-material for the peer listener.
+into an empty data directory. The server reads the `DEFER_PEER_TLS_*`
+material for the peer listener through core's `peer_tls::PeerTlsConfig::from_env`.
 
 ## Dispatch
 
