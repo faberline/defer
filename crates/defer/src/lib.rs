@@ -14,7 +14,7 @@ pub use defer_dispatch as dispatch;
 #[cfg(feature = "operator")]
 pub use defer_operator as operator;
 pub use defer_queue::{metrics, openapi, server};
-pub use defer_replication::{peer_tls, raft};
+pub use defer_replication::raft;
 pub use defer_shared_kernel::{scheduler, types};
 pub use defer_storage as storage;
 
