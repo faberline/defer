@@ -82,7 +82,7 @@ impl QueueState {
 
     fn promote_due(&mut self, now: DateTime<Utc>) {
         let cutoff = now.timestamp_millis();
-        while let Some(Reverse((at, _, task_id))) = self.due.peek().cloned() {
+        while let Some(Reverse((at, seq, task_id))) = self.due.peek().cloned() {
             if at > cutoff {
                 break;
             }
@@ -90,7 +90,8 @@ impl QueueState {
             let Some(task) = self.tasks.get(&task_id) else {
                 continue;
             };
-            if task.create.schedule_at.timestamp_millis() != at {
+            // A stale entry of a pruned and re-created id has another generation.
+            if task.created_seq != seq || task.create.schedule_at.timestamp_millis() != at {
                 continue;
             }
             if matches!(task.status, TaskStatus::Scheduled) {
@@ -385,11 +386,11 @@ impl DeferScheduler {
 
 fn pick_ready(state: &mut QueueState) -> Option<TaskId> {
     for priority in (0..PRIORITY_BANDS).rev() {
-        while let Some(Reverse((_, task_id))) = state.ready[priority].pop() {
+        while let Some(Reverse((seq, task_id))) = state.ready[priority].pop() {
             let Some(task) = state.tasks.get(&task_id) else {
                 continue;
             };
-            if matches!(task.status, TaskStatus::Scheduled) {
+            if task.created_seq == seq && matches!(task.status, TaskStatus::Scheduled) {
                 return Some(task_id);
             }
         }
@@ -756,6 +757,37 @@ mod tests {
             loaded.status("jobs", "a").unwrap(),
             Some(TaskStatus::Succeeded)
         );
+    }
+
+    #[test]
+    fn pruned_id_recreated_with_future_schedule_is_not_leased_early() {
+        let mut s = DeferScheduler::new();
+        s.configure_queue(
+            "jobs",
+            QueuePolicy {
+                max_in_flight: 1,
+                ..retention_policy(Some(1_000))
+            },
+        );
+        s.create_task("jobs", test_task("x", -1_000, 3)).unwrap();
+        s.create_task("jobs", test_task("a", -1_000, 3)).unwrap();
+        // `x` takes the only in-flight slot; `a` is promoted into the ready heap but not leased.
+        let x = s.lease_due("jobs", Utc::now(), 1).unwrap().remove(0);
+        assert_eq!(x.task_id, "x");
+        assert!(s.cancel("jobs", "a").unwrap());
+        assert!(s.ack("jobs", &x.attempt_id).unwrap());
+
+        let t0 = Utc::now();
+        assert_eq!(s.prune_terminal("jobs", t0).unwrap(), 0);
+        assert_eq!(
+            s.prune_terminal("jobs", t0 + Duration::milliseconds(1_000))
+                .unwrap(),
+            2
+        );
+        // Re-create `a` due in 60 s. Its stale ready entry must not lease it now.
+        s.create_task("jobs", test_task("a", 60_000, 3)).unwrap();
+        assert!(s.lease_due("jobs", Utc::now(), 10).unwrap().is_empty());
+        assert_eq!(s.status("jobs", "a").unwrap(), Some(TaskStatus::Scheduled));
     }
 }
 // HANDWRITE-END
