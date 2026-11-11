@@ -28,8 +28,8 @@ use defer_replication::ProposeError;
 use defer_shared_kernel::{CreateTask, QueuePolicy, SchedulerError};
 
 pub use dto::{
-    CreateTasksRequest, CreateTasksResponse, QueueControlRequest, QueueListResponse,
-    TaskListResponse, TaskStatusResponse,
+    CreateTasksRequest, CreateTasksResponse, PurgeQueueResponse, QueueControlRequest,
+    QueueListResponse, TaskListResponse, TaskStatusResponse,
 };
 pub use state::AppState;
 
@@ -69,6 +69,7 @@ fn router_inner(
             get(queue_get).put(queue_put).delete(queue_delete),
         )
         .route("/v1/queues/{queue}/control", post(queue_control))
+        .route("/v1/queues/{queue}/purge", post(queue_purge))
         .route("/v1/queues/{queue}/tasks", get(task_list).post(task_create))
         .route("/v1/queues/{queue}/tasks:batch", post(task_create_batch))
         .route(
@@ -445,6 +446,30 @@ pub async fn task_list(
         .collect();
 
     Json(TaskListResponse { tasks, next_cursor }).into_response()
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/queues/{queue}/purge",
+    params(("queue" = String, Path, description = "Queue name")),
+    responses(
+        (status = 200, body = PurgeQueueResponse),
+        (status = 404, body = ErrorEnvelope)
+    )
+)]
+pub async fn queue_purge(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Path(queue): Path<String>,
+) -> Response {
+    if let Err(error) = authorize(&principal, &queue, Role::Write) {
+        return error.into_response();
+    }
+    state.metrics.requests.incr();
+    match state.raft.purge_queue(queue).await {
+        Ok(purged) => Json(PurgeQueueResponse { purged }).into_response(),
+        Err(error) => propose_error(error),
+    }
 }
 
 #[utoipa::path(

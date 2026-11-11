@@ -60,7 +60,7 @@ not carry yet.
 - Non-goals: shard count; a membership-change engine of defer's own. Core's
   `membership-controller` drives the change, and defer adopts it when it
   moves onto core's engine (core ADR 0002, phase 6).
-- Open: none; the ROADMAP boundary is complete.
+- Decided: until defer moves onto core's engine, the replica-change driver runs in the operator (reconcile step), one whole replica layer per generation. The pure plan is `defer_operator::plan_replica_change`. Wiring it to a live membership actuator is [#84](https://github.com/faberline/defer/issues/84) and follows the answer in faberline/core#181.
 - Neighbours: extends Replicated group with peer mTLS; the evidence is a
   cluster run from [operations.md](operations.md) § Kubernetes operator and
   direct install.
@@ -83,6 +83,7 @@ not carry yet.
   defer's own; a queue-to-shard map in the custom resource.
 - Open: whether a queue that outgrows one shard needs a placement key finer
   than the queue, which would split its permits across shards.
+- Decided: shard split is [#83](https://github.com/faberline/defer/issues/83). The `shardCount: 1` pin stays until it lands.
 - Neighbours: extends Live replica membership; the evidence is a cluster run
   from [operations.md](operations.md) § Kubernetes operator and direct
   install.

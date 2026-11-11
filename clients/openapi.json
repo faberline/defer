@@ -285,6 +285,47 @@
         }
       }
     },
+    "/v1/queues/{queue}/purge": {
+      "post": {
+        "tags": [
+          "crate::server"
+        ],
+        "operationId": "queue_purge",
+        "parameters": [
+          {
+            "name": "queue",
+            "in": "path",
+            "description": "Queue name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurgeQueueResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/queues/{queue}/tasks": {
       "get": {
         "tags": [
@@ -741,6 +782,18 @@
           },
           "message": {
             "type": "string"
+          }
+        }
+      },
+      "PurgeQueueResponse": {
+        "type": "object",
+        "required": [
+          "purged"
+        ],
+        "properties": {
+          "purged": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
