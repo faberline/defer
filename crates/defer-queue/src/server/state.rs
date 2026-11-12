@@ -83,6 +83,23 @@ impl AppState {
         let queues = self.raft.scheduler().lock().unwrap().queue_names();
         let mut dispatched = 0;
         for queue in queues {
+            if self.raft.is_leader().await {
+                let retention = self
+                    .raft
+                    .scheduler()
+                    .lock()
+                    .unwrap()
+                    .queue_snapshot(&queue)
+                    .ok()
+                    .and_then(|snapshot| snapshot.policy.terminal_retention_ms);
+                if retention.is_some() {
+                    // A failed prune is retried on the next tick; it must not stop dispatch.
+                    let _ = self
+                        .raft
+                        .prune_terminal(queue.clone(), chrono::Utc::now())
+                        .await;
+                }
+            }
             let reports = self
                 .dispatcher
                 .dispatch_batch(

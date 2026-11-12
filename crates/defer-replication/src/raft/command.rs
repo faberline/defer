@@ -71,6 +71,10 @@ pub enum DeferCommand {
     PurgeQueue {
         queue: String,
     },
+    PruneTerminal {
+        queue: String,
+        now: DateTime<Utc>,
+    },
     DeleteQueue {
         queue: String,
     },
@@ -90,6 +94,7 @@ pub enum DeferOutcome {
     Reclaimed(Result<Vec<String>, SchedulerError>),
     Canceled(Result<bool, SchedulerError>),
     QueuePurged(Result<usize, SchedulerError>),
+    Pruned(Result<usize, SchedulerError>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
