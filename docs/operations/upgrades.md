@@ -56,7 +56,7 @@ is written as "not promised".
   order, so the order is not promised.
 - Steps for a version change:
   1. Read the `clients/openapi.json` diff and the release notes.
-  2. Take a backup with `defer backup <dest>` or `GET /admin/backup` (see
+  2. Take a backup with `defer backup --dest <uri>` or `GET /admin/backup` (see
      [install.md](install.md)).
   3. Change `spec.image` on the `Defer` resource.
   4. Watch `kubectl get defer` until `status.phase` is `Ready` and
