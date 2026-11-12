@@ -816,6 +816,74 @@ async fn write_paths_return_typed_scheduler_errors() {
     assert_api_error(refused, StatusCode::CONFLICT, "queue_disabled").await;
 }
 
+/// faberline/defer#113: `terminal_retention_ms` round-trips on the HTTP API,
+/// defaults to no pruning, and a duplicate `task_id` stays refused while its
+/// terminal record is inside the retention.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminal_retention_round_trips_and_keeps_duplicate_ids_refused() {
+    let (_dir, raft) = raft().await;
+    let (url, _server) = start(raft, AuthConfig::open()).await;
+    let client = http1_client();
+
+    let put = client
+        .put(format!("{url}/v1/queues/jobs"))
+        .json(&QueuePolicy {
+            terminal_retention_ms: Some(3_600_000),
+            ..QueuePolicy::default()
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::OK);
+    let body: serde_json::Value = client
+        .get(format!("{url}/v1/queues/jobs"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["policy"]["terminal_retention_ms"], 3_600_000);
+
+    let put = client
+        .put(format!("{url}/v1/queues/plain"))
+        .json(&QueuePolicy::default())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::OK);
+    let body: serde_json::Value = client
+        .get(format!("{url}/v1/queues/plain"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(body["policy"]["terminal_retention_ms"].is_null());
+
+    let created = client
+        .post(format!("{url}/v1/queues/jobs/tasks"))
+        .json(&task_body("dup"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let canceled = client
+        .delete(format!("{url}/v1/queues/jobs/tasks/dup"))
+        .send()
+        .await
+        .unwrap();
+    assert!(canceled.status().is_success());
+    let duplicate = client
+        .post(format!("{url}/v1/queues/jobs/tasks"))
+        .json(&task_body("dup"))
+        .send()
+        .await
+        .unwrap();
+    assert_api_error(duplicate, StatusCode::CONFLICT, "conflict").await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn task_list_paged_filtered_and_authorized() {
     let (_dir, raft) = raft().await;
