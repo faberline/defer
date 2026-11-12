@@ -1,4 +1,5 @@
 // HANDWRITE-BEGIN gap="missing-generator:logic:defer-operator" tracker="#766" reason="Feature-gated Defer operator adapter over service-k8s."
+pub mod capacity_policy;
 pub mod crd;
 pub mod membership_driver;
 pub mod membership_http;
@@ -6,6 +7,10 @@ pub mod reconcile;
 pub mod render;
 pub mod topology_plan;
 
+pub use capacity_policy::{
+    decide_replicas, Bounds, Direction, PolicyState, ReplicaDecision, Sample, Watermarks,
+    COOLDOWN_MS, SCALE_IN_MS, SCALE_OUT_MS,
+};
 pub use crd::{
     crd_yaml, DeclaredQueueControl, DeclaredQueuePolicySpec, DeclaredQueueSpec, Defer,
     DeferBackupSpec, DeferPlacement, DeferResourceLimits, DeferSpec, DeferStatus,
