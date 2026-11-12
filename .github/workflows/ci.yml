@@ -63,9 +63,10 @@ jobs:
           python3 -B scripts/release/verify-release-contract.py --app defer
           python3 -B scripts/release/make-gke-release-receipt.py --self-test
 
-  # The e2e jobs run only on push to main. The operator_recovery check is red
-  # on pull requests for a cluster reason (defer-0 stays Pending; the node
-  # group is at its maximum), so the cluster fix decides when they run on pull
+  # The e2e jobs run only on push to main. The operator_recovery check was red
+  # on pull requests for a cluster reason (defer-0 stayed Pending while the node
+  # group was at its maximum). The pool maximum is now 3 and the overlay needs 3
+  # nodes for the 3 defer pods, so the cluster fix decides when they run on pull
   # requests too. The gate job accepts a skipped e2e job.
   e2e-image:
     name: "e2e: server image"

@@ -34,8 +34,8 @@ patches:
       kind: Deployment
       name: defer-operator
     patch: |-
-      # pool-defer-server has at most 2 nodes: one for the operator, one for
-      # defer-0.
+      # pool-defer-server has at most 3 nodes: the 3 defer pods use one each;
+      # the operator shares one of them.
       - op: replace
         path: /spec/replicas
         value: 1
@@ -59,14 +59,5 @@ patches:
         path: /spec/template/spec/imagePullSecrets
         value:
           - name: ghcr-pull
-      # One pod per node. The empty selector matches every pod of the
-      # namespace, so defer-0 never shares a node with the operator.
-      - op: add
-        path: /spec/template/spec/affinity
-        value:
-          podAntiAffinity:
-            requiredDuringSchedulingIgnoredDuringExecution:
-              - topologyKey: kubernetes.io/hostname
-                labelSelector: {}
       - op: remove
         path: /spec/template/spec/containers/0/resources/limits
