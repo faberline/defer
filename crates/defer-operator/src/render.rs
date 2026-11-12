@@ -103,8 +103,14 @@ fn backup_cron_job(defer: &Defer, cx: &RenderCtx<'_>) -> Option<Value> {
         "backup".into(),
         "--url".into(),
         format!(
-            "http://{}.{}.svc.cluster.local:{CLIENT_PORT}",
-            cx.name, cx.ns
+            "{}://{}.{}.svc.cluster.local:{CLIENT_PORT}",
+            if defer.spec.tls_secret.is_some() {
+                "https"
+            } else {
+                "http"
+            },
+            cx.name,
+            cx.ns
         ),
         "--dest".into(),
         backup.destination.clone(),
@@ -149,6 +155,14 @@ fn backup_cron_job(defer: &Defer, cx: &RenderCtx<'_>) -> Option<Value> {
         defer,
     );
     Some(cron)
+}
+
+fn http_get(path: &str, tls: bool) -> Value {
+    let mut get = json!({"path": path, "port": "http"});
+    if tls {
+        get["scheme"] = json!("HTTPS");
+    }
+    get
 }
 
 fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
@@ -231,6 +245,23 @@ fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
             json!({"name": "DEFER_PEER_TLS_CA", "value": "/var/run/secrets/defer-peer/ca.crt"}),
         ]);
     }
+    let tls = spec.tls_secret.is_some();
+    if let Some(secret) = spec.tls_secret.as_deref() {
+        volumes.push(json!({
+            "name": "defer-tls",
+            "secret": {"secretName": secret, "items": [
+                {"key": "tls.crt", "path": "tls.crt"},
+                {"key": "tls.key", "path": "tls.key"}
+            ]}
+        }));
+        mounts.push(json!({
+            "name": "defer-tls", "mountPath": "/var/run/secrets/defer-tls", "readOnly": true
+        }));
+        env.extend([
+            json!({"name": "DEFER_TLS_CERT_FILE", "value": "/var/run/secrets/defer-tls/tls.crt"}),
+            json!({"name": "DEFER_TLS_KEY_FILE", "value": "/var/run/secrets/defer-tls/tls.key"}),
+        ]);
+    }
 
     let mut sts = render::service_statefulset(ServiceStatefulSet {
         cx,
@@ -270,14 +301,10 @@ fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
         pod_security_context: Some(render::restricted_pod_security_context()),
         container_security_context: Some(render::restricted_container_security_context()),
         termination_grace_period_seconds: Some(spec.grace_secs),
-        readiness_probe: Some(
-            json!({"httpGet": {"path": "/readyz", "port": "http"}, "periodSeconds": 5}),
-        ),
-        liveness_probe: Some(
-            json!({"httpGet": {"path": "/healthz", "port": "http"}, "periodSeconds": 15}),
-        ),
+        readiness_probe: Some(json!({"httpGet": http_get("/readyz", tls), "periodSeconds": 5})),
+        liveness_probe: Some(json!({"httpGet": http_get("/healthz", tls), "periodSeconds": 15})),
         startup_probe: Some(
-            json!({"httpGet": {"path": "/healthz", "port": "http"}, "periodSeconds": 5, "failureThreshold": 120}),
+            json!({"httpGet": http_get("/healthz", tls), "periodSeconds": 5, "failureThreshold": 120}),
         ),
         lifecycle: None,
         volumes,
