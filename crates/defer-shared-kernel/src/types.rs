@@ -59,6 +59,8 @@ pub struct QueuePolicy {
     pub max_backoff_ms: Option<u64>,
     #[serde(default)]
     pub max_doublings: Option<u32>,
+    #[serde(default)]
+    pub terminal_retention_ms: Option<u64>,
 }
 
 impl Default for QueuePolicy {
@@ -72,6 +74,7 @@ impl Default for QueuePolicy {
             retry_backoff_ms: 1_000,
             max_backoff_ms: None,
             max_doublings: None,
+            terminal_retention_ms: None,
         }
     }
 }
