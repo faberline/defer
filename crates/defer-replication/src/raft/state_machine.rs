@@ -117,6 +117,9 @@ impl DeferStateMachine {
             DeferCommand::PurgeQueue { queue } => {
                 DeferOutcome::QueuePurged(scheduler.purge_queue(&queue))
             }
+            DeferCommand::PruneTerminal { queue, now } => {
+                DeferOutcome::Pruned(scheduler.prune_terminal(&queue, now))
+            }
             DeferCommand::DeleteQueue { queue } => {
                 DeferOutcome::QueueDeleted(scheduler.delete_queue(&queue))
             }

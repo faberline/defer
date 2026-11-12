@@ -780,6 +780,195 @@ async fn queue_purge_converges_on_followers_and_survives_restart() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_prune_converges_on_followers_and_survives_restart() {
+    let now = Utc.timestamp_millis_opt(30_000).unwrap();
+    let mut cluster = Cluster::new(3).await;
+    cluster.start_all();
+    let leader = cluster.wait_leader().await;
+    let follower = cluster
+        .live()
+        .map(|(id, _)| id)
+        .find(|id| *id != leader)
+        .unwrap();
+
+    cluster
+        .raft(leader)
+        .configure_queue(
+            "jobs".into(),
+            QueuePolicy {
+                terminal_retention_ms: Some(1_000),
+                ..QueuePolicy::default()
+            },
+        )
+        .await
+        .unwrap();
+    for id in ["old-a", "old-b"] {
+        cluster
+            .raft(leader)
+            .create_task("jobs".into(), task(id, now))
+            .await
+            .unwrap();
+    }
+    cluster
+        .raft(leader)
+        .create_task(
+            "jobs".into(),
+            task("live", now + chrono::Duration::hours(1)),
+        )
+        .await
+        .unwrap();
+
+    let leases = cluster
+        .raft(leader)
+        .lease_due("jobs".into(), now, 2)
+        .await
+        .unwrap();
+    assert_eq!(leases.len(), 2);
+    for lease in &leases {
+        assert!(cluster
+            .raft(leader)
+            .ack("jobs".into(), lease.attempt_id.clone(), lease.epoch, now)
+            .await
+            .unwrap());
+    }
+    cluster
+        .wait_status("old-a", |status| matches!(status, TaskStatus::Succeeded))
+        .await;
+    cluster
+        .wait_status("old-b", |status| matches!(status, TaskStatus::Succeeded))
+        .await;
+
+    // The first prune call stamps terminal_at = now on both records.
+    let stamped = cluster
+        .raft(leader)
+        .prune_terminal("jobs".into(), now)
+        .await
+        .unwrap();
+    assert_eq!(stamped, 0);
+
+    // Before the retention ends, nothing is removed.
+    let early = cluster
+        .raft(leader)
+        .prune_terminal("jobs".into(), now + chrono::Duration::milliseconds(999))
+        .await
+        .unwrap();
+    assert_eq!(early, 0);
+    assert!(cluster
+        .raft(follower)
+        .scheduler()
+        .lock()
+        .unwrap()
+        .status("jobs", "old-a")
+        .unwrap()
+        .is_some());
+
+    // At the end of the retention, both terminal records are removed.
+    let pruned = cluster
+        .raft(leader)
+        .prune_terminal("jobs".into(), now + chrono::Duration::milliseconds(1_000))
+        .await
+        .unwrap();
+    assert_eq!(pruned, 2);
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let ids: Vec<usize> = cluster.live().map(|(id, _)| id).collect();
+        let converged = ids.iter().all(|id| {
+            cluster
+                .raft(*id)
+                .scheduler()
+                .lock()
+                .unwrap()
+                .queue_snapshot("jobs")
+                .map(|s| s.task_count == 1)
+                .unwrap_or(false)
+        });
+        if converged {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "terminal prune did not converge on every live node"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    for id in cluster.live().map(|(id, _)| id).collect::<Vec<_>>() {
+        let scheduler = cluster.raft(id).scheduler();
+        let scheduler = scheduler.lock().unwrap();
+        assert!(scheduler.status("jobs", "old-a").unwrap().is_none());
+        assert!(scheduler.status("jobs", "old-b").unwrap().is_none());
+        assert!(scheduler.status("jobs", "live").unwrap().is_some());
+    }
+
+    // A pruned id can be created again.
+    cluster
+        .raft(leader)
+        .create_task("jobs".into(), task("old-a", now))
+        .await
+        .unwrap();
+
+    // Restart the follower and prove it replayed past PruneTerminal.
+    cluster
+        .raft(leader)
+        .create_task("jobs".into(), task("after", now))
+        .await
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let present = cluster
+            .raft(follower)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .status("jobs", "after")
+            .unwrap()
+            .is_some();
+        if present {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "after did not appear on follower before restart"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let restart_id = follower;
+    cluster.kill(restart_id).await;
+    cluster.start_node(restart_id);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let present = cluster
+            .raft(restart_id)
+            .scheduler()
+            .lock()
+            .unwrap()
+            .status("jobs", "after")
+            .unwrap()
+            .is_some();
+        if present {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "after did not replicate to restarted node"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    {
+        let scheduler = cluster.raft(restart_id).scheduler();
+        let scheduler = scheduler.lock().unwrap();
+        assert!(
+            scheduler.status("jobs", "old-b").unwrap().is_none(),
+            "prune lost on restart"
+        );
+        assert!(scheduler.status("jobs", "live").unwrap().is_some());
+    }
+
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn queue_delete_converges_on_followers_and_survives_restart() {
     let now = Utc.timestamp_millis_opt(30_000).unwrap();
     let mut cluster = Cluster::new(3).await;
