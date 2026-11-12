@@ -47,6 +47,7 @@ jobs:
   test-client:
     name: build test-client image
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
@@ -126,6 +127,7 @@ jobs:
     name: resolve image identity
     needs: image
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       packages: read
