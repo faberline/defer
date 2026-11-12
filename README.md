@@ -100,7 +100,7 @@ onto Cloud Tasks as follows.
 
 | Cloud Tasks concept | Defer today | Gap owner in ROADMAP |
 |---|---|---|
-| Queue | `PUT /v1/queues/{queue}` with `max_in_flight`, `max_dispatch_per_tick`, `max_dispatches_per_second`, `max_burst_size`, `lease_ttl_ms`, `retry_backoff_ms`; `GET` reads it back | `resource-listing-and-retention` adds list, purge, and delete; `declarative-queues` declares queues on the custom resource |
+| Queue | `PUT /v1/queues/{queue}` with `max_in_flight`, `max_dispatch_per_tick`, `max_dispatches_per_second`, `max_burst_size`, `lease_ttl_ms`, `retry_backoff_ms`, `terminal_retention_ms`; `GET` reads it back | `resource-listing-and-retention` adds list, purge, and delete; `declarative-queues` declares queues on the custom resource |
 | Queue state | `POST /v1/queues/{queue}/control` with `Running`, `Paused`, or `Disabled` | None |
 | Task | `{task_id, schedule_at, priority?, target, payload, max_attempts?}`; `POST .../tasks` for one, `POST .../tasks:batch` for an atomic batch | None |
 | HTTP target | `target.url`, `target.method` (default `POST`), `target.headers`; the payload is the body | `cloud-identity-target-tokens` and `app-engine-targets` are non-goals |
@@ -108,10 +108,10 @@ onto Cloud Tasks as follows.
 | Schedule time | `schedule_at`; the task is eligible once due, higher `priority` first, then creation order | None |
 | Retry config | `max_attempts` per task, `retry_backoff_ms` per queue doubling per attempt, `--target-timeout-secs` per process | `retry-config-and-dispatch-deadline` |
 | Rate limits | `max_dispatches_per_second`, `max_burst_size`, `max_in_flight` are committed state shared by every replica | None |
-| Dead letter | The task becomes `DeadLettered` and stays readable | `resource-listing-and-retention` prunes terminal records |
+| Dead letter | The task becomes `DeadLettered` and stays readable | None: `terminal_retention_ms` prunes terminal records |
 | Get and delete task | `GET` and `DELETE /v1/queues/{queue}/tasks/{task_id}` | `resource-listing-and-retention` adds listing |
 | Run task now | Not built | `force-run-bypass` is a non-goal |
-| Deduplication | `task_id` is unique within its queue; a duplicate refuses the create | `resource-listing-and-retention` adds a retention window after which an id is creatable again |
+| Deduplication | `task_id` is unique within its queue; a duplicate refuses the create | None: after `terminal_retention_ms` a pruned id is creatable again |
 
 Two defer-only routes exist for operators: `POST /v1/queues/{queue}/dispatch`
 runs one dispatch tick by hand, and `GET /admin/backup` streams the state
