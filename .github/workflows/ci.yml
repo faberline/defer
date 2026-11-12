@@ -19,6 +19,7 @@ jobs:
   lint:
     name: "lint: fmt, clippy"
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
@@ -39,6 +40,7 @@ jobs:
     name: "test: workspace"
     needs: [lint]
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
@@ -54,13 +56,6 @@ jobs:
           cargo test --locked --workspace
           cargo test --locked -p defer --features operator --test operator
           python3 -B scripts/meta/project_docs_contract.py check .
-
-  test-release-contract:
-    name: "test: release contract"
-    needs: [lint]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Release contract
         shell: bash
         run: |
@@ -74,7 +69,7 @@ jobs:
   # requests too. The gate job accepts a skipped e2e job.
   e2e-image:
     name: "e2e: server image"
-    needs: [test-workspace, test-release-contract]
+    needs: [test-workspace]
     if: github.event_name == 'push'
     permissions:
       contents: read
@@ -83,9 +78,10 @@ jobs:
 
   e2e-test-client:
     name: "e2e: test-client image"
-    needs: [test-workspace, test-release-contract]
+    needs: [test-workspace]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     permissions:
       contents: read
       packages: write
@@ -163,9 +159,10 @@ jobs:
 
   e2e-resolve:
     name: "e2e: resolve image identity"
-    needs: [test-workspace, test-release-contract, e2e-image]
+    needs: [test-workspace, e2e-image]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       packages: read
@@ -254,8 +251,9 @@ jobs:
   gate:
     name: gate
     if: always()
-    needs: [lint, test-workspace, test-release-contract, e2e-image, e2e-test-client, e2e-resolve, e2e-operator-recovery]
+    needs: [lint, test-workspace, e2e-image, e2e-test-client, e2e-resolve, e2e-operator-recovery]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check every stage
         env:
