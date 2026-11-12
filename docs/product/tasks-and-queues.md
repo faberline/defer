@@ -21,8 +21,8 @@ H2 outcome.
   scheduled or leased task; a dead-lettered task stays readable; a refusal
   answers the shared error envelope with 404 for a missing queue or task and
   409 for a duplicate id or a disabled queue.
-- Limits today: there is no listing, purge, or retention, so terminal
-  records stay in every snapshot; ETA resolution is the dispatch tick.
+- Limits today: terminal records stay in every snapshot unless the queue sets
+  `terminal_retention_ms`; ETA resolution is the dispatch tick.
 - Non-goals: nothing beyond the single-task model is promised by this
   section.
 - Neighbours: none; first section of the area.
@@ -60,7 +60,7 @@ H2 outcome.
   becomes creatable again only after retention.
 - Non-goals: full-text or payload search; cross-queue queries.
 - Open: whether listing is served from the leader only or from any applied
-  replica; the default retention.
+  replica; an instance-wide default retention (today the default is none, set per queue by terminal_retention_ms).
 - Neighbours: extends Scheduled tasks and Queue policy and control; the
   OpenAPI document and clients in
   [api-and-clients.md](api-and-clients.md) carry the new operations.
