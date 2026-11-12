@@ -1,6 +1,7 @@
 # What the suite reads and does in the run's namespace, and nothing
 # cluster-wide: it reads the operator's objects and pods, runs `defer
-# --version` in defer-0, and deletes defer-0 for the replacement check.
+# --version` in every defer pod, and deletes one defer pod for the replacement
+# check.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

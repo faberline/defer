@@ -1,6 +1,7 @@
-# The Defer instance the e2e suites test: one replica, so the operator renders
-# StatefulSet/defer with the single pod defer-0 and its PVC data-defer-0. The
-# suites reach it at http://defer:7141.
+# The Defer instance the e2e suites test: three replicas, so the operator renders
+# StatefulSet/defer with the pods defer-0, defer-1 and defer-2, and the PVCs
+# data-defer-0, data-defer-1 and data-defer-2. The suites reach it at
+# http://defer:7141.
 apiVersion: defer.dev/v1alpha1
 kind: Defer
 metadata:
@@ -10,8 +11,8 @@ spec:
   image: ghcr.io/faberline/defer:REPLACE_ME
   imagePullPolicy: IfNotPresent
   shardCount: 1
-  replicasPerShard: 1
-  voterCount: 1
+  replicasPerShard: 3
+  voterCount: 3
   # The test pools are N4 machines, which take only Hyperdisk. The default
   # class standard-rwo is pd-balanced, so the PVC never binds there and the
   # autoscaler does not add a node. aw infra/gke-test/pools.yaml says PVCs on

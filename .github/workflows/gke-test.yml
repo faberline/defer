@@ -10,7 +10,7 @@
 #
 # Suites (aw docs/standards/test-cluster.md "Test suites"), one call each, one
 # at a time, each on a fresh deploy:
-#   operator_recovery  k8s/gke-test-job/operator_recovery  operator topology and pod recovery
+#   operator_recovery  k8s/gke-test-job/operator_recovery  operator topology (3 replicas) and pod loss recovery
 #   deploy_smoke       k8s/gke-test-job/deploy_smoke       dispatch journey and metrics diagnostics
 # Manual only: a dispatch picks one suite or all. ci.yml runs the same jobs as its e2e stage.
 #

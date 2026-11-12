@@ -1,9 +1,11 @@
 //! Suite `operator_recovery`: the Defer CR `defer` of k8s/overlays/gke-test,
-//! reconciled by the shipped operator into StatefulSet/defer and its one pod
-//! defer-0. It checks that the operator renders the expected topology on the
-//! placed pool, the image under test runs in every pod, and the queue and
-//! task state survives the replacement of the serving pod with its PVC kept.
+//! reconciled by the shipped operator into StatefulSet/defer with three pods,
+//! defer-0 to defer-2. It checks that the operator renders the expected
+//! topology on the placed pool with one pod per node, the image under test runs
+//! in every pod, and the queue and task state survives the replacement of one
+//! pod with its PVC kept.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -15,8 +17,11 @@ use super::{
 
 const SUITE: &str = "operator_recovery";
 const DEFER: &str = "defer";
-const POD: &str = "defer-0";
-const PVC: &str = "data-defer-0";
+/// The StatefulSet has REPLICAS pods, `defer-0` to `defer-2`, each with its own
+/// PVC `data-defer-0` to `data-defer-2`.
+const REPLICAS: usize = 3;
+/// The pod that the recovery test deletes. The test does not assume it leads.
+const KILLED: usize = 1;
 /// The PVC request in k8s/overlays/gke-test/defer-cr.yaml. A
 /// hyperdisk-balanced disk on the N4 test pools is at least 4 GB.
 const STORAGE: &str = "4Gi";
@@ -31,11 +36,21 @@ const TASK_A: &str = "before-restart-a";
 const TASK_B: &str = "before-restart-b";
 
 /// The run waits only for the operator rollout. The operator creates the
-/// StatefulSet after that, and pool-defer-server may still have to add a node
-/// for defer-0.
+/// StatefulSet after that, and pool-defer-server may still have to add nodes
+/// for the three defer pods.
 const FIRST_POD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const REPLACEMENT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const API_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+
+/// The name of the StatefulSet pod with ordinal `i`.
+fn pod(i: usize) -> String {
+    format!("defer-{i}")
+}
+
+/// The name of the PVC of the StatefulSet pod with ordinal `i`.
+fn pvc(i: usize) -> String {
+    format!("data-defer-{i}")
+}
 
 fn selector() -> Value {
     json!({
@@ -46,40 +61,48 @@ fn selector() -> Value {
 }
 
 /// The operator renders StatefulSet/defer, its two Services, and its PDB as
-/// the shipped contract says, places defer-0 on pool-defer-server, binds a
-/// PVC of at least the requested 4Gi, and runs the image under test in the
-/// operator and in defer-0.
+/// the shipped contract says, places the three defer pods on pool-defer-server
+/// with one pod per node, binds a PVC of at least the requested 4Gi for each,
+/// and runs the image under test in the operator and in every defer pod.
 #[test]
 #[ignore = "e2e: needs E2E_ENDPOINT"]
 fn operator_renders_the_placed_topology() {
     endpoint();
     let expected = Expected::from_env();
 
-    let uid = wait_for_ready_pod(None, FIRST_POD_TIMEOUT);
-    evidence(SUITE, "pod ready", json!({ "pod": POD, "uid": uid }));
+    let mut pods = Vec::new();
+    for i in 0..REPLICAS {
+        let name = pod(i);
+        let uid = wait_for_ready_pod(&name, None, FIRST_POD_TIMEOUT);
+        evidence(SUITE, "pod ready", json!({ "pod": name, "uid": uid }));
+        pods.push(name);
+    }
 
-    let pvc = wait_for("PVC data-defer-0 Bound", API_TIMEOUT, || {
-        let pvc = kubectl_json(&["get", "pvc", PVC]);
-        if pvc["status"]["phase"] == "Bound" {
-            Ok(pvc)
-        } else {
-            Err(format!("phase {}", pvc["status"]["phase"]))
-        }
-    });
-    assert_eq!(pvc["spec"]["resources"]["requests"]["storage"], STORAGE);
-    let capacity = pvc["status"]["capacity"]["storage"]
-        .as_str()
-        .unwrap_or_default();
-    // A cloud disk may round up, so the floor is the contract.
-    assert!(
-        gibibytes(capacity).is_some_and(|gi| gi >= STORAGE_GI),
-        "PVC {PVC} capacity {capacity:?} is under the requested {STORAGE}"
-    );
-    evidence(
-        SUITE,
-        "PVC bound",
-        json!({ "pvc": PVC, "request": STORAGE, "capacity": capacity }),
-    );
+    for i in 0..REPLICAS {
+        let claim = pvc(i);
+        let bound = wait_for(&format!("PVC {claim} Bound"), API_TIMEOUT, || {
+            let pvc = kubectl_json(&["get", "pvc", claim.as_str()]);
+            if pvc["status"]["phase"] == "Bound" {
+                Ok(pvc)
+            } else {
+                Err(format!("phase {}", pvc["status"]["phase"]))
+            }
+        });
+        assert_eq!(bound["spec"]["resources"]["requests"]["storage"], STORAGE);
+        let capacity = bound["status"]["capacity"]["storage"]
+            .as_str()
+            .unwrap_or_default();
+        // A cloud disk may round up, so the floor is the contract.
+        assert!(
+            gibibytes(capacity).is_some_and(|gi| gi >= STORAGE_GI),
+            "PVC {claim} capacity {capacity:?} is under the requested {STORAGE}"
+        );
+        evidence(
+            SUITE,
+            "PVC bound",
+            json!({ "pvc": claim, "request": STORAGE, "capacity": capacity }),
+        );
+    }
 
     assert_statefulset();
     assert_services_and_pdb();
@@ -89,30 +112,44 @@ fn operator_renders_the_placed_topology() {
         json!({ "statefulset": DEFER, "services": [DEFER, "defer-headless"], "pdb": DEFER }),
     );
 
-    let pod = kubectl_json(&["get", "pod", POD]);
-    let spec = &pod["spec"];
+    let mut nodes = Vec::new();
+    for name in &pods {
+        let pod = kubectl_json(&["get", "pod", name.as_str()]);
+        let spec = &pod["spec"];
+        assert_eq!(
+            spec["nodeSelector"][POOL_LABEL], POOL,
+            "{name} nodeSelector"
+        );
+        assert!(
+            spec["tolerations"]
+                .as_array()
+                .is_some_and(|all| all.iter().any(|t| {
+                    t["key"] == POOL_LABEL && t["value"] == POOL && t["effect"] == "NoSchedule"
+                })),
+            "{name} has no toleration {POOL_LABEL}={POOL}:NoSchedule: {}",
+            spec["tolerations"]
+        );
+        assert_eq!(
+            spec["imagePullSecrets"],
+            json!([{ "name": "ghcr-pull" }]),
+            "{name} imagePullSecrets"
+        );
+        // The Job's Role is namespaced, so it cannot read Node labels; the
+        // nodeSelector above is what pins the pool.
+        let node = spec["nodeName"].as_str().unwrap_or_default().to_owned();
+        assert!(!node.is_empty(), "{name} is Ready but has no nodeName");
+        evidence(
+            SUITE,
+            "placement",
+            json!({ "pod": name, "node": node, "pool": POOL, "image_pull_secret": "ghcr-pull" }),
+        );
+        nodes.push(node);
+    }
+    let distinct: HashSet<&String> = nodes.iter().collect();
     assert_eq!(
-        spec["nodeSelector"][POOL_LABEL], POOL,
-        "defer-0 nodeSelector"
-    );
-    assert!(
-        spec["tolerations"]
-            .as_array()
-            .is_some_and(|all| all.iter().any(|t| {
-                t["key"] == POOL_LABEL && t["value"] == POOL && t["effect"] == "NoSchedule"
-            })),
-        "defer-0 has no toleration {POOL_LABEL}={POOL}:NoSchedule: {}",
-        spec["tolerations"]
-    );
-    assert_eq!(spec["imagePullSecrets"], json!([{ "name": "ghcr-pull" }]));
-    // The Job's Role is namespaced, so it cannot read Node labels; the
-    // nodeSelector above is what pins the pool.
-    let node = spec["nodeName"].as_str().unwrap_or_default().to_owned();
-    assert!(!node.is_empty(), "defer-0 is Ready but has no nodeName");
-    evidence(
-        SUITE,
-        "placement",
-        json!({ "pod": POD, "node": node, "pool": POOL, "image_pull_secret": "ghcr-pull" }),
+        distinct.len(),
+        REPLICAS,
+        "defer pods share a node (one pod per node): {nodes:?}"
     );
 
     let status = wait_for("Defer/defer status.phase Ready", API_TIMEOUT, || {
@@ -123,26 +160,28 @@ fn operator_renders_the_placed_topology() {
             Err(status.to_string())
         }
     });
-    assert_eq!(status["readyReplicas"], 1);
-    assert_eq!(status["desiredReplicas"], 1);
+    assert_eq!(status["readyReplicas"], REPLICAS as u64);
+    assert_eq!(status["desiredReplicas"], REPLICAS as u64);
     evidence(SUITE, "CR status", json!({ "status": status }));
 
     assert_identity(&expected);
 }
 
-/// Queue config and two scheduled tasks committed before the serving pod is
-/// replaced are all there after it, on the same PVC; pause and cancel still
-/// commit after the recovery.
+/// Queue config and two scheduled tasks committed before one pod of the group
+/// is replaced are all there after it recovers, with its PVC kept; pause and
+/// cancel still commit after the recovery.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "e2e: needs E2E_ENDPOINT"]
-async fn queue_state_survives_the_serving_pod_replacement() {
+async fn queue_state_survives_a_pod_loss_in_a_three_replica_group() {
     let base = endpoint();
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
         .unwrap();
 
-    let first_uid = wait_for_ready_pod(None, FIRST_POD_TIMEOUT);
+    let uids: Vec<String> = (0..REPLICAS)
+        .map(|i| wait_for_ready_pod(&pod(i), None, FIRST_POD_TIMEOUT))
+        .collect();
     wait_healthy(&http, &base).await;
 
     let queue = send(http.put(format!("{base}/v1/queues/{QUEUE}")).json(&json!({
@@ -173,24 +212,40 @@ async fn queue_state_survives_the_serving_pod_replacement() {
         json!({ "tasks": [TASK_A, TASK_B], "status": "Scheduled" }),
     );
 
-    let kept_pvc = pvc_uid();
-    kubectl(&["delete", "pod", POD, "--wait=false"]);
-    let replacement_uid = wait_for_ready_pod(Some(&first_uid), REPLACEMENT_TIMEOUT);
+    let victim = pod(KILLED);
+    let victim_pvc = pvc(KILLED);
+    let first_uid = &uids[KILLED];
+    let kept_pvc = pvc_uid(&victim_pvc);
+    kubectl(&["delete", "pod", victim.as_str(), "--wait=false"]);
+    let replacement_uid = wait_for_ready_pod(&victim, Some(first_uid), REPLACEMENT_TIMEOUT);
     assert_ne!(
-        replacement_uid, first_uid,
-        "the StatefulSet did not replace {POD}"
+        &replacement_uid, first_uid,
+        "the StatefulSet did not replace {victim}"
     );
-    assert_eq!(pvc_uid(), kept_pvc, "PVC {PVC} was replaced, not kept");
     assert_eq!(
-        kubectl_json(&["get", "pvc", PVC])["status"]["phase"],
+        pvc_uid(&victim_pvc),
+        kept_pvc,
+        "PVC {victim_pvc} was replaced, not kept"
+    );
+    assert_eq!(
+        kubectl_json(&["get", "pvc", victim_pvc.as_str()])["status"]["phase"],
         "Bound"
     );
     evidence(
         SUITE,
         "pod replaced, PVC kept",
-        json!({ "old_uid": first_uid, "new_uid": replacement_uid, "pvc_uid": kept_pvc }),
+        json!({
+            "pod": victim,
+            "pvc": victim_pvc,
+            "old_uid": first_uid,
+            "new_uid": replacement_uid,
+            "pvc_uid": kept_pvc
+        }),
     );
 
+    for i in (0..REPLICAS).filter(|i| *i != KILLED) {
+        wait_for_ready_pod(&pod(i), None, REPLACEMENT_TIMEOUT);
+    }
     wait_healthy(&http, &base).await;
     assert_queue(&http, &base, "Running", 0).await;
     assert_task(&http, &base, TASK_B, "Scheduled").await;
@@ -272,11 +327,11 @@ async fn wait_healthy(http: &reqwest::Client, base: &str) {
     }
 }
 
-/// Waits until defer-0 exists with a uid other than `previous` and is Ready,
-/// and returns its uid.
-fn wait_for_ready_pod(previous: Option<&str>, timeout: Duration) -> String {
-    wait_for("pod defer-0 Ready", timeout, || {
-        let out = try_kubectl(&["get", "pod", POD, "-o", "json"])?;
+/// Waits until the pod `name` exists with a uid other than `previous` and is
+/// Ready, and returns its uid.
+fn wait_for_ready_pod(name: &str, previous: Option<&str>, timeout: Duration) -> String {
+    wait_for(&format!("pod {name} Ready"), timeout, || {
+        let out = try_kubectl(&["get", "pod", name, "-o", "json"])?;
         let pod: Value = serde_json::from_str(&out).map_err(|err| err.to_string())?;
         let uid = pod["metadata"]["uid"]
             .as_str()
@@ -297,12 +352,12 @@ fn wait_for_ready_pod(previous: Option<&str>, timeout: Duration) -> String {
     })
 }
 
-fn pvc_uid() -> String {
-    let uid = kubectl_json(&["get", "pvc", PVC])["metadata"]["uid"]
+fn pvc_uid(name: &str) -> String {
+    let uid = kubectl_json(&["get", "pvc", name])["metadata"]["uid"]
         .as_str()
         .unwrap_or_default()
         .to_owned();
-    assert!(!uid.is_empty(), "PVC {PVC} has no uid");
+    assert!(!uid.is_empty(), "PVC {name} has no uid");
     uid
 }
 
@@ -322,7 +377,7 @@ fn gibibytes(quantity: &str) -> Option<u64> {
 fn assert_statefulset() {
     let sts = kubectl_json(&["get", "statefulset", DEFER]);
     let spec = &sts["spec"];
-    assert_eq!(spec["replicas"], 1);
+    assert_eq!(spec["replicas"], REPLICAS as u64);
     assert_eq!(spec["serviceName"], "defer-headless");
     assert_eq!(spec["selector"]["matchLabels"], selector());
     let labels = &spec["template"]["metadata"]["labels"];
@@ -395,18 +450,23 @@ fn assert_services_and_pdb() {
     assert_eq!(pdb["spec"]["selector"]["matchLabels"], selector());
 }
 
-/// The operator and defer-0 run the image under test, pinned by digest, and
-/// the binary in it reports the expected version.
+/// The operator and every defer pod run the image under test, pinned by
+/// digest, and the binary in each pod reports the expected version.
 fn assert_identity(expected: &Expected) {
     let operator = assert_pods_run(expected, OPERATOR_LABEL, 1);
-    let server = assert_pods_run(expected, SERVER_LABEL, 1);
-    let version = kubectl(&["exec", POD, "--", "defer", "--version"]);
-    let version = version.trim();
-    assert_eq!(
-        version,
-        format!("defer {}", expected.version),
-        "defer --version in {POD}"
-    );
+    let server = assert_pods_run(expected, SERVER_LABEL, REPLICAS as u64);
+    let mut versions = Vec::new();
+    for i in 0..REPLICAS {
+        let name = pod(i);
+        let version = kubectl(&["exec", name.as_str(), "--", "defer", "--version"]);
+        let version = version.trim().to_owned();
+        assert_eq!(
+            version,
+            format!("defer {}", expected.version),
+            "defer --version in {name}"
+        );
+        versions.push(version);
+    }
     evidence(
         SUITE,
         "identity",
@@ -414,11 +474,25 @@ fn assert_identity(expected: &Expected) {
             "image": expected.image,
             "runtime_digest": expected.runtime_digest,
             "git_sha": expected.git_sha,
-            "version": version,
+            "versions": versions,
             "operator_image_ids": operator,
             "server_image_ids": server,
         }),
     );
+}
+
+#[test]
+fn pod_and_pvc_names_follow_the_statefulset_ordinal() {
+    assert_eq!(pod(0), "defer-0");
+    assert_eq!(pod(2), "defer-2");
+    assert_eq!(pvc(1), "data-defer-1");
+    assert_eq!(pvc(0), "data-defer-0");
+}
+
+#[test]
+fn killed_pod_is_one_of_the_replicas() {
+    assert_eq!(REPLICAS, 3);
+    assert!((0..REPLICAS).contains(&KILLED));
 }
 
 #[test]
