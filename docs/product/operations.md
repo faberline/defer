@@ -35,7 +35,7 @@ owns four outcomes.
 - Promise: a `Defer` custom resource renders and reconciles a StatefulSet,
   headless and client Services, a PodDisruptionBudget with
   `maxUnavailable: 1`, and a backup CronJob, projecting the token registry,
-  target signing, and peer TLS secrets, and reports phase and ready
+  target signing, peer TLS, and public API TLS (`tlsSecret`) secrets, and reports phase and ready
   replicas; the direct-install base is a restricted durable singleton with
   opt-in NetworkPolicy and observability components; `defer k8s crd`,
   `operator`, and `instance render` emit every layer offline; the GKE
@@ -43,7 +43,9 @@ owns four outcomes.
   task state.
 - Limits today: `shardCount` is pinned to 1; the resource declares no
   queues; status carries no conditions; the GKE run is
-  single-voter on a shared cluster.
+  single-voter on a shared cluster. `tlsSecret` is file based with no
+  rotation; the backup CronJob reaches the instance over `https` and must
+  trust the certificate.
 - Non-goals: an HPA; replicas are a replication decision, not a load
   decision.
 - Neighbours: projects the secrets from Grants, admission, and body limit

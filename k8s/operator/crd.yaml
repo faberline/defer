@@ -233,6 +233,10 @@ spec:
               targetSigningSecret:
                 nullable: true
                 type: string
+              tlsSecret:
+                description: Secret with `tls.crt` and `tls.key`; when set, the public API serves HTTPS.
+                nullable: true
+                type: string
               tokensSecret:
                 nullable: true
                 type: string

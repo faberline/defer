@@ -89,3 +89,115 @@ serve port. `/readyz` turns false the moment shutdown starts.
 
 The cluster suites in `crates/defer/tests/it/e2e/` are `#[ignore]`. Each one
 has a Job under `k8s/gke-test-job/<suite>/`.
+
+## Runbook
+
+A 3-replica group keeps quorum with 2 nodes: one node down is survivable,
+two are not. `<ns>` is the namespace, `<svc>` the Service and `<queue>` the
+queue name. Probes and metrics are served on the serve port (`7141`).
+
+### One node down
+
+- **Symptom**: `kubectl -n <ns> get statefulset defer` reads `2/3`;
+  `kubectl -n <ns> get defer` shows `readyReplicas` 2.
+- **Read**: `/readyz` of the other pods; `kubectl -n <ns> describe pod defer-<n>`.
+- **Command**:
+  ```bash
+  kubectl -n <ns> get pods -l app.kubernetes.io/name=defer
+  kubectl -n <ns> logs defer-<n> --previous
+  ```
+- **Next**: the StatefulSet replaces the pod and keeps its PVC (`operator_recovery`
+  suite). If the pod stays Pending, fix the node pool. If two nodes are down
+  the group has no quorum and writes fail with 5xx: restore a node first and
+  do not delete PVCs.
+
+### A leader that flaps
+
+- **Symptom**: repeated 409 `not_leader` responses whose `x-defer-leader`
+  header changes, or pods that restart.
+- **Read**: the RESTARTS column of `kubectl -n <ns> get pods`; `kubectl -n <ns> logs defer-<n>`.
+- **Command**:
+  ```bash
+  curl -si -X POST http://<svc>:7141/v1/queues/<queue>/tasks | grep -i x-defer-leader
+  ```
+- **Next**: check the peer TLS secret (`DEFER_PEER_TLS_CERT`,
+  `DEFER_PEER_TLS_KEY`) and the network between the pods. defer exports no
+  leader metric, so the header and the logs are the only leader signals.
+
+### A queue that does not drain
+
+- **Symptom**: `defer_queue_tasks{state="scheduled"}` grows while
+  `defer_dispatch_acked_total` stays flat.
+- **Read**: `GET /v1/queues/<queue>` (`control_state`, `task_count`,
+  `terminal_count`); `defer_dispatch_retried_total` and
+  `defer_dispatch_dead_lettered_total` on `/metrics`.
+- **Command**:
+  ```bash
+  curl -sS http://<svc>:7141/v1/queues/<queue>
+  curl -sS http://<svc>:7141/metrics | grep defer_dispatch_retried_total
+  ```
+- **Next**: `control_state` `Paused` is deliberate. To resume, send
+  `POST /v1/queues/<queue>/control` with body `{"state":"Running"}`. A rising
+  retried count means the target fails: read the task with
+  `GET /v1/queues/<queue>/tasks/<task_id>`. Raise `max_dispatches_per_second`
+  only after the target is healthy.
+
+### A lost-ownership alert
+
+- **Symptom**: `defer_dispatch_lost_ownership_total` rises.
+- **Meaning**: a settlement came from a stale owner or epoch and was refused
+  (ADR `docs/adr/0004-executor-and-epoch-fencing.md`).
+- **Read**: that counter and `defer_dispatch_retried_total` over time.
+- **Command**:
+  ```bash
+  curl -sS http://<svc>:7141/metrics | grep defer_dispatch_lost_ownership_total
+  ```
+- **Next**: one refusal after a leader change is expected, and the task is
+  retried. A counter that keeps rising with no restart means a node still
+  dispatches with an old lease: restart that pod.
+
+### A full disk
+
+- **Symptom**: a pod restarts, or `/readyz` fails on one pod.
+- **Read**: `kubectl -n <ns> describe pod defer-<n>`; `kubectl -n <ns> get pvc`.
+- **Command**:
+  ```bash
+  kubectl -n <ns> get pvc
+  kubectl -n <ns> exec defer-<n> -- df -h /data
+  ```
+- **Next**: take a backup first (see "Restore from a backup"). Then grow the
+  PVC if its storage class allows it (`allowVolumeExpansion`). Otherwise
+  restore into a bigger PVC. defer has no disk metric or disk check, so this
+  entry relies on Kubernetes only.
+
+### Restore from a backup
+
+- **Symptom**: data is lost or a replica must be rebuilt from a copy.
+- **Read**: `GET /v1/queues/<queue>` after the group starts.
+- **Command**:
+  ```bash
+  defer backup --url http://<svc>:7141 --token <token> --dest <uri>
+  ```
+  To restore: stop the group, give every replica an empty PVC, set
+  `DEFER_BOOTSTRAP_SEED_URI=<uri>` on each instance (or
+  `--bootstrap-seed-uri <uri>`), then start the group.
+- **Next**: unset the variable after the first start. The seed is read once,
+  and only into an empty data directory. A restore drill on GKE is not done
+  (its own issue).
+
+### Rolling upgrade
+
+- **Symptom**: a new image must be rolled out.
+- **Steps**:
+  1. Take a backup (see "Restore from a backup").
+  2. Change `spec.image` of the `Defer` resource (`ghcr.io/faberline/defer:<tag>`).
+  3. Watch `kubectl -n <ns> get defer` until it is `Ready` and `readyReplicas`
+     equals `desiredReplicas`.
+  4. Check `curl -sS http://<svc>:7141/healthz` on each pod.
+- **Next**: the upgrade policy is not written here.
+
+### Not covered
+
+- Live membership change (`POST /v1/admin/membership`); it is not shipped (#84).
+- Shard changes.
+- A leader metric and a disk metric: defer has neither.
