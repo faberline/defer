@@ -365,6 +365,16 @@ impl DeferRaft {
         }
     }
 
+    pub async fn prune_terminal(&self, queue: String, now: DateTime<Utc>) -> ProposeResult<usize> {
+        match self
+            .propose(DeferCommand::PruneTerminal { queue, now })
+            .await?
+        {
+            DeferOutcome::Pruned(result) => Ok(result?),
+            other => Err(mismatch("prune_terminal", other)),
+        }
+    }
+
     pub fn scheduler(&self) -> Arc<Mutex<DeferScheduler>> {
         self.sm.scheduler()
     }
