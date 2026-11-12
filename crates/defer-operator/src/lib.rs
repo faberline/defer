@@ -8,8 +8,9 @@ pub mod render;
 pub mod topology_plan;
 
 pub use capacity_policy::{
-    decide_replicas, Bounds, Direction, PolicyState, ReplicaDecision, Sample, Watermarks,
-    COOLDOWN_MS, SCALE_IN_MS, SCALE_OUT_MS,
+    arbitrate, decide_disk, decide_replicas, Bounds, Change, Direction, DiskMarks, DiskSample,
+    PolicyState, ReplicaDecision, Sample, Watermarks, COOLDOWN_MS, DISK_MERGE_MS, DISK_SPLIT_MS,
+    SCALE_IN_MS, SCALE_OUT_MS,
 };
 pub use crd::{
     crd_yaml, DeclaredQueueControl, DeclaredQueuePolicySpec, DeclaredQueueSpec, Defer,
