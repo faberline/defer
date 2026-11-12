@@ -53,6 +53,9 @@ pub struct DeferSpec {
     pub target_signing_key_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer_tls_secret: Option<String>,
+    /// Secret with `tls.crt` and `tls.key`; when set, the public API serves HTTPS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_secret: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bootstrap_seed_uri: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

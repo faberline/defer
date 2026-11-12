@@ -189,6 +189,7 @@ pub(crate) async fn queue(args: QueueArgs) -> Result<()> {
                 retry_backoff_ms: args.retry_backoff_ms,
                 max_backoff_ms: args.max_backoff_ms,
                 max_doublings: args.max_doublings,
+                terminal_retention_ms: None,
             };
             let response = client(&args.remote)?
                 .put(format!("{}/v1/queues/{}", args.remote.url, args.queue))

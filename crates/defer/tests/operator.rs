@@ -645,4 +645,77 @@ fn generated_crd_carries_declared_queues_schema() {
         assert!(yaml.contains(field), "CRD is missing {field}");
     }
 }
+
+fn tls_production() -> Defer {
+    let mut defer = production();
+    defer.spec.tls_secret = Some("public-tls".into());
+    defer
+}
+
+#[test]
+fn tls_secret_projects_files_and_https_probes() {
+    let objects = operator::render::render(&tls_production());
+    let pod = &object(&objects, "StatefulSet", "jobs")["spec"]["template"]["spec"];
+    let container = &pod["containers"][0];
+    assert_eq!(
+        named(&pod["volumes"], "defer-tls"),
+        &json!({"name": "defer-tls", "secret": {"secretName": "public-tls", "items": [
+            {"key": "tls.crt", "path": "tls.crt"},
+            {"key": "tls.key", "path": "tls.key"}
+        ]}})
+    );
+    assert_eq!(
+        named(&container["volumeMounts"], "defer-tls"),
+        &json!({"name": "defer-tls", "mountPath": "/var/run/secrets/defer-tls", "readOnly": true})
+    );
+    assert_eq!(
+        named(&container["env"], "DEFER_TLS_CERT_FILE")["value"],
+        "/var/run/secrets/defer-tls/tls.crt"
+    );
+    assert_eq!(
+        named(&container["env"], "DEFER_TLS_KEY_FILE")["value"],
+        "/var/run/secrets/defer-tls/tls.key"
+    );
+    for probe in ["readinessProbe", "livenessProbe", "startupProbe"] {
+        assert_eq!(container[probe]["httpGet"]["scheme"], "HTTPS", "{probe}");
+    }
+    let cron = object(&objects, "CronJob", "jobs-backup");
+    assert_eq!(
+        cron["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]["args"][2],
+        "https://jobs.payments.svc.cluster.local:7141"
+    );
+}
+
+#[test]
+fn no_tls_secret_renders_no_tls_projection_and_plain_probes() {
+    let objects = operator::render::render(&production());
+    let pod = &object(&objects, "StatefulSet", "jobs")["spec"]["template"]["spec"];
+    let container = &pod["containers"][0];
+    assert!(pod["volumes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|volume| volume["name"] != "defer-tls"));
+    assert!(container["env"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|var| var["name"] != "DEFER_TLS_CERT_FILE" && var["name"] != "DEFER_TLS_KEY_FILE"));
+    for probe in ["readinessProbe", "livenessProbe", "startupProbe"] {
+        assert!(
+            container[probe]["httpGet"].get("scheme").is_none(),
+            "{probe}"
+        );
+    }
+    let cron = object(&objects, "CronJob", "jobs-backup");
+    assert_eq!(
+        cron["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]["args"][2],
+        "http://jobs.payments.svc.cluster.local:7141"
+    );
+}
+
+#[test]
+fn generated_crd_carries_tls_secret() {
+    assert!(operator::crd_yaml().contains("tlsSecret"));
+}
 // HANDWRITE-END

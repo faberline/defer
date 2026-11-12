@@ -23,6 +23,8 @@ struct TaskRecord {
     status: TaskStatus,
     #[serde(default)]
     assignment: FencedAssignment,
+    #[serde(default)]
+    terminal_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,7 +82,7 @@ impl QueueState {
 
     fn promote_due(&mut self, now: DateTime<Utc>) {
         let cutoff = now.timestamp_millis();
-        while let Some(Reverse((at, _, task_id))) = self.due.peek().cloned() {
+        while let Some(Reverse((at, seq, task_id))) = self.due.peek().cloned() {
             if at > cutoff {
                 break;
             }
@@ -88,7 +90,8 @@ impl QueueState {
             let Some(task) = self.tasks.get(&task_id) else {
                 continue;
             };
-            if task.create.schedule_at.timestamp_millis() != at {
+            // A stale entry of a pruned and re-created id has another generation.
+            if task.created_seq != seq || task.create.schedule_at.timestamp_millis() != at {
                 continue;
             }
             if matches!(task.status, TaskStatus::Scheduled) {
@@ -247,6 +250,7 @@ impl DeferScheduler {
                     attempts: 0,
                     status: TaskStatus::Scheduled,
                     assignment: FencedAssignment::idle(),
+                    terminal_at: None,
                 },
             );
             state.push_due(&task_id);
@@ -335,6 +339,42 @@ impl DeferScheduler {
         Ok(count)
     }
 
+    /// Remove terminal records whose retention has ended. The first call that
+    /// sees a terminal record without `terminal_at` stamps it with `now`; a
+    /// record is removed when `terminal_at + retention <= now`. `None`
+    /// retention prunes nothing and stamps nothing.
+    pub fn prune_terminal(&mut self, queue: &str, now: DateTime<Utc>) -> SchedulerResult<usize> {
+        let state = self
+            .queues
+            .get_mut(queue)
+            .ok_or_else(|| SchedulerError::QueueMissing(queue.to_string()))?;
+        let Some(retention_ms) = state.policy.terminal_retention_ms else {
+            return Ok(0);
+        };
+        let retention = chrono::Duration::milliseconds(retention_ms.min(i64::MAX as u64) as i64);
+        let mut expired = Vec::new();
+        for (task_id, task) in state.tasks.iter_mut() {
+            if !matches!(
+                task.status,
+                TaskStatus::Succeeded | TaskStatus::DeadLettered | TaskStatus::Canceled
+            ) {
+                continue;
+            }
+            let terminal_at = *task.terminal_at.get_or_insert(now);
+            // Overflow keeps the record.
+            let Some(due_at) = terminal_at.checked_add_signed(retention) else {
+                continue;
+            };
+            if due_at <= now {
+                expired.push(task_id.clone());
+            }
+        }
+        for task_id in &expired {
+            state.tasks.remove(task_id);
+        }
+        Ok(expired.len())
+    }
+
     pub fn delete_queue(&mut self, queue: &str) -> SchedulerResult<()> {
         if self.queues.remove(queue).is_some() {
             Ok(())
@@ -346,11 +386,11 @@ impl DeferScheduler {
 
 fn pick_ready(state: &mut QueueState) -> Option<TaskId> {
     for priority in (0..PRIORITY_BANDS).rev() {
-        while let Some(Reverse((_, task_id))) = state.ready[priority].pop() {
+        while let Some(Reverse((seq, task_id))) = state.ready[priority].pop() {
             let Some(task) = state.tasks.get(&task_id) else {
                 continue;
             };
-            if matches!(task.status, TaskStatus::Scheduled) {
+            if task.created_seq == seq && matches!(task.status, TaskStatus::Scheduled) {
                 return Some(task_id);
             }
         }
@@ -421,6 +461,7 @@ mod tests {
             retry_backoff_ms: 500,
             max_backoff_ms: None,
             max_doublings: None,
+            terminal_retention_ms: None,
         };
         s.configure_queue("jobs", custom_policy.clone());
 
@@ -575,6 +616,178 @@ mod tests {
         assert_eq!(snapshot.scheduled_count, 0);
         assert_eq!(snapshot.in_flight_count, 0);
         assert_eq!(snapshot.terminal_count, 0);
+    }
+
+    fn retention_policy(terminal_retention_ms: Option<u64>) -> QueuePolicy {
+        QueuePolicy {
+            terminal_retention_ms,
+            ..QueuePolicy::default()
+        }
+    }
+
+    #[test]
+    fn prune_terminal_keeps_records_before_retention_and_removes_them_after() {
+        let mut s = DeferScheduler::new();
+        s.configure_queue("jobs", retention_policy(Some(1_000)));
+        s.create_task("jobs", test_task("a", -1_000, 3)).unwrap();
+        s.create_task("jobs", test_task("b", -1_000, 3)).unwrap();
+        let leased = s.lease_due("jobs", Utc::now(), 1).unwrap().remove(0);
+        assert_eq!(leased.task_id, "a");
+        assert!(s.ack("jobs", &leased.attempt_id).unwrap());
+        assert!(s.cancel("jobs", "b").unwrap());
+
+        let t0 = Utc::now();
+        // The first prune call stamps terminal_at on both records and removes nothing.
+        assert_eq!(s.prune_terminal("jobs", t0).unwrap(), 0);
+        assert_eq!(
+            s.prune_terminal("jobs", t0 + Duration::milliseconds(999))
+                .unwrap(),
+            0
+        );
+        assert_eq!(s.queue_snapshot("jobs").unwrap().task_count, 2);
+        assert_eq!(
+            s.prune_terminal("jobs", t0 + Duration::milliseconds(1_000))
+                .unwrap(),
+            2
+        );
+        assert_eq!(s.queue_snapshot("jobs").unwrap().task_count, 0);
+    }
+
+    #[test]
+    fn prune_terminal_never_removes_live_tasks() {
+        let mut s = DeferScheduler::new();
+        s.configure_queue("jobs", retention_policy(Some(1_000)));
+        s.create_task("jobs", test_task("scheduled", 60_000, 3))
+            .unwrap();
+        s.create_task("jobs", test_task("leased", -1_000, 3))
+            .unwrap();
+        let leased = s.lease_due("jobs", Utc::now(), 1).unwrap().remove(0);
+        assert_eq!(leased.task_id, "leased");
+
+        assert_eq!(
+            s.prune_terminal("jobs", Utc::now() + Duration::days(1))
+                .unwrap(),
+            0
+        );
+        assert_eq!(s.queue_snapshot("jobs").unwrap().task_count, 2);
+        assert_eq!(
+            s.status("jobs", "scheduled").unwrap(),
+            Some(TaskStatus::Scheduled)
+        );
+        assert!(matches!(
+            s.status("jobs", "leased").unwrap(),
+            Some(TaskStatus::Leased { .. })
+        ));
+    }
+
+    #[test]
+    fn prune_terminal_with_no_retention_prunes_nothing() {
+        let mut s = DeferScheduler::new();
+        s.configure_queue("jobs", QueuePolicy::default());
+        s.create_task("jobs", test_task("a", -1_000, 3)).unwrap();
+        let leased = s.lease_due("jobs", Utc::now(), 1).unwrap().remove(0);
+        assert!(s.ack("jobs", &leased.attempt_id).unwrap());
+
+        assert_eq!(
+            s.prune_terminal("jobs", Utc::now() + Duration::days(365))
+                .unwrap(),
+            0
+        );
+        assert_eq!(s.status("jobs", "a").unwrap(), Some(TaskStatus::Succeeded));
+    }
+
+    #[test]
+    fn pruned_id_can_be_created_again_and_kept_id_is_refused() {
+        let mut s = DeferScheduler::new();
+        s.configure_queue("jobs", retention_policy(Some(1_000)));
+        s.create_task("jobs", test_task("a", -1_000, 3)).unwrap();
+        let leased = s.lease_due("jobs", Utc::now(), 1).unwrap().remove(0);
+        assert!(s.ack("jobs", &leased.attempt_id).unwrap());
+
+        let t0 = Utc::now();
+        assert_eq!(s.prune_terminal("jobs", t0).unwrap(), 0);
+        // Before the retention ends, the id is still taken.
+        assert_eq!(
+            s.create_task("jobs", test_task("a", 0, 3)),
+            Err(SchedulerError::TaskExists("a".to_string()))
+        );
+
+        assert_eq!(
+            s.prune_terminal("jobs", t0 + Duration::milliseconds(1_000))
+                .unwrap(),
+            1
+        );
+        s.create_task("jobs", test_task("a", 0, 3)).unwrap();
+        assert_eq!(s.status("jobs", "a").unwrap(), Some(TaskStatus::Scheduled));
+    }
+
+    #[test]
+    fn prune_terminal_unknown_queue_errors() {
+        let mut s = DeferScheduler::new();
+        assert_eq!(
+            s.prune_terminal("nope", Utc::now()),
+            Err(SchedulerError::QueueMissing("nope".to_string()))
+        );
+    }
+
+    #[test]
+    fn old_snapshot_without_new_fields_still_loads() {
+        let policy: QueuePolicy = serde_json::from_str(
+            r#"{"max_in_flight":1,"max_dispatch_per_tick":1,"max_dispatches_per_second":1,"max_burst_size":1,"lease_ttl_ms":1,"retry_backoff_ms":1}"#,
+        )
+        .unwrap();
+        assert_eq!(policy.terminal_retention_ms, None);
+
+        let mut s = DeferScheduler::new();
+        s.configure_queue("jobs", retention_policy(Some(1_000)));
+        s.create_task("jobs", test_task("a", -1_000, 3)).unwrap();
+        let leased = s.lease_due("jobs", Utc::now(), 1).unwrap().remove(0);
+        assert!(s.ack("jobs", &leased.attempt_id).unwrap());
+        assert_eq!(s.prune_terminal("jobs", Utc::now()).unwrap(), 0);
+
+        // Simulate an old snapshot: the record has no terminal_at key.
+        let mut json = serde_json::to_value(&s).unwrap();
+        let removed = json["queues"]["jobs"]["tasks"]["a"]
+            .as_object_mut()
+            .unwrap()
+            .remove("terminal_at");
+        assert!(removed.is_some());
+        let loaded: DeferScheduler = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            loaded.status("jobs", "a").unwrap(),
+            Some(TaskStatus::Succeeded)
+        );
+    }
+
+    #[test]
+    fn pruned_id_recreated_with_future_schedule_is_not_leased_early() {
+        let mut s = DeferScheduler::new();
+        s.configure_queue(
+            "jobs",
+            QueuePolicy {
+                max_in_flight: 1,
+                ..retention_policy(Some(1_000))
+            },
+        );
+        s.create_task("jobs", test_task("x", -1_000, 3)).unwrap();
+        s.create_task("jobs", test_task("a", -1_000, 3)).unwrap();
+        // `x` takes the only in-flight slot; `a` is promoted into the ready heap but not leased.
+        let x = s.lease_due("jobs", Utc::now(), 1).unwrap().remove(0);
+        assert_eq!(x.task_id, "x");
+        assert!(s.cancel("jobs", "a").unwrap());
+        assert!(s.ack("jobs", &x.attempt_id).unwrap());
+
+        let t0 = Utc::now();
+        assert_eq!(s.prune_terminal("jobs", t0).unwrap(), 0);
+        assert_eq!(
+            s.prune_terminal("jobs", t0 + Duration::milliseconds(1_000))
+                .unwrap(),
+            2
+        );
+        // Re-create `a` due in 60 s. Its stale ready entry must not lease it now.
+        s.create_task("jobs", test_task("a", 60_000, 3)).unwrap();
+        assert!(s.lease_due("jobs", Utc::now(), 10).unwrap().is_empty());
+        assert_eq!(s.status("jobs", "a").unwrap(), Some(TaskStatus::Scheduled));
     }
 }
 // HANDWRITE-END
