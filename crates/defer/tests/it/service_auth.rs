@@ -58,12 +58,12 @@ fn malformed_rotation_keeps_the_last_known_good_registry() {
 }
 
 // <HANDWRITE gap="missing-generator:e2e-test:defer-auth-runtime-wiring" tracker="#2215" reason="Exercise the shipped Defer process so removing its registry watcher or structured audit sink makes the security gate fail.">
-fn timeout_diagnostic(elapsed: Duration, readyz: &str, stderr_tail: &str) -> String {
+fn timeout_diagnostic(elapsed: Duration, readyz: &str, log_tail: &str) -> String {
     format!(
-        "aw-diag service_auth: first PUT /v1/queues/jobs failed after {} ms; readyz={}; defer stderr tail:\n{}",
+        "aw-diag service_auth: first PUT /v1/queues/jobs failed after {} ms; readyz={}; defer log tail:\n{}",
         elapsed.as_millis(),
         readyz,
-        stderr_tail
+        log_tail
     )
 }
 
@@ -74,6 +74,26 @@ fn tail_lines(path: &std::path::Path, count: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let start = lines.len().saturating_sub(count);
     lines[start..].join("\n")
+}
+
+fn log_tail(stdout_path: &std::path::Path, stderr_path: &std::path::Path, count: usize) -> String {
+    format!(
+        "--- stdout ---\n{}\n--- stderr ---\n{}",
+        tail_lines(stdout_path, count),
+        tail_lines(stderr_path, count)
+    )
+}
+
+async fn wait_ready(client: &reqwest::Client, url: &str) -> bool {
+    for _ in 0..200 {
+        if let Ok(response) = client.get(format!("{url}/readyz")).send().await {
+            if response.status().is_success() {
+                return true;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -119,16 +139,7 @@ async fn defer_serve_watches_registry_and_emits_redacted_audit_events() {
         .build()
         .unwrap();
     let url = format!("http://{address}");
-    let mut ready = false;
-    for _ in 0..80 {
-        if let Ok(response) = client.get(format!("{url}/healthz")).send().await {
-            if response.status().is_success() {
-                ready = true;
-                break;
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    let ready = wait_ready(&client, &url).await;
 
     let old_status = if ready {
         let started = Instant::now();
@@ -147,7 +158,11 @@ async fn defer_serve_watches_registry_and_emits_redacted_audit_events() {
                 };
                 panic!(
                     "{}\nerror: {error}",
-                    timeout_diagnostic(started.elapsed(), &readyz, &tail_lines(&stderr_path, 40))
+                    timeout_diagnostic(
+                        started.elapsed(),
+                        &readyz,
+                        &log_tail(&stdout_path, &stderr_path, 40)
+                    )
                 );
             }
         }
@@ -250,7 +265,31 @@ fn timeout_diagnostic_names_elapsed_readyz_and_log_tail() {
             "503 Service Unavailable",
             "line one\nline two"
         ),
-        "aw-diag service_auth: first PUT /v1/queues/jobs failed after 2001 ms; readyz=503 Service Unavailable; defer stderr tail:\nline one\nline two"
+        "aw-diag service_auth: first PUT /v1/queues/jobs failed after 2001 ms; readyz=503 Service Unavailable; defer log tail:\nline one\nline two"
+    );
+}
+
+#[test]
+fn log_tail_shows_the_end_of_stdout_and_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.log");
+    let err = dir.path().join("err.log");
+    std::fs::write(&out, "o1\no2\no3").unwrap();
+    std::fs::write(&err, "e1\ne2\ne3").unwrap();
+    assert_eq!(
+        log_tail(&out, &err, 2),
+        "--- stdout ---\no2\no3\n--- stderr ---\ne2\ne3"
+    );
+}
+
+#[test]
+fn log_tail_marks_an_unreadable_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing.log");
+    let err = dir.path().join("err.log");
+    std::fs::write(&err, "e1").unwrap();
+    assert!(
+        log_tail(&missing, &err, 2).starts_with("--- stdout ---\n<unreadable>\n--- stderr ---\ne1")
     );
 }
 // </HANDWRITE>
