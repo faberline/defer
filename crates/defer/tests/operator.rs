@@ -230,6 +230,15 @@ fn committed_crd_matches_the_generator() {
     );
 }
 
+#[test]
+fn crd_accepts_admin_token_secret() {
+    let mut value = serde_json::to_value(production()).unwrap();
+    value["spec"]["adminTokenSecret"] = json!("t");
+    let defer: Defer = serde_json::from_value(value).unwrap();
+    assert_eq!(defer.spec.admin_token_secret, Some("t".to_string()));
+    assert_eq!(production().spec.admin_token_secret, None);
+}
+
 fn placed(placement: Value, pull_secrets: Value) -> Defer {
     let mut defer = production();
     defer.spec.placement = serde_json::from_value(placement).unwrap();

@@ -28,6 +28,10 @@ spec:
           spec:
             description: 'The generic cluster shape every sharded-HA service embeds in its CRD spec via `#[serde(flatten)] pub cluster: service_k8s::ClusterSpec`.'
             properties:
+              adminTokenSecret:
+                description: Secret with key `token`, an admin bearer token the operator uses for membership changes.
+                nullable: true
+                type: string
               auth:
                 default: "off"
                 type: string

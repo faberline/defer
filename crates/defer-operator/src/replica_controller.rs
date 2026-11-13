@@ -67,6 +67,27 @@ pub async fn next_replica_layer<A: MembershipActuator>(
     })
 }
 
+/// HTTP (client) URL of one replica pod through the headless service.
+pub fn pod_http_url(name: &str, namespace: &str, ordinal: u32) -> String {
+    format!(
+        "http://{name}-{ordinal}.{name}-headless.{namespace}.svc:{}",
+        crate::render::CLIENT_PORT
+    )
+}
+
+/// Raft peer URL of one replica pod through the headless service.
+pub fn pod_peer_url(name: &str, namespace: &str, ordinal: u32) -> String {
+    format!(
+        "http://{name}-{ordinal}.{name}-headless.{namespace}.svc:{}",
+        crate::render::RAFT_PORT
+    )
+}
+
+/// Parses the `x-defer-leader` header, the leader node id, which equals the ordinal.
+pub fn leader_ordinal_from_hint(header: Option<&str>) -> Option<u32> {
+    header?.trim().parse::<u32>().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{next_replica_layer, ReplicaError};
@@ -202,6 +223,26 @@ mod tests {
             result,
             Err(ReplicaError::Actuator(ActuatorError::Hard("x".into())))
         );
+    }
+
+    #[test]
+    fn pod_urls_use_headless_dns() {
+        assert_eq!(
+            super::pod_http_url("q", "ns", 2),
+            "http://q-2.q-headless.ns.svc:7141"
+        );
+        assert_eq!(
+            super::pod_peer_url("q", "ns", 2),
+            "http://q-2.q-headless.ns.svc:7142"
+        );
+    }
+
+    #[test]
+    fn leader_hint_parses() {
+        assert_eq!(super::leader_ordinal_from_hint(Some("2")), Some(2));
+        assert_eq!(super::leader_ordinal_from_hint(Some("x")), None);
+        assert_eq!(super::leader_ordinal_from_hint(Some("-1")), None);
+        assert_eq!(super::leader_ordinal_from_hint(None), None);
     }
 }
 
