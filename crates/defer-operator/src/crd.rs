@@ -5,6 +5,8 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::capacity_policy::{Bounds, Watermarks};
+
 #[derive(CustomResource, Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[kube(
     group = "defer.dev",
@@ -87,6 +89,49 @@ pub struct DeferSpec {
     /// pod as `DEFER_DECLARED_QUEUES` (#32).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queues: Vec<DeclaredQueueSpec>,
+    /// Capacity policy: watermarks and replica bounds for the capacity controller.
+    /// Unset means no capacity automation, the previous behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_policy: Option<DeferCapacityPolicySpec>,
+}
+
+/// Capacity policy of one Defer instance. Watermarks are fractions of the container limit.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeferCapacityPolicySpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_high: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_low: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_high: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_low: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling: Option<u32>,
+}
+
+impl DeferCapacityPolicySpec {
+    /// Watermarks; an unset value takes the `Watermarks::default()` value.
+    pub fn watermarks(&self) -> Watermarks {
+        let d = Watermarks::default();
+        Watermarks {
+            cpu_high: self.cpu_high.unwrap_or(d.cpu_high),
+            cpu_low: self.cpu_low.unwrap_or(d.cpu_low),
+            mem_high: self.mem_high.unwrap_or(d.mem_high),
+            mem_low: self.mem_low.unwrap_or(d.mem_low),
+        }
+    }
+
+    /// Bounds; unset `ceiling` is `current` (never scales out), unset `floor` is 1.
+    /// `floor` is never above `ceiling`.
+    pub fn bounds(&self, current: u32) -> Bounds {
+        let ceiling = self.ceiling.unwrap_or(current);
+        let floor = self.floor.unwrap_or(1).min(ceiling);
+        Bounds { floor, ceiling }
+    }
 }
 
 /// Container resource limits for the serving StatefulSet container.
@@ -254,5 +299,89 @@ pub fn crd_yaml() -> String {
     service_k8s::crd::normalize_unsigned_integer_formats(&mut crd);
     let yaml = serde_yaml::to_string(&crd).expect("CRD YAML");
     service_k8s::crd::quote_yaml_1_1_boolean_like_strings(&yaml)
+}
+#[cfg(test)]
+mod capacity_policy_spec_tests {
+    use super::{Defer, DeferCapacityPolicySpec};
+    use crate::capacity_policy::{Bounds, Watermarks};
+
+    fn base() -> serde_json::Value {
+        serde_json::json!({
+            "apiVersion": "defer.dev/v1alpha1",
+            "kind": "Defer",
+            "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+            "spec": {
+                "image": "registry/defer:1",
+                "replicasPerShard": 3,
+                "voterCount": 3
+            }
+        })
+    }
+
+    #[test]
+    fn capacity_policy_absent_is_none() {
+        let defer: Defer = serde_json::from_value(base()).unwrap();
+        assert_eq!(defer.spec.capacity_policy, None);
+        let value = serde_json::to_value(&defer).unwrap();
+        assert!(value["spec"].get("capacityPolicy").is_none());
+    }
+
+    #[test]
+    fn capacity_policy_parses_camel_case() {
+        let mut value = base();
+        value["spec"]["capacityPolicy"] =
+            serde_json::json!({"cpuHigh": 0.5, "floor": 1, "ceiling": 4});
+        let defer: Defer = serde_json::from_value(value).unwrap();
+        let policy = defer.spec.capacity_policy.expect("policy");
+        assert_eq!(policy.cpu_high, Some(0.5));
+        assert_eq!(policy.floor, Some(1));
+        assert_eq!(policy.ceiling, Some(4));
+        assert_eq!(policy.cpu_low, None);
+        assert_eq!(policy.mem_high, None);
+        assert_eq!(policy.mem_low, None);
+    }
+
+    #[test]
+    fn watermarks_default_for_unset() {
+        let policy = DeferCapacityPolicySpec {
+            cpu_high: Some(0.5),
+            ..Default::default()
+        };
+        assert_eq!(
+            policy.watermarks(),
+            Watermarks {
+                cpu_high: 0.5,
+                ..Watermarks::default()
+            }
+        );
+    }
+
+    #[test]
+    fn bounds_unset_floor_and_ceiling() {
+        assert_eq!(
+            DeferCapacityPolicySpec::default().bounds(3),
+            Bounds {
+                floor: 1,
+                ceiling: 3
+            }
+        );
+    }
+
+    #[test]
+    fn bounds_floor_not_above_ceiling() {
+        // Negative test: without the `.min(ceiling)` this returns floor 5.
+        let policy = DeferCapacityPolicySpec {
+            floor: Some(5),
+            ceiling: Some(3),
+            ..Default::default()
+        };
+        assert_eq!(
+            policy.bounds(2),
+            Bounds {
+                floor: 3,
+                ceiling: 3
+            }
+        );
+    }
 }
 // HANDWRITE-END
