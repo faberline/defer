@@ -242,6 +242,50 @@ fn deploy_artifacts_render_by_lifecycle_layer() {
 }
 
 #[test]
+fn source_dockerfile_caches_dependencies_with_pinned_cargo_chef() {
+    let output = defer()
+        .args(["dockerfile", "render", "--variant", "source"])
+        .output()
+        .expect("render source Dockerfile");
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).expect("source Dockerfile stdout");
+
+    let install = text
+        .lines()
+        .find_map(|line| {
+            line.split_once("cargo install cargo-chef --locked --version ")
+                .map(|(_, version)| version.trim())
+        })
+        .expect("cargo-chef install line");
+    let parts: Vec<&str> = install.split('.').collect();
+    assert_eq!(
+        parts.len(),
+        3,
+        "cargo-chef must be pinned as x.y.z: {install}"
+    );
+    for part in parts {
+        assert!(
+            !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()),
+            "cargo-chef version part is not numeric: {install}"
+        );
+    }
+
+    assert!(text.contains("cargo chef prepare --recipe-path recipe.json"));
+    let cook = text.find("cargo chef cook").expect("cargo chef cook");
+    let last_build = text.rfind("cargo build").expect("cargo build");
+    assert!(
+        cook < last_build,
+        "dependency cook must run before the workspace build"
+    );
+    let toolchain = text
+        .find("COPY rust-toolchain.toml")
+        .expect("toolchain copied before cook");
+    assert!(toolchain < cook, "toolchain must be present before cook");
+    assert_eq!(text.matches("--features operator,backup").count(), 2);
+    assert!(text.contains("ENTRYPOINT [\"/usr/local/bin/defer\"]"));
+}
+
+#[test]
 fn llm_outline_advertises_cross_scope_topics_and_terminates() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
