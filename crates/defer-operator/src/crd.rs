@@ -232,6 +232,9 @@ pub struct DeferStatus {
     pub desired_replicas: i32,
     #[serde(default)]
     pub message: String,
+    /// Replica count whose members are all Raft voters (#140). Missing means the live size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_replicas: Option<i32>,
 }
 
 fn default_storage() -> String {
@@ -254,5 +257,25 @@ pub fn crd_yaml() -> String {
     service_k8s::crd::normalize_unsigned_integer_formats(&mut crd);
     let yaml = serde_yaml::to_string(&crd).expect("CRD YAML");
     service_k8s::crd::quote_yaml_1_1_boolean_like_strings(&yaml)
+}
+#[cfg(test)]
+mod tests {
+    use super::DeferStatus;
+
+    #[test]
+    fn status_settled_replicas_is_optional() {
+        let status: DeferStatus = serde_json::from_str("{}").unwrap();
+        assert_eq!(status.settled_replicas, None);
+
+        let value = serde_json::to_value(DeferStatus::default()).unwrap();
+        assert!(value.get("settledReplicas").is_none());
+
+        let settled = DeferStatus {
+            settled_replicas: Some(3),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(settled).unwrap();
+        assert_eq!(value["settledReplicas"], 3);
+    }
 }
 // HANDWRITE-END
