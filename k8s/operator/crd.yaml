@@ -68,6 +68,35 @@ spec:
               bootstrapSeedUri:
                 nullable: true
                 type: string
+              capacityPolicy:
+                description: 'Capacity policy: watermarks and replica bounds for the capacity controller. Unset means no capacity automation, the previous behavior.'
+                nullable: true
+                properties:
+                  ceiling:
+                    type: integer
+                    minimum: 0.0
+                    nullable: true
+                  cpuHigh:
+                    format: double
+                    nullable: true
+                    type: number
+                  cpuLow:
+                    format: double
+                    nullable: true
+                    type: number
+                  floor:
+                    type: integer
+                    minimum: 0.0
+                    nullable: true
+                  memHigh:
+                    format: double
+                    nullable: true
+                    type: number
+                  memLow:
+                    format: double
+                    nullable: true
+                    type: number
+                type: object
               graceSecs:
                 default: 10
                 type: integer
