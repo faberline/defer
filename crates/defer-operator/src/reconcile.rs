@@ -42,6 +42,16 @@ fn replica_context(decision: &ReconcileDecision) -> Value {
     json!({"settledReplicas": decision.settled, "message": decision.message})
 }
 
+/// The decision when the admin token cannot be read: no replica change.
+fn token_error_decision(input: &ReplicaInput, text: String) -> ReconcileDecision {
+    let live = input.live_replicas;
+    ReconcileDecision {
+        statefulset_replicas: live,
+        settled: input.settled.unwrap_or(live).min(live),
+        message: Some(text),
+    }
+}
+
 /// Adds `settledReplicas` and a non-empty `message` from the context to the
 /// status patch. A `Null` context leaves the patch unchanged.
 fn merge_context_into_status(mut patch: Value, context: &Value) -> Value {
@@ -112,9 +122,10 @@ impl ManagedService for Defer {
         let token = match read_token(&client, &ns, &secret).await {
             Ok(token) => token,
             Err(text) => {
+                let decision = token_error_decision(&input, text);
                 return Ok(ReconcilePlan {
-                    children,
-                    context: json!({"message": text}),
+                    children: apply_replica_decision(children, &decision),
+                    context: replica_context(&decision),
                 });
             }
         };
@@ -173,7 +184,7 @@ pub async fn run() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_replica_decision, replica_input};
+    use super::{apply_replica_decision, replica_context, replica_input, token_error_decision};
     use crate::crd::Defer;
     use crate::replica_reconcile::{ReconcileDecision, ReplicaInput};
     use serde_json::{json, Value};
@@ -194,6 +205,21 @@ mod tests {
             "kind": "Defer",
             "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
             "spec": spec
+        }))
+        .unwrap()
+    }
+
+    fn defer_with_replicas(n: u32) -> Defer {
+        serde_json::from_value(json!({
+            "apiVersion": "defer.dev/v1alpha1",
+            "kind": "Defer",
+            "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+            "spec": {
+                "image": "registry/defer:1",
+                "replicasPerShard": n,
+                "voterCount": 3,
+                "adminTokenSecret": "defer-admin"
+            }
         }))
         .unwrap()
     }
@@ -290,6 +316,76 @@ mod tests {
         let input = replica_input(&defer, Some((4, 4))).expect("token is set");
         assert_eq!(input.settled, Some(2));
         assert_eq!(input.live_replicas, 4);
+    }
+
+    #[test]
+    fn token_error_keeps_the_live_statefulset_size() {
+        let d = defer_with_replicas(5);
+        let statefulset = d
+            .render()
+            .into_iter()
+            .find(|c| c["kind"] == "StatefulSet")
+            .expect("render must contain a StatefulSet child");
+        assert_eq!(statefulset["spec"]["replicas"], json!(5));
+
+        let input = ReplicaInput {
+            live_replicas: 3,
+            ready_replicas: 3,
+            settled: Some(3),
+            desired: 5,
+        };
+        let decision = token_error_decision(&input, "secret defer-admin not found".to_string());
+        assert_eq!(decision.statefulset_replicas, 3);
+        assert_eq!(decision.settled, 3);
+        assert_eq!(
+            decision.message.as_deref(),
+            Some("secret defer-admin not found")
+        );
+
+        let applied = apply_replica_decision(d.render(), &decision);
+        let applied_sts = applied
+            .iter()
+            .find(|c| c["kind"] == "StatefulSet")
+            .expect("applied children must contain a StatefulSet");
+        assert_eq!(applied_sts["spec"]["replicas"], json!(3));
+    }
+
+    #[test]
+    fn token_error_message_reaches_the_status() {
+        let d = defer(true);
+        let decision = token_error_decision(
+            &ReplicaInput {
+                live_replicas: 3,
+                ready_replicas: 3,
+                settled: None,
+                desired: 5,
+            },
+            "secret defer-admin has no token key".to_string(),
+        );
+        let facts = ReadyFacts {
+            ready: HashMap::from([("jobs".to_string(), 3i64)]),
+        };
+        let patch = d.status_patch_with_context(&facts, &replica_context(&decision));
+        assert_eq!(
+            patch["status"]["message"],
+            json!("secret defer-admin has no token key")
+        );
+        assert_eq!(patch["status"]["settledReplicas"], json!(3));
+    }
+
+    #[test]
+    fn token_error_never_settles_above_live() {
+        let decision = token_error_decision(
+            &ReplicaInput {
+                live_replicas: 2,
+                ready_replicas: 2,
+                settled: Some(4),
+                desired: 3,
+            },
+            "secret defer-admin not found".to_string(),
+        );
+        assert_eq!(decision.settled, 2);
+        assert_eq!(decision.statefulset_replicas, 2);
     }
 }
 // HANDWRITE-END
