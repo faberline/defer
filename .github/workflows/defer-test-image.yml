@@ -5,13 +5,19 @@
 # builds. Nothing here prunes old sha-<git12> tags; clean them up in GHCR.
 # The build has no musl/multi-arch matrix: acceptance clusters run amd64
 # nodes, and Dockerfile is a from-source workspace build whose context must
-# be the repo root.
+# be the repo root. A pull request that changes the image build runs this
+# workflow once, as evidence of the build time.
 #
 # `workflow_call` outputs mirror the publish job's outputs so an acceptance
 # workflow can consume the pinned image directly.
 name: defer-test-image
 
 on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - .github/workflows/defer-test-image.yml
   workflow_dispatch:
     inputs:
       ref:

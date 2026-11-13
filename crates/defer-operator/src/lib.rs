@@ -20,8 +20,8 @@ pub use capacity_policy::{
 pub use capacity_sample::{parse_cpu_quantity, parse_memory_quantity, population_sample};
 pub use crd::{
     crd_yaml, DeclaredQueueControl, DeclaredQueuePolicySpec, DeclaredQueueSpec, Defer,
-    DeferBackupSpec, DeferPlacement, DeferResourceLimits, DeferSpec, DeferStatus,
-    LocalObjectReference, Toleration,
+    DeferBackupSpec, DeferCapacityPolicySpec, DeferPlacement, DeferResourceLimits, DeferSpec,
+    DeferStatus, LocalObjectReference, Toleration,
 };
 pub use membership_driver::{run_steps, ActuatorError, MembershipActuator, RetryPolicy};
 pub use membership_http::HttpMembershipActuator;
