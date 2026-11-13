@@ -295,8 +295,9 @@ async fn scales_replicas_per_shard_by_one_layer_and_back() {
     }
     wait_healthy(&http, &base).await;
 
-    // Auth is off, so the token is ignored by the server; the operator only
-    // needs the Secret to exist and to hold the key `token`.
+    // Auth is off, so the operator sends no Authorization header; it only
+    // needs the Secret to exist and to hold the key `token`. A bearer token
+    // that the server does not know gets 401 even with auth off (#168).
     kubectl(&[
         "create",
         "secret",
