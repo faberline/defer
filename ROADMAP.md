@@ -48,7 +48,7 @@ core outcome that does that work, and keep defer's own proof.
   [`membership-controller`](https://github.com/faberline/core/blob/main/crates/service-k8s/ROADMAP.md#membership-controller)
   instead of carrying a membership-change engine of its own. Defer delivers
   this outcome when it moves onto core's engine and deletes `defer-operator`,
-  in phase 6 of ADR 0002. Until then the operator drives replica changes: the pure step plan is `defer_operator::plan_replica_change`, and wiring it to a live membership actuator is [#84](https://github.com/faberline/defer/issues/84), which follows the answer in faberline/core#181. Every defer replica is a voter: scaling out adds a
+  in phase 6 of ADR 0002. Until then the operator drives replica changes: the pure step plan is `defer_operator::plan_replica_change`, and the operator loop now runs the replica-change steps (`reconcile_plan` in `crates/defer-operator/src/reconcile.rs`). Every defer replica is a voter: scaling out adds a
   learner, waits until it catches up, and promotes it; scaling in transfers
   leadership first, then demotes and removes the member. Shard count is not
   part of this outcome.
