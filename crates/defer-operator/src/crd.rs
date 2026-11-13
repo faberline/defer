@@ -75,6 +75,9 @@ pub struct DeferSpec {
     /// dedicated node pool at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<DeferPlacement>,
+    /// Secret with key `token`, an admin bearer token the operator uses for membership changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_token_secret: Option<String>,
     /// Container resource limits for the serving StatefulSet container.
     /// Unset leaves the container unbounded (requests only), the previous
     /// behavior.
