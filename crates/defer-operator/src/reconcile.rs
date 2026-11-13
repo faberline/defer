@@ -85,6 +85,16 @@ async fn read_token(client: &kube::Client, ns: &str, secret: &str) -> Result<Str
     token.ok_or_else(|| format!("secret {secret} has no token key"))
 }
 
+/// The token that the membership calls send. Only `auth: "required"` checks
+/// it; any other value sends no bearer token (#168).
+fn membership_token(auth: &str, token: String) -> String {
+    if auth == "required" {
+        token
+    } else {
+        String::new()
+    }
+}
+
 impl ManagedService for Defer {
     const MANAGER: &'static str = "defer-operator";
 
@@ -129,6 +139,7 @@ impl ManagedService for Defer {
                 });
             }
         };
+        let token = membership_token(&self.spec.auth, token);
         let (name_http, ns_http) = (name.clone(), ns.clone());
         let (name_peer, ns_peer) = (name.clone(), ns.clone());
         let actuator = HttpMembershipActuator::with_leader_discovery(
@@ -184,7 +195,10 @@ pub async fn run() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_replica_decision, replica_context, replica_input, token_error_decision};
+    use super::{
+        apply_replica_decision, membership_token, replica_context, replica_input,
+        token_error_decision,
+    };
     use crate::crd::Defer;
     use crate::replica_reconcile::{ReconcileDecision, ReplicaInput};
     use serde_json::{json, Value};
@@ -386,6 +400,24 @@ mod tests {
         );
         assert_eq!(decision.settled, 2);
         assert_eq!(decision.statefulset_replicas, 2);
+    }
+
+    #[test]
+    fn membership_token_is_kept_when_auth_is_required() {
+        assert_eq!(
+            membership_token("required", "t0k".to_string()),
+            "t0k".to_string()
+        );
+    }
+
+    #[test]
+    fn membership_token_is_empty_when_auth_is_off() {
+        assert_eq!(membership_token("off", "t0k".to_string()), String::new());
+    }
+
+    #[test]
+    fn membership_token_is_empty_for_any_other_auth_value() {
+        assert_eq!(membership_token("", "t0k".to_string()), String::new());
     }
 }
 // HANDWRITE-END

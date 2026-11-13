@@ -15,6 +15,8 @@ pub struct HttpMembershipActuator {
     ordinals: u32,
     /// Last ordinal that answered as the leader; `None` until one does.
     leader: std::sync::Mutex<Option<u32>>,
+    /// Bearer token. An empty token sends no `Authorization` header (the
+    /// server runs with auth off).
     token: String,
     peer_url: Box<dyn Fn(u32) -> String + Send + Sync>,
 }
@@ -69,14 +71,17 @@ impl HttpMembershipActuator {
         let mut ordinal = self.leader.lock().unwrap().unwrap_or(0);
         let mut last = String::new();
         for _ in 0..tries {
-            let response = self
+            let mut request = self
                 .client
                 .post(format!(
                     "{}/v1/admin/membership",
                     (self.base_url_for)(ordinal)
                 ))
-                .bearer_auth(&self.token)
-                .json(&body)
+                .json(&body);
+            if !self.token.is_empty() {
+                request = request.bearer_auth(&self.token);
+            }
+            let response = request
                 .send()
                 .await
                 .map_err(|error| ActuatorError::Hard(error.to_string()))?;
@@ -186,6 +191,14 @@ mod tests {
     }
 
     async fn spawn(status: u16, body: &str) -> (HttpMembershipActuator, Seen) {
+        spawn_with_token(status, body, "t0k").await
+    }
+
+    async fn spawn_with_token(
+        status: u16,
+        body: &str,
+        token: &str,
+    ) -> (HttpMembershipActuator, Seen) {
         let seen: Seen = Arc::new(Mutex::new(Vec::new()));
         let app = Router::new()
             .route("/v1/admin/membership", post(handle))
@@ -202,10 +215,34 @@ mod tests {
         let actuator = HttpMembershipActuator::new(
             reqwest::Client::new(),
             format!("http://{addr}"),
-            "t0k",
+            token,
             |n| format!("http://defer-{n}.peers:9000"),
         );
         (actuator, seen)
+    }
+
+    #[tokio::test]
+    async fn empty_token_sends_no_authorization_header() {
+        let (actuator, seen) = spawn_with_token(200, "{}", "").await;
+
+        let result = actuator.promote(2).await;
+
+        assert_eq!(result, Ok(()));
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, None);
+    }
+
+    #[tokio::test]
+    async fn token_sends_bearer_header() {
+        let (actuator, seen) = spawn_with_token(200, "{}", "t0k").await;
+
+        let result = actuator.promote(2).await;
+
+        assert_eq!(result, Ok(()));
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0.as_deref(), Some("Bearer t0k"));
     }
 
     #[tokio::test]
