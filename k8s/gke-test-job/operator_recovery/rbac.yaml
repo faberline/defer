@@ -1,7 +1,8 @@
 # What the suite reads and does in the run's namespace, and nothing
 # cluster-wide: it reads the operator's objects and pods, runs `defer
 # --version` in every defer pod, and deletes one defer pod for the replacement
-# check.
+# check. It also creates one Secret and patches the Defer CR for the scale
+# test. Namespaced rights only.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -30,7 +31,10 @@ rules:
     verbs: ["get", "list"]
   - apiGroups: ["defer.dev"]
     resources: ["defers"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
