@@ -7,6 +7,7 @@ pub mod membership_http;
 pub mod reconcile;
 pub mod render;
 pub mod replica_controller;
+pub mod replica_reconcile;
 pub mod topology_plan;
 
 pub use capacity_patch::{build_patch, CapacityPatch, Evidence};
