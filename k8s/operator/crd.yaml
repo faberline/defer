@@ -279,6 +279,11 @@ spec:
                 default: 0
                 format: int32
                 type: integer
+              settledReplicas:
+                description: Replica count whose members are all Raft voters (#140). Missing means the live size.
+                format: int32
+                nullable: true
+                type: integer
             type: object
         required:
         - spec
