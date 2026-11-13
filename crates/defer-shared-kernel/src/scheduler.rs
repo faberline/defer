@@ -448,6 +448,13 @@ mod tests {
         }
     }
 
+    fn sample_task_due(id: &str, now: DateTime<Utc>, max_attempts: u32) -> CreateTask {
+        CreateTask {
+            max_attempts,
+            ..sample_task(id, now - Duration::seconds(1))
+        }
+    }
+
     #[test]
     fn purge_queue_removes_tasks_in_every_state_and_preserves_policy_and_control() {
         let now = Utc::now();
@@ -466,10 +473,12 @@ mod tests {
         s.configure_queue("jobs", custom_policy.clone());
 
         // 1. Scheduled task
-        s.create_task("jobs", test_task("t-sched", 0, 3)).unwrap();
+        s.create_task("jobs", sample_task_due("t-sched", now, 3))
+            .unwrap();
 
         // 2. Leased task
-        s.create_task("jobs", test_task("t-leased", 0, 3)).unwrap();
+        s.create_task("jobs", sample_task_due("t-leased", now, 3))
+            .unwrap();
         let leased = s.lease_due("jobs", now, 1).unwrap().remove(0);
         let leased_attempt_id = leased.attempt_id.clone();
         assert_eq!(leased.task_id, "t-sched"); // t-sched was first
@@ -486,7 +495,8 @@ mod tests {
         );
 
         // 4. DeadLettered task (create with max_attempts=1, lease, nack)
-        s.create_task("jobs", test_task("t-dead", 0, 1)).unwrap();
+        s.create_task("jobs", sample_task_due("t-dead", now, 1))
+            .unwrap();
         let leased_dead = s.lease_due("jobs", now, 1).unwrap().remove(0);
         assert_eq!(leased_dead.task_id, "t-dead");
         s.nack("jobs", &leased_dead.attempt_id, now).unwrap();
@@ -496,7 +506,8 @@ mod tests {
         );
 
         // 5. Canceled task
-        s.create_task("jobs", test_task("t-cancel", 0, 3)).unwrap();
+        s.create_task("jobs", sample_task_due("t-cancel", now, 3))
+            .unwrap();
         assert!(s.cancel("jobs", "t-cancel").unwrap());
         assert_eq!(
             s.status("jobs", "t-cancel").unwrap(),
@@ -539,7 +550,9 @@ mod tests {
 
         // A purged task_id can be created again
         s.resume_queue("jobs").unwrap();
-        assert!(s.create_task("jobs", test_task("t-sched", 0, 3)).is_ok());
+        assert!(s
+            .create_task("jobs", sample_task_due("t-sched", now, 3))
+            .is_ok());
         assert_eq!(
             s.status("jobs", "t-sched").unwrap(),
             Some(TaskStatus::Scheduled)
