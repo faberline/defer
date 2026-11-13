@@ -321,18 +321,7 @@ async fn scales_replicas_per_shard_by_one_layer_and_back() {
         json!({ "secret": TOKEN_SECRET }),
     );
 
-    let queue = send(
-        http.put(format!("{base}/v1/queues/{SCALE_QUEUE}"))
-            .json(&json!({
-                "max_in_flight": 100,
-                "max_dispatch_per_tick": 100,
-                "max_dispatches_per_second": 100,
-                "max_burst_size": 100,
-                "lease_ttl_ms": 30000,
-                "retry_backoff_ms": 1000
-            })),
-    )
-    .await;
+    let queue = put_scale_queue_when_ready(&http, &base).await;
     assert_eq!(queue["queue"], SCALE_QUEUE, "{queue}");
     let created = send(
         http.post(format!("{base}/v1/queues/{SCALE_QUEUE}/tasks:batch"))
@@ -373,6 +362,7 @@ async fn scales_replicas_per_shard_by_one_layer_and_back() {
         pvc(REPLICAS - 1)
     );
     wait_healthy(&http, &base).await;
+    put_scale_queue_when_ready(&http, &base).await;
     let after_in = send(http.get(format!("{base}/v1/queues/{SCALE_QUEUE}"))).await;
     assert_eq!(after_in["task_count"], 1, "{after_in}");
     let still = send(http.get(format!("{base}/v1/queues/{SCALE_QUEUE}/tasks/{SCALE_TASK}"))).await;
@@ -396,6 +386,7 @@ async fn scales_replicas_per_shard_by_one_layer_and_back() {
     wait_for_replicas(REPLICAS);
     wait_for_ready_pod(&pod(REPLICAS - 1), None, SCALE_TIMEOUT);
     wait_healthy(&http, &base).await;
+    put_scale_queue_when_ready(&http, &base).await;
     let after_out = send(http.get(format!("{base}/v1/queues/{SCALE_QUEUE}"))).await;
     assert_eq!(after_out["task_count"], 1, "{after_out}");
     let second = send(
@@ -445,6 +436,47 @@ async fn assert_task(http: &reqwest::Client, base: &str, id: &str, status: &str)
     let task = send(http.get(format!("{base}/v1/queues/{QUEUE}/tasks/{id}"))).await;
     assert_eq!(task["task_id"], id, "{task}");
     assert_eq!(task["status"], status, "{task}");
+}
+
+/// Sends `PUT /v1/queues/{SCALE_QUEUE}` (idempotent) until it answers 2xx, and
+/// returns the JSON body. A 5xx such as `raft: no leader elected` or a
+/// connection error is retried every 2 s until `API_TIMEOUT`; a 4xx fails at once.
+async fn put_scale_queue_when_ready(http: &reqwest::Client, base: &str) -> Value {
+    let url = format!("{base}/v1/queues/{SCALE_QUEUE}");
+    let deadline = tokio::time::Instant::now() + API_TIMEOUT;
+    loop {
+        let request = http.put(&url).json(&json!({
+            "max_in_flight": 100,
+            "max_dispatch_per_tick": 100,
+            "max_dispatches_per_second": 100,
+            "max_burst_size": 100,
+            "lease_ttl_ms": 30000,
+            "retry_backoff_ms": 1000
+        }));
+        let last = match request.send().await {
+            Ok(response) if response.status().is_success() => {
+                let body = response.text().await.expect("body");
+                return serde_json::from_str(&body)
+                    .unwrap_or_else(|err| panic!("{url}: not JSON: {err}: {body}"));
+            }
+            Ok(response) if response.status().is_client_error() => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                panic!("{url}: {status}: {body}");
+            }
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                format!("{status}: {body}")
+            }
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{url}: no write accepted within {API_TIMEOUT:?}; last saw: {last}"
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
 }
 
 /// Waits until `GET /healthz` answers 2xx through Service/defer.
@@ -691,4 +723,96 @@ fn gibibytes_reads_cloud_and_local_capacities() {
     assert_eq!(gibibytes("1Ti"), Some(1024));
     assert_eq!(gibibytes("2G"), Some(1));
     assert_eq!(gibibytes("512Mi"), None);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread::{self, JoinHandle};
+
+    use super::put_scale_queue_when_ready;
+
+    /// Reads one HTTP request (headers and body) from `stream`.
+    fn read_request(stream: &mut std::net::TcpStream) {
+        let mut buf = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        let header_end = loop {
+            let n = stream.read(&mut chunk).expect("read request");
+            assert!(n > 0, "client closed before the headers ended");
+            buf.extend_from_slice(&chunk[..n]);
+            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                break pos + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&buf[..header_end]).to_ascii_lowercase();
+        let length: usize = headers
+            .lines()
+            .find_map(|line| line.strip_prefix("content-length:"))
+            .map(|value| value.trim().parse().expect("content-length"))
+            .unwrap_or(0);
+        while buf.len() < header_end + length {
+            let n = stream.read(&mut chunk).expect("read body");
+            assert!(n > 0, "client closed before the body ended");
+            buf.extend_from_slice(&chunk[..n]);
+        }
+    }
+
+    /// Starts a server on 127.0.0.1 that answers one request per `(status, body)`
+    /// in `replies`, then stops. It returns the address and a join handle whose
+    /// value is the number of requests it served.
+    fn serve(replies: Vec<(&'static str, &'static str)>) -> (String, JoinHandle<usize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = format!("http://{}", listener.local_addr().expect("addr"));
+        let handle = thread::spawn(move || {
+            let mut served = 0;
+            for (status, body) in replies {
+                let (mut stream, _) = listener.accept().expect("accept");
+                read_request(&mut stream);
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).expect("write");
+                served += 1;
+            }
+            served
+        });
+        (addr, handle)
+    }
+
+    #[tokio::test]
+    async fn put_scale_queue_when_ready_retries_a_500_then_returns_the_body() {
+        let (base, server) = serve(vec![
+            (
+                "500 Internal Server Error",
+                r#"{"error":"internal","message":"raft: no leader elected (cluster not ready)"}"#,
+            ),
+            ("200 OK", r#"{"queue":"scale-jobs"}"#),
+        ]);
+        let http = reqwest::Client::new();
+
+        let queue = put_scale_queue_when_ready(&http, &base).await;
+
+        assert_eq!(queue["queue"], "scale-jobs", "{queue}");
+        assert_eq!(server.join().expect("server thread"), 2);
+    }
+
+    #[test]
+    fn put_scale_queue_when_ready_fails_at_once_on_a_4xx() {
+        let (base, server) = serve(vec![("400 Bad Request", r#"{"error":"bad_request"}"#)]);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let http = reqwest::Client::new();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.block_on(put_scale_queue_when_ready(&http, &base))
+        }))
+        .is_err();
+
+        assert!(panicked, "a 400 must panic");
+        assert_eq!(server.join().expect("server thread"), 1);
+    }
 }
