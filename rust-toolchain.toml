@@ -1,0 +1,7 @@
+# The Rust toolchain of this repository (aw docs/standards/ci.md, "Toolchain").
+# CI installs the same version: keep `toolchain:` in .github/workflows/*.yml equal to `channel`.
+# A move to a newer toolchain is its own pull request.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
