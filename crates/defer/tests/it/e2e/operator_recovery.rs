@@ -41,6 +41,11 @@ const TASK_B: &str = "before-restart-b";
 const FIRST_POD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const REPLACEMENT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const API_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+const SCALED_REPLICAS: usize = 2;
+const SCALE_QUEUE: &str = "scale-jobs";
+const SCALE_TASK: &str = "scale-task";
+const TOKEN_SECRET: &str = "defer-admin-token";
+const SCALE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// The name of the StatefulSet pod with ordinal `i`.
 fn pod(i: usize) -> String {
@@ -276,6 +281,138 @@ async fn queue_state_survives_a_pod_loss_in_a_three_replica_group() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "e2e: needs E2E_ENDPOINT"]
+async fn scales_replicas_per_shard_by_one_layer_and_back() {
+    let base = endpoint();
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .unwrap();
+
+    for i in 0..REPLICAS {
+        wait_for_ready_pod(&pod(i), None, FIRST_POD_TIMEOUT);
+    }
+    wait_healthy(&http, &base).await;
+
+    // Auth is off, so the token is ignored by the server; the operator only
+    // needs the Secret to exist and to hold the key `token`.
+    kubectl(&[
+        "create",
+        "secret",
+        "generic",
+        TOKEN_SECRET,
+        "--from-literal=token=e2e-auth-is-off",
+    ]);
+    let token = admin_token_patch().to_string();
+    kubectl(&[
+        "patch",
+        "defer",
+        DEFER,
+        "--type",
+        "merge",
+        "-p",
+        token.as_str(),
+    ]);
+    wait_for_replicas(REPLICAS);
+    evidence(
+        SUITE,
+        "operator token ready",
+        json!({ "secret": TOKEN_SECRET }),
+    );
+
+    let queue = send(
+        http.put(format!("{base}/v1/queues/{SCALE_QUEUE}"))
+            .json(&json!({
+                "max_in_flight": 100,
+                "max_dispatch_per_tick": 100,
+                "max_dispatches_per_second": 100,
+                "max_burst_size": 100,
+                "lease_ttl_ms": 30000,
+                "retry_backoff_ms": 1000
+            })),
+    )
+    .await;
+    assert_eq!(queue["queue"], SCALE_QUEUE, "{queue}");
+    let created = send(
+        http.post(format!("{base}/v1/queues/{SCALE_QUEUE}/tasks:batch"))
+            .json(&json!({ "tasks": [task(SCALE_TASK, "s", 10)] })),
+    )
+    .await;
+    assert_eq!(created["created"], 1, "{created}");
+    let fetched =
+        send(http.get(format!("{base}/v1/queues/{SCALE_QUEUE}/tasks/{SCALE_TASK}"))).await;
+    assert_eq!(fetched["status"], "Scheduled", "{fetched}");
+
+    let kept_pvc = pvc_uid(&pvc(REPLICAS - 1));
+    let shrink = replicas_patch(SCALED_REPLICAS).to_string();
+    kubectl(&[
+        "patch",
+        "defer",
+        DEFER,
+        "--type",
+        "merge",
+        "-p",
+        shrink.as_str(),
+    ]);
+    wait_for_replicas(SCALED_REPLICAS);
+    let gone = pod(REPLICAS - 1);
+    wait_for(
+        &format!("pod {gone} removed"),
+        API_TIMEOUT,
+        || match try_kubectl(&["get", "pod", gone.as_str()]) {
+            Err(err) if err.contains("NotFound") => Ok(()),
+            Err(err) => Err(err),
+            Ok(_) => Err("still exists".to_owned()),
+        },
+    );
+    assert_eq!(
+        pvc_uid(&pvc(REPLICAS - 1)),
+        kept_pvc,
+        "PVC {} was replaced, not kept",
+        pvc(REPLICAS - 1)
+    );
+    wait_healthy(&http, &base).await;
+    let after_in = send(http.get(format!("{base}/v1/queues/{SCALE_QUEUE}"))).await;
+    assert_eq!(after_in["task_count"], 1, "{after_in}");
+    let still = send(http.get(format!("{base}/v1/queues/{SCALE_QUEUE}/tasks/{SCALE_TASK}"))).await;
+    assert_eq!(still["status"], "Scheduled", "{still}");
+    evidence(
+        SUITE,
+        "scaled in",
+        json!({ "replicas": SCALED_REPLICAS, "pvc_kept": true }),
+    );
+
+    let grow = replicas_patch(REPLICAS).to_string();
+    kubectl(&[
+        "patch",
+        "defer",
+        DEFER,
+        "--type",
+        "merge",
+        "-p",
+        grow.as_str(),
+    ]);
+    wait_for_replicas(REPLICAS);
+    wait_for_ready_pod(&pod(REPLICAS - 1), None, SCALE_TIMEOUT);
+    wait_healthy(&http, &base).await;
+    let after_out = send(http.get(format!("{base}/v1/queues/{SCALE_QUEUE}"))).await;
+    assert_eq!(after_out["task_count"], 1, "{after_out}");
+    let second = send(
+        http.post(format!("{base}/v1/queues/{SCALE_QUEUE}/tasks:batch"))
+            .json(&json!({ "tasks": [task("scale-task-after", "s2", 10)] })),
+    )
+    .await;
+    assert_eq!(second["created"], 1, "{second}");
+    let after_write = send(http.get(format!("{base}/v1/queues/{SCALE_QUEUE}"))).await;
+    assert_eq!(after_write["task_count"], 2, "{after_write}");
+    evidence(
+        SUITE,
+        "scaled out",
+        json!({ "replicas": REPLICAS, "task_count": 2 }),
+    );
+}
+
 fn task(id: &str, kind: &str, priority: u32) -> Value {
     json!({
         "task_id": id,
@@ -359,6 +496,40 @@ fn pvc_uid(name: &str) -> String {
         .to_owned();
     assert!(!uid.is_empty(), "PVC {name} has no uid");
     uid
+}
+
+fn replicas_patch(replicas: usize) -> Value {
+    json!({ "spec": { "replicasPerShard": replicas } })
+}
+
+fn admin_token_patch() -> Value {
+    json!({ "spec": { "adminTokenSecret": TOKEN_SECRET } })
+}
+
+/// Waits until the StatefulSet and the Defer CR status both show `want`
+/// replicas, all of them ready.
+fn wait_for_replicas(want: usize) {
+    wait_for(
+        &format!("Defer/{DEFER} settled at {want} replicas"),
+        SCALE_TIMEOUT,
+        || {
+            let sts = kubectl_json(&["get", "statefulset", DEFER]);
+            let cr = kubectl_json(&["get", "defer", DEFER])["status"].clone();
+            let ok = sts["spec"]["replicas"] == want
+                && sts["status"]["readyReplicas"] == want
+                && cr["settledReplicas"] == want
+                && cr["readyReplicas"] == want
+                && cr["desiredReplicas"] == want;
+            if ok {
+                Ok(())
+            } else {
+                Err(format!(
+                    "sts spec {} ready {}; cr {cr}",
+                    sts["spec"]["replicas"], sts["status"]["readyReplicas"]
+                ))
+            }
+        },
+    )
 }
 
 /// Whole GiB of a Kubernetes quantity in `Gi`, `Ti`, or `G` (rounded down).
@@ -493,6 +664,24 @@ fn pod_and_pvc_names_follow_the_statefulset_ordinal() {
 fn killed_pod_is_one_of_the_replicas() {
     assert_eq!(REPLICAS, 3);
     assert!((0..REPLICAS).contains(&KILLED));
+}
+
+#[test]
+fn replicas_patch_sets_replicas_per_shard() {
+    assert_eq!(replicas_patch(2), json!({"spec": {"replicasPerShard": 2}}));
+}
+
+#[test]
+fn admin_token_patch_names_the_secret() {
+    assert_eq!(
+        admin_token_patch(),
+        json!({"spec": {"adminTokenSecret": "defer-admin-token"}})
+    );
+}
+
+#[test]
+fn scale_in_target_fits_the_pool() {
+    assert!((1..REPLICAS).contains(&SCALED_REPLICAS));
 }
 
 #[test]
