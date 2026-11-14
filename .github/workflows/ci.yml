@@ -86,7 +86,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo deny check
-          cargo audit
+          cargo audit --db "${RUNNER_TEMP}/rustsec-advisory-db"
 
   test-coverage:
     name: "test: workspace, coverage"

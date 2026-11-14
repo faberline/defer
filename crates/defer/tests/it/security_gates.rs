@@ -142,6 +142,20 @@ fn ci_runs_cargo_deny_and_cargo_audit_and_the_gate_needs_the_job() {
 }
 
 #[test]
+fn cargo_audit_uses_its_own_database_directory() {
+    // cargo deny fills ~/.cargo/advisory-db (deny.toml db-path); cargo audit
+    // refuses a non-empty directory, so it must read a separate one.
+    assert!(
+        CI_YML.contains("cargo audit --db "),
+        "ci.yml gives cargo audit its own --db directory"
+    );
+    assert!(
+        !CI_YML.lines().any(|line| line.trim() == "cargo audit"),
+        "ci.yml has no bare cargo audit line"
+    );
+}
+
+#[test]
 fn advisory_ignores_carry_a_reason_and_an_expiry() {
     assert!(unexplained_advisory_ignores(DENY_TOML).is_empty());
     assert!(unexplained_advisory_ignores(AUDIT_TOML).is_empty());
