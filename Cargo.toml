@@ -52,6 +52,7 @@ clap = { version = "4", features = ["derive", "string", "env"] }
 hmac = "0.12"
 k8s-openapi = { version = "0.24", features = ["v1_32"] }
 kube = { version = "0.98", features = ["runtime", "derive", "client"] }
+proptest = "1"
 rcgen = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls-native-roots", "json", "cookies", "gzip", "brotli", "multipart", "stream"] }
 schemars = "0.8"

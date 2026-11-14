@@ -123,6 +123,7 @@ queue name. Probes and metrics are served on the serve port (`7141`).
 - **Next**: check the peer TLS secret (`DEFER_PEER_TLS_CERT`,
   `DEFER_PEER_TLS_KEY`) and the network between the pods. defer exports no
   leader metric, so the header and the logs are the only leader signals.
+  The operator retries a membership step that every pod refuses with `not_leader` up to 60 times, 5 seconds apart; the Defer status message then reads `no leader accepted the membership step`.
 
 ### A queue that does not drain
 
