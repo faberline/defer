@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use defer::{AuthConfig, DeferRaft, DeferScheduler, HttpDispatcher};
-use raft_runtime::Membership;
+use raft_runtime::{Membership, NodeId};
 use service_http::{AdmissionConfig, AdmissionController};
 use tower::ServiceExt;
 
@@ -39,11 +39,8 @@ async fn app(admission: Option<AdmissionController>) -> (tempfile::TempDir, axum
         DeferRaft::spawn(
             Arc::new(Mutex::new(DeferScheduler::new())),
             &dir.path().join("raft"),
-            0,
-            Membership {
-                voters: vec![0],
-                learners: vec![],
-            },
+            NodeId::new(0),
+            Membership::new(vec![NodeId::new(0)], vec![]),
             HashMap::new(),
             DeferRaft::host_config(8),
         )

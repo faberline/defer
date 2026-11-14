@@ -7,7 +7,7 @@ use defer::{
     ensure_declared_queues, parse_declared_queues, DeclaredQueue, DeclaredQueueDecision,
     DeclaredQueueOutcome, DeferRaft, DeferScheduler, QueueControlState, QueuePolicy,
 };
-use raft_runtime::Membership;
+use raft_runtime::{Membership, NodeId};
 
 async fn test_raft() -> (tempfile::TempDir, Arc<DeferRaft>) {
     let dir = tempfile::tempdir().unwrap();
@@ -15,11 +15,8 @@ async fn test_raft() -> (tempfile::TempDir, Arc<DeferRaft>) {
         DeferRaft::spawn(
             Arc::new(Mutex::new(DeferScheduler::new())),
             &defer::storage::raft_dir(dir.path()),
-            0,
-            Membership {
-                voters: vec![0],
-                learners: vec![],
-            },
+            NodeId::new(0),
+            Membership::new(vec![NodeId::new(0)], vec![]),
             HashMap::new(),
             DeferRaft::host_config(8),
         )
@@ -256,11 +253,8 @@ async fn test_follower_skips_without_error() {
         DeferRaft::spawn(
             Arc::new(Mutex::new(DeferScheduler::new())),
             &defer::storage::raft_dir(dir.path()),
-            0,
-            Membership {
-                voters: vec![99],
-                learners: vec![],
-            },
+            NodeId::new(0),
+            Membership::new(vec![NodeId::new(99)], vec![]),
             HashMap::new(),
             DeferRaft::host_config(8),
         )

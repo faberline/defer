@@ -198,7 +198,7 @@ its direct contribution.
     scheme.
   - [`crates/defer-shared-kernel`](crates/defer-shared-kernel) defines the
     lease, ack, nack, and fence semantics the dispatcher settles against.
-  - [`core/service-executor`](https://github.com/faberline/core/blob/v0.4.14/crates/service-executor/README.md)
+  - [`core/service-executor`](https://github.com/faberline/core/blob/v0.5.0/crates/service-executor/README.md)
     provides the bounded concurrent HTTP execution with per-request timeout.
 - Gate: `cargo test -p defer --test it -- http_dispatch::`
 - Gate: `cargo test -p defer --test it -- http_dispatch_signing::`
@@ -236,9 +236,9 @@ its direct contribution.
     the `DEFER_PEER` TLS adapter.
   - [`crates/defer-storage`](crates/defer-storage) opens the Raft log and the
     durable snapshots in `<data_dir>/raft`, fsynced on every write.
-  - [`core/raft-runtime`](https://github.com/faberline/core/blob/v0.4.14/crates/raft-runtime/README.md)
+  - [`core/raft-runtime`](https://github.com/faberline/core/blob/v0.5.0/crates/raft-runtime/README.md)
     hosts the group, the log, snapshots, and the fence value types.
-  - [`core/peer-tls`](https://github.com/faberline/core/blob/v0.4.14/crates/peer-tls/README.md)
+  - [`core/peer-tls`](https://github.com/faberline/core/blob/v0.5.0/crates/peer-tls/README.md)
     provides the mutual TLS material and verification for peer links.
 - Gate: `cargo test -p defer --test it -- raft_scheduler::`
 - Gate: `cargo test -p defer --test it -- raft_peer_mtls::`
@@ -259,7 +259,7 @@ its direct contribution.
     and its admin-role requirement.
   - [`crates/defer`](crates/defer) defines the `backup` verb and the serve
     flag that reads the seed.
-  - [`core/service-backup`](https://github.com/faberline/core/blob/v0.4.14/crates/service-backup/README.md)
+  - [`core/service-backup`](https://github.com/faberline/core/blob/v0.5.0/crates/service-backup/README.md)
     provides the destination sinks and retention pruning.
 - Gate: `cargo test -p defer --test it -- http_api::`
 - Gate: `cargo test -p defer --test it -- cli_contract::`
@@ -278,9 +278,9 @@ its direct contribution.
     the per-queue authorization rules.
   - [`crates/defer-queue`](crates/defer-queue) defines the admission classes,
     the auth middleware placement, and the body limit layer.
-  - [`core/service-auth`](https://github.com/faberline/core/blob/v0.4.14/crates/service-auth/README.md)
+  - [`core/service-auth`](https://github.com/faberline/core/blob/v0.5.0/crates/service-auth/README.md)
     provides the bearer-token registry, grant evaluation, and rotation.
-  - [`core/service-http`](https://github.com/faberline/core/blob/v0.4.14/crates/service-http/README.md)
+  - [`core/service-http`](https://github.com/faberline/core/blob/v0.5.0/crates/service-http/README.md)
     provides the shared router shell, error envelope, and admission hooks.
 - Gate: `cargo test -p defer --test it -- service_auth::`
 - Gate: `cargo test -p defer --test it -- service_admission::`
@@ -301,7 +301,7 @@ its direct contribution.
     defaults, renderer, and reconcile loop.
   - [`crates/defer`](crates/defer) defines the `k8s` render verbs and the
     direct-install manifests under `k8s/`.
-  - [`core/service-k8s`](https://github.com/faberline/core/blob/v0.4.14/crates/service-k8s/README.md)
+  - [`core/service-k8s`](https://github.com/faberline/core/blob/v0.5.0/crates/service-k8s/README.md)
     provides the cluster spec, reconciliation, and workload mechanisms.
   - `external:kubernetes` stores desired state and runs the workload,
     network, RBAC, and Secret contracts.
@@ -324,12 +324,12 @@ its direct contribution.
     families and the router composition.
   - [`crates/defer`](crates/defer) defines the serve lifecycle, the drain
     order, and the bounded soak script.
-  - [`core/service-http`](https://github.com/faberline/core/blob/v0.4.14/crates/service-http/README.md)
+  - [`core/service-http`](https://github.com/faberline/core/blob/v0.5.0/crates/service-http/README.md)
     provides the probe routes, `Server-Timing`, structured logs, and OTLP
     wiring.
-  - [`core/server-lifecycle`](https://github.com/faberline/core/blob/v0.4.14/crates/server-lifecycle/README.md)
+  - [`core/server-lifecycle`](https://github.com/faberline/core/blob/v0.5.0/crates/server-lifecycle/README.md)
     provides the one shutdown deadline the drain and the Raft handoff share.
-  - [`core/metrics-prometheus`](https://github.com/faberline/core/blob/v0.4.14/crates/metrics-prometheus/README.md)
+  - [`core/metrics-prometheus`](https://github.com/faberline/core/blob/v0.5.0/crates/metrics-prometheus/README.md)
     provides the Prometheus text exposition.
 - Gate: `cargo test -p defer --test it -- http_api::`
 - Gate: `DEFER_SOAK_AUTOSTART=1 bash scripts/soak.sh`
@@ -347,9 +347,9 @@ its direct contribution.
     and the OpenAPI document.
   - [`crates/defer`](crates/defer) defines the CLI verbs and the offline spec
     and client generation.
-  - [`core/openapi-codegen`](https://github.com/faberline/core/blob/v0.4.14/crates/openapi-codegen/README.md)
+  - [`core/openapi-codegen`](https://github.com/faberline/core/blob/v0.5.0/crates/openapi-codegen/README.md)
     provides the in-binary client generator.
-  - [`core/cli-std`](https://github.com/faberline/core/blob/v0.4.14/crates/cli-std/README.md)
+  - [`core/cli-std`](https://github.com/faberline/core/blob/v0.5.0/crates/cli-std/README.md)
     provides the standard command set and output conventions.
 - Gate: `cargo test -p defer --test it -- cli_contract::`
 - Gate: `cargo test -p defer --test it -- http_api::`

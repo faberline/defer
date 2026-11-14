@@ -3,7 +3,7 @@
 //! ack/nack outcomes, reclaim expired leases, and cancel.
 
 use chrono::{DateTime, Duration, Utc};
-use raft_runtime::FenceToken;
+use raft_runtime::{AssignmentEpoch, FenceToken, NodeId};
 
 use super::{millis, pick_ready, DeferScheduler};
 use crate::types::{
@@ -100,12 +100,12 @@ impl DeferScheduler {
             let expires_at = now + Duration::milliseconds(state.policy.lease_ttl_ms as i64);
             let token = task
                 .assignment
-                .assign(executor_node, millis(now), millis(expires_at))
+                .assign(NodeId::new(executor_node), millis(now), millis(expires_at))
                 .expect("scheduled task must not retain an active assignment");
             task.status = TaskStatus::Leased {
                 attempt_id: attempt_id.clone(),
                 executor_node,
-                epoch: token.epoch,
+                epoch: token.epoch.get(),
                 expires_at,
             };
             state.in_flight.insert(attempt_id.clone(), task_id.clone());
@@ -122,7 +122,7 @@ impl DeferScheduler {
                 // before ack committed, the retry must carry the same key.
                 idempotency_key: format!("{}/{}", task.queue, task_id),
                 executor_node,
-                epoch: token.epoch,
+                epoch: token.epoch.get(),
                 leased_at: now,
                 expires_at,
                 dispatch_deadline_ms: task.create.dispatch_deadline_ms,
@@ -168,8 +168,8 @@ impl DeferScheduler {
                 .assignment
                 .release(
                     FenceToken {
-                        owner: executor_node,
-                        epoch,
+                        owner: NodeId::new(executor_node),
+                        epoch: AssignmentEpoch::new(epoch),
                     },
                     millis(now),
                 )
@@ -220,8 +220,8 @@ impl DeferScheduler {
             .assignment
             .release(
                 FenceToken {
-                    owner: executor_node,
-                    epoch,
+                    owner: NodeId::new(executor_node),
+                    epoch: AssignmentEpoch::new(epoch),
                 },
                 millis(now),
             )
@@ -299,8 +299,8 @@ impl DeferScheduler {
             } => {
                 let _ = task.assignment.release(
                     FenceToken {
-                        owner: *executor_node,
-                        epoch: *epoch,
+                        owner: NodeId::new(*executor_node),
+                        epoch: AssignmentEpoch::new(*epoch),
                     },
                     millis(*expires_at - Duration::milliseconds(1)),
                 );

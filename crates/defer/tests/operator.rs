@@ -54,7 +54,7 @@ fn production() -> Defer {
 // <HANDWRITE gap="missing-generator:unit-test" tracker="#2220" reason="Own the exact six-object production graph, three-replica StatefulSet relationships, connected security secrets, and backup CronJob oracle.">
 #[test]
 fn production_render_composes_shared_stateful_primitives() {
-    let objects = operator::render::render(&production());
+    let objects = operator::render::render(&production()).unwrap();
     assert_eq!(objects.len(), 6, "exact operator-owned resource graph");
     let selector = json!({
         "app.kubernetes.io/name": "defer",
@@ -263,7 +263,7 @@ fn placement_and_pull_secrets_reach_every_rendered_pod() {
         }),
         json!([{"name": "ghcr-pull"}]),
     );
-    let objects = operator::render::render(&defer);
+    let objects = operator::render::render(&defer).unwrap();
     let stateful = &object(&objects, "StatefulSet", "jobs")["spec"]["template"]["spec"];
     let cron = &object(&objects, "CronJob", "jobs-backup")["spec"]["jobTemplate"]["spec"]
         ["template"]["spec"];
@@ -293,7 +293,7 @@ fn placement_and_pull_secrets_reach_every_rendered_pod() {
 /// those fields, the previous behavior.
 #[test]
 fn no_placement_renders_no_selector_tolerations_or_pull_secrets() {
-    let objects = operator::render::render(&production());
+    let objects = operator::render::render(&production()).unwrap();
     let stateful = &object(&objects, "StatefulSet", "jobs")["spec"]["template"]["spec"];
     let cron = &object(&objects, "CronJob", "jobs-backup")["spec"]["jobTemplate"]["spec"]
         ["template"]["spec"];
@@ -311,7 +311,7 @@ fn no_placement_renders_no_selector_tolerations_or_pull_secrets() {
 /// An empty placement block is the same as none.
 #[test]
 fn empty_placement_renders_no_selector() {
-    let objects = operator::render::render(&placed(json!({}), json!([])));
+    let objects = operator::render::render(&placed(json!({}), json!([]))).unwrap();
     let stateful = &object(&objects, "StatefulSet", "jobs")["spec"]["template"]["spec"];
     assert!(stateful.get("nodeSelector").is_none_or(Value::is_null));
     assert!(stateful.get("imagePullSecrets").is_none());
@@ -347,7 +347,7 @@ fn body_limit_env(spec_extra: Value) -> Value {
         "spec": spec
     }))
     .unwrap();
-    let objects = operator::render::render(&defer);
+    let objects = operator::render::render(&defer).unwrap();
     let stateful = object(&objects, "StatefulSet", "jobs");
     named(
         &stateful["spec"]["template"]["spec"]["containers"][0]["env"],
@@ -390,7 +390,7 @@ fn tokens_secret_csi_driver_overrides_the_default_csi_driver_name() {
         }
     }))
     .unwrap();
-    let objects = operator::render::render(&defer);
+    let objects = operator::render::render(&defer).unwrap();
     let stateful = object(&objects, "StatefulSet", "jobs");
     let vol = named(
         &stateful["spec"]["template"]["spec"]["volumes"],
@@ -422,7 +422,7 @@ fn render_limits_on_statefulset_container() {
         cpu: Some("4".into()),
         memory: Some("16Gi".into()),
     });
-    let objects = operator::render::render(&defer);
+    let objects = operator::render::render(&defer).unwrap();
     let stateful = object(&objects, "StatefulSet", "jobs");
     let container = &stateful["spec"]["template"]["spec"]["containers"][0];
     assert_eq!(
@@ -435,7 +435,7 @@ fn render_limits_on_statefulset_container() {
     );
 
     // 2. When limits is unset (production default), no limits key is rendered.
-    let objects_unset = operator::render::render(&production());
+    let objects_unset = operator::render::render(&production()).unwrap();
     let stateful_unset = object(&objects_unset, "StatefulSet", "jobs");
     let container_unset = &stateful_unset["spec"]["template"]["spec"]["containers"][0];
     assert_eq!(
@@ -453,7 +453,7 @@ fn render_limits_on_statefulset_container() {
         cpu: None,
         memory: None,
     });
-    let objects_empty = operator::render::render(&defer_empty);
+    let objects_empty = operator::render::render(&defer_empty).unwrap();
     let stateful_empty = object(&objects_empty, "StatefulSet", "jobs");
     let container_empty = &stateful_empty["spec"]["template"]["spec"]["containers"][0];
     assert!(
@@ -466,7 +466,7 @@ fn render_limits_on_statefulset_container() {
         cpu: Some("  ".into()),
         memory: Some("".into()),
     });
-    let objects_blank = operator::render::render(&defer_blank);
+    let objects_blank = operator::render::render(&defer_blank).unwrap();
     let stateful_blank = object(&objects_blank, "StatefulSet", "jobs");
     let container_blank = &stateful_blank["spec"]["template"]["spec"]["containers"][0];
     assert!(
@@ -486,7 +486,7 @@ fn limits_lower_than_requests_are_raised_to_requests() {
         cpu: Some("500m".into()),
         memory: Some("4Gi".into()),
     });
-    let objects = operator::render::render(&defer);
+    let objects = operator::render::render(&defer).unwrap();
     let stateful = object(&objects, "StatefulSet", "jobs");
     let container = &stateful["spec"]["template"]["spec"]["containers"][0];
     assert_eq!(
@@ -505,7 +505,7 @@ fn limits_lower_than_requests_are_raised_to_requests() {
         cpu: Some("1".into()),
         memory: Some("16Gi".into()),
     });
-    let objects_cores = operator::render::render(&defer_cores);
+    let objects_cores = operator::render::render(&defer_cores).unwrap();
     let stateful_cores = object(&objects_cores, "StatefulSet", "jobs");
     let container_cores = &stateful_cores["spec"]["template"]["spec"]["containers"][0];
     assert_eq!(container_cores["resources"]["limits"]["cpu"], "2");
@@ -544,7 +544,7 @@ fn declared_queues_reach_the_pod_env_with_policy_and_control_translated() {
         }
     }))
     .unwrap();
-    let objects = operator::render::render(&defer);
+    let objects = operator::render::render(&defer).unwrap();
     let stateful = object(&objects, "StatefulSet", "jobs");
     let env = &stateful["spec"]["template"]["spec"]["containers"][0]["env"];
     let env_entry = named(env, "DEFER_DECLARED_QUEUES");
@@ -587,7 +587,7 @@ fn empty_or_omitted_queues_adds_no_env_var() {
         }
     }))
     .unwrap();
-    let objects_omitted = operator::render::render(&defer_omitted);
+    let objects_omitted = operator::render::render(&defer_omitted).unwrap();
     let stateful_omitted = object(&objects_omitted, "StatefulSet", "jobs");
     let env_omitted = &stateful_omitted["spec"]["template"]["spec"]["containers"][0]["env"];
     assert!(env_omitted
@@ -608,7 +608,7 @@ fn empty_or_omitted_queues_adds_no_env_var() {
         }
     }))
     .unwrap();
-    let objects_empty = operator::render::render(&defer_empty);
+    let objects_empty = operator::render::render(&defer_empty).unwrap();
     let stateful_empty = object(&objects_empty, "StatefulSet", "jobs");
     let env_empty = &stateful_empty["spec"]["template"]["spec"]["containers"][0]["env"];
     assert!(env_empty
@@ -663,7 +663,7 @@ fn tls_production() -> Defer {
 
 #[test]
 fn tls_secret_projects_files_and_https_probes() {
-    let objects = operator::render::render(&tls_production());
+    let objects = operator::render::render(&tls_production()).unwrap();
     let pod = &object(&objects, "StatefulSet", "jobs")["spec"]["template"]["spec"];
     let container = &pod["containers"][0];
     assert_eq!(
@@ -697,7 +697,7 @@ fn tls_secret_projects_files_and_https_probes() {
 
 #[test]
 fn no_tls_secret_renders_no_tls_projection_and_plain_probes() {
-    let objects = operator::render::render(&production());
+    let objects = operator::render::render(&production()).unwrap();
     let pod = &object(&objects, "StatefulSet", "jobs")["spec"]["template"]["spec"];
     let container = &pod["containers"][0];
     assert!(pod["volumes"]

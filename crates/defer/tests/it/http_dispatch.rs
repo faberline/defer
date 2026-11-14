@@ -14,7 +14,7 @@ use defer::{
     AuthConfig, CreateTask, DeferRaft, DeferScheduler, DispatchDisposition, HttpDispatcher,
     QueuePolicy, Target, TargetSigningKey, TaskStatus,
 };
-use raft_runtime::Membership;
+use raft_runtime::{Membership, NodeId};
 use tokio::sync::Notify;
 
 #[derive(Clone)]
@@ -106,11 +106,8 @@ async fn dispatches_real_http_and_retries_with_stable_task_idempotency() {
     let raft = DeferRaft::spawn(
         scheduler.clone(),
         &dir.path().join("raft"),
-        0,
-        Membership {
-            voters: vec![0],
-            learners: vec![],
-        },
+        NodeId::new(0),
+        Membership::new(vec![NodeId::new(0)], vec![]),
         HashMap::new(),
         DeferRaft::host_config(8),
     )
@@ -214,11 +211,8 @@ async fn accepted_http_with_lost_fence_is_retried_with_the_stable_key() {
         DeferRaft::spawn(
             scheduler.clone(),
             &dir.path().join("raft"),
-            0,
-            Membership {
-                voters: vec![0],
-                learners: vec![],
-            },
+            NodeId::new(0),
+            Membership::new(vec![NodeId::new(0)], vec![]),
             HashMap::new(),
             DeferRaft::host_config(8),
         )
@@ -337,11 +331,8 @@ async fn shared_executor_dispatches_concurrently_with_a_hard_bound() {
         DeferRaft::spawn(
             scheduler.clone(),
             &dir.path().join("raft"),
-            0,
-            Membership {
-                voters: vec![0],
-                learners: vec![],
-            },
+            NodeId::new(0),
+            Membership::new(vec![NodeId::new(0)], vec![]),
             HashMap::new(),
             DeferRaft::host_config(32),
         )
@@ -421,11 +412,8 @@ async fn dispatch_deadline_below_delay_aborts_and_nacks_while_unset_succeeds() {
         DeferRaft::spawn(
             scheduler.clone(),
             &dir.path().join("raft"),
-            0,
-            Membership {
-                voters: vec![0],
-                learners: vec![],
-            },
+            NodeId::new(0),
+            Membership::new(vec![NodeId::new(0)], vec![]),
             HashMap::new(),
             DeferRaft::host_config(32),
         )
@@ -524,11 +512,8 @@ async fn dispatch_deadline_above_process_timeout_is_clamped() {
         DeferRaft::spawn(
             scheduler.clone(),
             &dir.path().join("raft"),
-            0,
-            Membership {
-                voters: vec![0],
-                learners: vec![],
-            },
+            NodeId::new(0),
+            Membership::new(vec![NodeId::new(0)], vec![]),
             HashMap::new(),
             DeferRaft::host_config(32),
         )

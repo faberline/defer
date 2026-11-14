@@ -61,20 +61,16 @@ pub(crate) fn run(args: SpecArgs) -> Result<()> {
         };
         let output = openapi_codegen::generate(
             &json,
-            &openapi_codegen::GenOptions {
+            &openapi_codegen::GenOptions::new(
                 lang,
-                target: None,
-                spec_path: PathBuf::new(),
-                out_dir: args.out.clone(),
-                client_name: "createDeferClient".into(),
-                http_client: match args.http {
-                    GenHttp::Fetch => openapi_codegen::HttpClient::Fetch,
-                    GenHttp::Axios => openapi_codegen::HttpClient::Axios,
-                },
-                emit_types: true,
-                emit_client: true,
-                emit_hooks: matches!(lang, openapi_codegen::Lang::Ts),
-            },
+                PathBuf::new(),
+                args.out.clone(),
+                "createDeferClient",
+            )
+            .with_http_client(match args.http {
+                GenHttp::Fetch => openapi_codegen::HttpClient::Fetch,
+                GenHttp::Axios => openapi_codegen::HttpClient::Axios,
+            }),
         )?;
         std::fs::create_dir_all(&args.out)?;
         for file in output.files {

@@ -10,7 +10,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use defer::{AuthConfig, DeferRaft, DeferScheduler, HttpDispatcher, TargetSigningKey};
-use raft_runtime::Membership;
+use raft_runtime::{Membership, NodeId};
 use server_lifecycle::{HookStage, HookStatus, TaskSupervisor};
 
 #[derive(clap::Args)]
@@ -78,13 +78,8 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
     let tls = tls_files(args.tls_cert_file.as_ref(), args.tls_key_file.as_ref())?;
     let tls_server = match tls {
         Some((cert, key)) => {
-            let mut server = peer_tls::PeerTlsConfig {
-                cert,
-                key,
-                ca: PathBuf::new(),
-                required: false,
-            }
-            .rustls_server_config()?;
+            let mut server = peer_tls::PeerTlsConfig::new(cert, key, PathBuf::new(), false)
+                .rustls_server_config()?;
             server.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
             Some(Arc::new(server))
         }
@@ -176,16 +171,13 @@ pub(crate) async fn run(args: ServeArgs) -> Result<()> {
     } else {
         if let Some(seed_uri) = args.bootstrap_seed_uri.as_deref() {
             let bytes = service_backup::fetch_backup_object(seed_uri)?;
-            defer::raft::prepare_bootstrap_seed(&args.data_dir, 0, &bytes)?;
+            defer::raft::prepare_bootstrap_seed(&args.data_dir, NodeId::new(0), &bytes)?;
         }
         Arc::new(DeferRaft::spawn(
             scheduler,
             &defer::storage::raft_dir(&args.data_dir),
-            0,
-            Membership {
-                voters: vec![0],
-                learners: vec![],
-            },
+            NodeId::new(0),
+            Membership::new(vec![NodeId::new(0)], vec![]),
             HashMap::new(),
             DeferRaft::host_config(defer::raft::SNAPSHOT_EVERY),
         )?)

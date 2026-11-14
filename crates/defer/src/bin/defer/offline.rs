@@ -58,39 +58,19 @@ enum IssueCommand {
 }
 
 const LLM_TOPICS: &[cli_std::llm::Topic] = &[
-    cli_std::llm::Topic {
-        id: "workflow",
-        summary: "configure a queue, create a delayed task, inspect or cancel it",
-        body: "Use `defer queue put --queue jobs`, then `defer task create --queue jobs --task-id ID --target-url URL --payload JSON`. The service leases due tasks through Raft before issuing HTTP. Every terminal CLI response ends with `next: done` or a runnable next command.",
-    },
-    cli_std::llm::Topic {
-        id: "api",
-        summary: "OpenAPI, h2c routes, typed clients, probes, and metrics",
-        body: "`defer spec --format openapi` is the offline twin of `/openapi.json` and `/docs`. Generate clients with `defer spec gen --lang ts|py|rust --out DIR`. The one service port supports HTTP/1.1 and h2c; `/healthz`, `/readyz`, and `/metrics` are auth exempt.",
-    },
-    cli_std::llm::Topic {
-        id: "delivery",
-        summary: "push delivery, stable idempotency, HMAC signing, retry, and DLQ",
-        body: "A committed lease contains executor node and fence epoch before any HTTP effect. Targets receive `Idempotency-Key`, attempt/fence headers, and optional `x-defer-signature`. Non-2xx or transport failure commits retry/DLQ; ambiguous external effects are at-least-once and use the task-stable key for dedupe.",
-    },
-    cli_std::llm::Topic {
-        id: "ha",
-        summary: "shards, replicas, committed executor ownership, snapshot, and recovery",
-        body: "`SHARD_COUNT` owns storage partitioning; `REPLICAS_PER_SHARD` owns HA. Each replica applies identical scheduler commands. `POD_NAME`, `VOTER_COUNT`, and `DEFER_PEER_SERVICE` derive topology. Durable state lives under `DEFER_DATA_DIR`; lease expiry/reclaim is itself a committed transition.",
-    },
-    cli_std::llm::Topic {
-        id: "auth",
-        summary: "shared bearer registry, queue roles, and credential rotation",
-        body: "Production sets `DEFER_AUTH=required` and `DEFER_TOKEN_REGISTRY_FILE`. Queue resources use read/write/admin roles and `*` wildcard grants. The live watcher keeps the last known good registry during atomic Secret rotation. Clients send `DEFER_TOKEN` as Bearer auth.",
-    },
+    cli_std::llm::Topic::new("workflow", "configure a queue, create a delayed task, inspect or cancel it", "Use `defer queue put --queue jobs`, then `defer task create --queue jobs --task-id ID --target-url URL --payload JSON`. The service leases due tasks through Raft before issuing HTTP. Every terminal CLI response ends with `next: done` or a runnable next command."),
+    cli_std::llm::Topic::new("api", "OpenAPI, h2c routes, typed clients, probes, and metrics", "`defer spec --format openapi` is the offline twin of `/openapi.json` and `/docs`. Generate clients with `defer spec gen --lang ts|py|rust --out DIR`. The one service port supports HTTP/1.1 and h2c; `/healthz`, `/readyz`, and `/metrics` are auth exempt."),
+    cli_std::llm::Topic::new("delivery", "push delivery, stable idempotency, HMAC signing, retry, and DLQ", "A committed lease contains executor node and fence epoch before any HTTP effect. Targets receive `Idempotency-Key`, attempt/fence headers, and optional `x-defer-signature`. Non-2xx or transport failure commits retry/DLQ; ambiguous external effects are at-least-once and use the task-stable key for dedupe."),
+    cli_std::llm::Topic::new("ha", "shards, replicas, committed executor ownership, snapshot, and recovery", "`SHARD_COUNT` owns storage partitioning; `REPLICAS_PER_SHARD` owns HA. Each replica applies identical scheduler commands. `POD_NAME`, `VOTER_COUNT`, and `DEFER_PEER_SERVICE` derive topology. Durable state lives under `DEFER_DATA_DIR`; lease expiry/reclaim is itself a committed transition."),
+    cli_std::llm::Topic::new("auth", "shared bearer registry, queue roles, and credential rotation", "Production sets `DEFER_AUTH=required` and `DEFER_TOKEN_REGISTRY_FILE`. Queue resources use read/write/admin roles and `*` wildcard grants. The live watcher keeps the last known good registry during atomic Secret rotation. Clients send `DEFER_TOKEN` as Bearer auth."),
 ];
 
 pub(crate) fn llm(args: LlmArgs) -> Result<()> {
     println!(
         "{}",
         cli_std::llm::render(
-            TOOL.project,
-            TOOL.version,
+            TOOL.project(),
+            TOOL.version(),
             LLM_TOPICS,
             &args.topic,
             cli_std::llm::Format::parse(&args.format),
@@ -103,12 +83,11 @@ pub(crate) fn llm(args: LlmArgs) -> Result<()> {
 pub(crate) async fn upgrade(args: UpgradeArgs) -> Result<()> {
     cli_std::upgrade::run(
         &TOOL,
-        cli_std::upgrade::Options {
-            check: args.check,
-            tag: args.tag,
-            force: args.force,
-            yes: args.yes,
-        },
+        cli_std::upgrade::Options::default()
+            .with_check(args.check)
+            .with_tag(args.tag)
+            .with_force(args.force)
+            .with_yes(args.yes),
     )
     .await
 }
@@ -122,11 +101,10 @@ pub(crate) async fn issue(args: IssueArgs) -> Result<()> {
         } => {
             cli_std::issue::search(
                 &TOOL,
-                cli_std::issue::SearchOptions {
-                    query: (!query.is_empty()).then(|| query.join(" ")),
-                    state,
-                    limit,
-                },
+                cli_std::issue::SearchOptions::default()
+                    .with_query((!query.is_empty()).then(|| query.join(" ")))
+                    .with_state(state)
+                    .with_limit(limit),
             )
             .await
         }
@@ -140,15 +118,13 @@ pub(crate) async fn issue(args: IssueArgs) -> Result<()> {
             let message = (!message.is_empty()).then(|| message.join(" "));
             cli_std::issue::create(
                 &TOOL,
-                cli_std::issue::CreateOptions {
-                    title: title.unwrap_or_else(|| "defer: issue report".into()),
-                    message,
-                    url: None,
-                    repo: None,
-                    label: vec!["app:defer".into()],
-                    dry_run,
-                    yes,
-                },
+                cli_std::issue::CreateOptions::new(
+                    title.unwrap_or_else(|| "defer: issue report".into()),
+                )
+                .with_message(message)
+                .with_label(vec!["app:defer".into()])
+                .with_dry_run(dry_run)
+                .with_yes(yes),
             )
             .await
         }
