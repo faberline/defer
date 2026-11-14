@@ -1,5 +1,5 @@
-# Architecture contract for defer, checked by the workspace repo's
-# scripts/meta/rust_arch_contract.py. docs/adr/0001-multi-crate-workspace.md
+# Architecture contract for defer, checked by `aw standards rust-arch check`.
+# docs/adr/0001-multi-crate-workspace.md
 # records the decisions behind it. defer is a virtual workspace: one crate per
 # context under crates/, the scheduler model as the shared kernel, and the
 # `defer` assembly crate. depends_on lists the other defer contexts a context
