@@ -45,6 +45,7 @@ impl HttpMembershipActuator {
     /// trailing slash. `ordinals` is the number of pods; ordinals
     /// `0..ordinals` are asked for the leader. A `409` with `not_leader`
     /// is followed to the leader named in the `x-defer-leader` header.
+    /// A connection error is treated the same way: the next ordinal is tried.
     /// When no pod accepts, it returns `ActuatorError::NotLeader`.
     pub fn with_leader_discovery(
         client: reqwest::Client,
@@ -82,10 +83,17 @@ impl HttpMembershipActuator {
             if !self.token.is_empty() {
                 request = request.bearer_auth(&self.token);
             }
-            let response = request
-                .send()
-                .await
-                .map_err(|error| ActuatorError::Hard(error.to_string()))?;
+            let response = match request.send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    // A restarting pod refuses or resets the connection: try the next one.
+                    last = format!("{}: {error}", (self.base_url_for)(ordinal));
+                    if self.ordinals > 0 {
+                        ordinal = (ordinal + 1) % self.ordinals;
+                    }
+                    continue;
+                }
+            };
             let status = response.status();
             let hint = response
                 .headers()
@@ -456,6 +464,53 @@ mod tests {
         let total =
             seen0.lock().unwrap().len() + seen1.lock().unwrap().len() + seen2.lock().unwrap().len();
         assert_eq!(total, 4);
+    }
+
+    /// A base URL where nothing listens: bind a port, read it, drop the listener.
+    async fn closed_url() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn connection_error_tries_the_next_ordinal() {
+        let pod0 = closed_url().await;
+        let (pod1, seen1) = spawn_pod(200, "{}", None).await;
+        let actuator = discover(vec![pod0, pod1]);
+
+        assert_eq!(actuator.promote(3).await, Ok(()));
+
+        let seen = seen1.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].1, json!({"op": "promote", "node": 3}));
+    }
+
+    // Negative test: without the change a connection error is `Hard`.
+    #[tokio::test]
+    async fn gives_up_with_not_leader_when_no_pod_answers() {
+        let actuator = discover(vec![closed_url().await, closed_url().await]);
+
+        match actuator.promote(2).await {
+            Err(ActuatorError::NotLeader(text)) => {
+                assert!(text.contains("error sending request"), "text was: {text}")
+            }
+            other => panic!("expected NotLeader, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn connection_error_on_a_fixed_target_is_not_leader() {
+        let actuator =
+            HttpMembershipActuator::new(reqwest::Client::new(), closed_url().await, "t0k", |n| {
+                format!("http://defer-{n}.peers:9000")
+            });
+
+        assert!(matches!(
+            actuator.promote(2).await,
+            Err(ActuatorError::NotLeader(_))
+        ));
     }
 
     #[tokio::test]
