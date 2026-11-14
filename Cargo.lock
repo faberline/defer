@@ -1327,6 +1327,7 @@ dependencies = [
  "openapi-codegen 0.5.0 (git+https://github.com/faberline/core?tag=v0.5.0)",
  "peer-tls 0.1.0 (git+https://github.com/faberline/core?tag=v0.5.0)",
  "proptest",
+ "raft-runtime 0.1.0 (git+https://github.com/faberline/core?tag=v0.4.14)",
  "raft-runtime 0.1.0 (git+https://github.com/faberline/core?tag=v0.5.0)",
  "rcgen",
  "relay",

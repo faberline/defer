@@ -10,6 +10,7 @@ use defer::{
     Target,
 };
 use raft_runtime::{Membership, NodeId};
+use raft_runtime_v0414::Membership as RelayMembership;
 use relay::{PubCommand, Relay, RelayCoreConfig, RelayRaft};
 use service_observability::process_usage;
 
@@ -19,8 +20,15 @@ const PAYLOAD_BYTES: usize = 128;
 pub(crate) const MIN_DEFER_TO_RELAY_RATIO: f64 = 0.80;
 const CONTRACT: &str = include_str!("../../../../benchmarks/relay-performance-ceiling.md");
 
-fn sole_voter() -> Membership {
+fn defer_sole_voter() -> Membership {
     Membership::new(vec![NodeId::new(0)], Vec::new())
+}
+
+fn relay_sole_voter() -> RelayMembership {
+    RelayMembership {
+        voters: vec![0],
+        learners: Vec::new(),
+    }
 }
 
 async fn wait_defer_leader(raft: &DeferRaft) {
@@ -116,7 +124,7 @@ async fn defer_stays_within_twenty_percent_of_relay_scheduler_ceiling() {
             Arc::new(Mutex::new(DeferScheduler::new())),
             &defer_dir.path().join("raft"),
             NodeId::new(0),
-            sole_voter(),
+            defer_sole_voter(),
             HashMap::new(),
             DeferRaft::host_config(1_024),
         )
@@ -148,8 +156,8 @@ async fn defer_stays_within_twenty_percent_of_relay_scheduler_ceiling() {
         RelayRaft::spawn(
             relay_engine,
             &relay_dir.path().join("raft"),
-            NodeId::new(0),
-            sole_voter(),
+            0,
+            relay_sole_voter(),
             HashMap::new(),
             RelayRaft::host_config(1_024),
         )
