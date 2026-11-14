@@ -69,15 +69,39 @@ fn directory_bytes(path: &Path) -> u64 {
         .sum()
 }
 
+/// CPU seconds (utime + stime) from the text of `/proc/<pid>/stat`.
+/// The command name sits in parentheses and may hold spaces, so split after the last ')'.
+/// After it, field 3 (state) is index 0, so utime (field 14) is index 11 and stime (field 15) is index 12.
+/// Linux counts these in ticks of 10 ms (CLK_TCK = 100).
+fn cpu_seconds_from_stat(stat: &str) -> Option<f64> {
+    let after = stat.rsplit_once(')')?.1;
+    let fields: Vec<&str> = after.split_whitespace().collect();
+    let utime: u64 = fields.get(11)?.parse().ok()?;
+    let stime: u64 = fields.get(12)?.parse().ok()?;
+    Some((utime + stime) as f64 / 100.0)
+}
+
 fn sample_process() -> (f64, u64) {
     let usage = process_usage(std::process::id()).expect("sample benchmark process");
-    (usage.cpu_seconds, usage.rss_bytes)
+    let cpu = std::fs::read_to_string("/proc/self/stat")
+        .ok()
+        .and_then(|text| cpu_seconds_from_stat(&text));
+    (cpu.unwrap_or(usage.cpu_seconds), usage.rss_bytes)
+}
+
+/// The numbers of one run of the defer and relay workload.
+pub(crate) struct Measured {
+    pub defer_ops: f64,
+    pub relay_ops: f64,
+    pub defer_p50_us: u64,
+    pub defer_p99_us: u64,
+    pub relay_p50_us: u64,
+    pub relay_p99_us: u64,
+    pub report: serde_json::Value,
 }
 
 // <HANDWRITE gap="missing-generator:unit-test" tracker="#2217" reason="Own the release-mode oracle for exact same-host workload identity, completed-operation cardinality, positive finite metrics, explicit no-overclaim scope, and the hard Defer-to-Relay ratio threshold.">
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "performance gate: run explicitly on an otherwise idle host"]
-async fn defer_stays_within_twenty_percent_of_relay_scheduler_ceiling() {
+pub(crate) async fn run_workload() -> Measured {
     let total = BATCHES * BATCH_SIZE;
     let contract_yaml = CONTRACT
         .split_once("```yaml\n")
@@ -319,13 +343,43 @@ async fn defer_stays_within_twenty_percent_of_relay_scheduler_ceiling() {
         "defer_to_relay_ratio": defer_ops / relay_ops,
         "minimum_ratio": MIN_DEFER_TO_RELAY_RATIO,
     });
-    println!("{}", serde_json::to_string_pretty(&report).unwrap());
-    assert!(
-        defer_ops >= relay_ops * MIN_DEFER_TO_RELAY_RATIO,
-        "Defer scheduler throughput may trail Relay by at most 20%: defer={defer_ops:.1}, relay={relay_ops:.1}"
-    );
     defer.shutdown().await.unwrap();
     relay.shutdown().await.unwrap();
+    Measured {
+        defer_ops,
+        relay_ops,
+        defer_p50_us: defer_p50,
+        defer_p99_us: defer_p99,
+        relay_p50_us: relay_p50,
+        relay_p99_us: relay_p99,
+        report,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "performance gate: run explicitly on an otherwise idle host"]
+async fn defer_stays_within_twenty_percent_of_relay_scheduler_ceiling() {
+    let measured = run_workload().await;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&measured.report).unwrap()
+    );
+    assert!(
+        measured.defer_ops >= measured.relay_ops * MIN_DEFER_TO_RELAY_RATIO,
+        "Defer scheduler throughput may trail Relay by at most 20%: defer={:.1}, relay={:.1}",
+        measured.defer_ops,
+        measured.relay_ops
+    );
+}
+
+#[test]
+fn cpu_seconds_from_stat_reads_utime_and_stime() {
+    assert_eq!(
+        cpu_seconds_from_stat("42 (a b) c) S 1 1 1 0 -1 0 0 0 0 0 250 150 0 0 20 0 1 0 5 0 0"),
+        Some(4.0)
+    );
+    assert_eq!(cpu_seconds_from_stat("garbage"), None);
+    assert_eq!(cpu_seconds_from_stat("1 (x) S 1"), None);
 }
 // </HANDWRITE>
 // HANDWRITE-END

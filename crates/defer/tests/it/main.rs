@@ -14,6 +14,7 @@ mod e2e;
 mod http_api;
 mod http_dispatch;
 mod http_dispatch_signing;
+mod perf_gate;
 mod process_journey;
 mod process_security;
 mod raft_peer_mtls;
