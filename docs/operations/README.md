@@ -6,6 +6,7 @@ is in [product/operations.md](../product/operations.md).
 Start with [install.md](install.md): build, run one node, quickstart, and the 3-replica Kubernetes install.
 
 Upgrades and version compatibility are in [upgrades.md](upgrades.md).
+Every setting is in [configuration.md](configuration.md), the numeric limits in [limits.md](limits.md), and the runbook per alert in [alerts.md](alerts.md).
 
 ## Serve
 
