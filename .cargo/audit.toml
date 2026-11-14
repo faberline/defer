@@ -2,4 +2,27 @@
 # Docs: https://rustsec.org/advisories/
 
 [advisories]
-ignore = []
+ignore = [
+    # reason: h2 0.3.x is still locked by a dependency that has no 0.3 patch; expires: 2027-02-12
+    "RUSTSEC-2026-0258",
+    # reason: rustls 0.21.12 is still locked by a dependency; no compatible patch in 0.21; expires: 2027-02-12
+    "RUSTSEC-2026-0285",
+    # reason: rustls 0.21.12 is still locked by a dependency; no compatible patch in 0.21; expires: 2027-02-12
+    "RUSTSEC-2026-0346",
+    # reason: rustls 0.21.12 is still locked by a dependency; no compatible patch in 0.21; expires: 2027-02-12
+    "RUSTSEC-2026-0348",
+    # reason: rustls 0.21.12 is still locked by a dependency; no compatible patch in 0.21; expires: 2027-02-12
+    "RUSTSEC-2026-0349",
+    # reason: rustls 0.21.12 is still locked by a dependency; no compatible patch in 0.21; expires: 2027-02-12
+    "RUSTSEC-2026-0382",
+    # reason: backoff is unmaintained; replacing it changes product code, out of scope for this issue; expires: 2027-02-12
+    "RUSTSEC-2025-0012",
+    # reason: instant is unmaintained; pulled in transitively, no replacement in this change; expires: 2027-02-12
+    "RUSTSEC-2024-0384",
+    # reason: proc-macro-error is unmaintained; build-time only, transitive; expires: 2027-02-12
+    "RUSTSEC-2024-0370",
+    # reason: rustls-pemfile is unmaintained; transitive; expires: 2027-02-12
+    "RUSTSEC-2025-0134",
+    # reason: unsafe-libyaml is unmaintained; transitive; expires: 2027-02-12
+    "RUSTSEC-2024-0449",
+]
