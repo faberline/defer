@@ -45,6 +45,7 @@ impl HttpMembershipActuator {
     /// trailing slash. `ordinals` is the number of pods; ordinals
     /// `0..ordinals` are asked for the leader. A `409` with `not_leader`
     /// is followed to the leader named in the `x-defer-leader` header.
+    /// When no pod accepts, it returns `ActuatorError::NotLeader`.
     pub fn with_leader_discovery(
         client: reqwest::Client,
         base_url_for: impl Fn(u32) -> String + Send + Sync + 'static,
@@ -113,7 +114,7 @@ impl HttpMembershipActuator {
             }
             return Err(ActuatorError::Hard(format!("{status}: {text}")));
         }
-        Err(ActuatorError::Hard(last))
+        Err(ActuatorError::NotLeader(last))
     }
 }
 
@@ -433,8 +434,8 @@ mod tests {
         let actuator = discover(vec![pod0, pod1, pod2]);
 
         match actuator.promote(3).await {
-            Err(ActuatorError::Hard(text)) => assert!(text.contains("not_leader")),
-            other => panic!("expected Hard, got {other:?}"),
+            Err(ActuatorError::NotLeader(text)) => assert!(text.contains("not_leader")),
+            other => panic!("expected NotLeader, got {other:?}"),
         }
 
         let total =

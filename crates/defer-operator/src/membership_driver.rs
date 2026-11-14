@@ -13,6 +13,8 @@ use std::time::Duration;
 pub enum ActuatorError {
     /// The learner has not caught up yet. The step may be retried.
     NotCaughtUp,
+    /// No pod accepted the step as the leader (election or leadership transfer in flight). The step may be retried.
+    NotLeader(String),
     /// Any other failure. The driver stops at once.
     Hard(String),
 }
@@ -21,6 +23,9 @@ impl std::fmt::Display for ActuatorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotCaughtUp => write!(f, "the learner has not caught up yet."),
+            Self::NotLeader(reason) => {
+                write!(f, "no leader accepted the membership step: {reason}")
+            }
             Self::Hard(reason) => write!(f, "membership step failed: {reason}"),
         }
     }
@@ -56,9 +61,10 @@ impl Default for RetryPolicy {
 
 /// Runs `steps` in order through `actuator`.
 ///
-/// `WaitCatchUp` and `Promote` retry on `NotCaughtUp` up to
-/// `retry.max_attempts` times in total. Any other error, or `NotCaughtUp`
-/// from another step, returns at once and later steps do not run.
+/// `WaitCatchUp` and `Promote` retry on `NotCaughtUp`, and every step
+/// retries on `NotLeader`, up to `retry.max_attempts` times in total. Any
+/// other error, or `NotCaughtUp` from another step, returns at once and
+/// later steps do not run.
 pub async fn run_steps<A: MembershipActuator>(
     actuator: &A,
     steps: &[Step],
@@ -83,6 +89,10 @@ pub async fn run_steps<A: MembershipActuator>(
                     attempt += 1;
                     tokio::time::sleep(retry.delay).await;
                 }
+                Err(ActuatorError::NotLeader(_)) if attempt < retry.max_attempts => {
+                    attempt += 1;
+                    tokio::time::sleep(retry.delay).await;
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -103,6 +113,7 @@ mod tests {
         calls: Mutex<Vec<String>>,
         wait_results: Mutex<VecDeque<Result<(), ActuatorError>>>,
         promote_results: Mutex<VecDeque<Result<(), ActuatorError>>>,
+        add_results: Mutex<VecDeque<Result<(), ActuatorError>>>,
     }
 
     impl Fake {
@@ -127,6 +138,13 @@ mod tests {
                 ..Self::default()
             }
         }
+
+        fn with_add(results: Vec<Result<(), ActuatorError>>) -> Self {
+            Self {
+                add_results: Mutex::new(results.into()),
+                ..Self::default()
+            }
+        }
     }
 
     fn next(queue: &Mutex<VecDeque<Result<(), ActuatorError>>>) -> Result<(), ActuatorError> {
@@ -136,7 +154,7 @@ mod tests {
     impl MembershipActuator for Fake {
         async fn add_learner(&self, ordinal: u32) -> Result<(), ActuatorError> {
             self.record(format!("add_learner({ordinal})"));
-            Ok(())
+            next(&self.add_results)
         }
 
         async fn wait_catch_up(&self, ordinal: u32) -> Result<(), ActuatorError> {
@@ -169,6 +187,58 @@ mod tests {
 
     fn not_caught_up() -> Result<(), ActuatorError> {
         Err(ActuatorError::NotCaughtUp)
+    }
+
+    fn not_leader() -> Result<(), ActuatorError> {
+        Err(ActuatorError::NotLeader("x".into()))
+    }
+
+    #[tokio::test]
+    async fn add_learner_retries_on_not_leader() {
+        let fake = Fake::with_add(vec![not_leader(), not_leader(), Ok(())]);
+        let steps = [Step::AddLearner(3)];
+
+        let result = run_steps(&fake, &steps, policy(5)).await;
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            fake.calls(),
+            vec!["add_learner(3)", "add_learner(3)", "add_learner(3)"]
+        );
+    }
+
+    #[tokio::test]
+    async fn not_leader_on_promote_retries() {
+        let fake = Fake::with_promote(vec![not_leader(), Ok(())]);
+        let steps = [Step::Promote(3)];
+
+        let result = run_steps(&fake, &steps, policy(3)).await;
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(fake.calls(), vec!["promote(3)", "promote(3)"]);
+    }
+
+    #[tokio::test]
+    async fn not_leader_gives_up_after_max_attempts() {
+        let fake = Fake::with_add(vec![
+            not_leader(),
+            not_leader(),
+            not_leader(),
+            not_leader(),
+            not_leader(),
+        ]);
+        let steps = [Step::AddLearner(3), Step::WaitCatchUp(3)];
+
+        let result = run_steps(&fake, &steps, policy(3)).await;
+
+        assert_eq!(result, Err(ActuatorError::NotLeader("x".into())));
+        let adds = fake
+            .calls()
+            .iter()
+            .filter(|c| c.as_str() == "add_learner(3)")
+            .count();
+        assert_eq!(adds, 3);
+        assert!(!fake.calls().contains(&"wait_catch_up(3)".to_string()));
     }
 
     #[tokio::test]
