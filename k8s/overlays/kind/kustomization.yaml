@@ -1,0 +1,36 @@
+# The shipped operator layer on a local Kind cluster (no cloud resources):
+# the image is loaded into the cluster, never pulled, and the operator runs
+# one replica without limits. Used by .github/workflows/kind-capacity.yml.
+# The layout follows k8s/overlays/gke-test/ without its GKE parts.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: defer
+
+resources:
+  - ../../operator
+  - defer-cr.yaml
+
+patches:
+  # run.sh-style: the workflow creates the namespace `defer` itself.
+  - patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: defer-system
+  - target:
+      kind: Deployment
+      name: defer-operator
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: defer:kind
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+      - op: remove
+        path: /spec/template/spec/containers/0/resources/limits

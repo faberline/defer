@@ -1,0 +1,26 @@
+# The Defer instance for the local Kind run: one shard, one replica, one voter.
+# The capacity suite needs CPU and memory limits, or the capacity loop has no
+# sample. The cluster's default volume class is used: no class is named here.
+apiVersion: defer.dev/v1alpha1
+kind: Defer
+metadata:
+  name: defer
+spec:
+  # Loaded into the Kind cluster by the workflow; never pulled.
+  image: defer:kind
+  imagePullPolicy: Never
+  shardCount: 1
+  replicasPerShard: 1
+  voterCount: 1
+  storage: 1Gi
+  graceSecs: 1
+  logLevel: info
+  # Stated, not omitted: the suites test the PVC-retained queue state, not
+  # auth.
+  auth: "off"
+  resources:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 250m
+    memory: 512Mi
