@@ -85,14 +85,36 @@ pub(crate) fn kubectl_json(args: &[&str]) -> Value {
 pub(crate) fn wait_for<T>(
     what: &str,
     timeout: Duration,
+    probe: impl FnMut() -> Result<T, String>,
+) -> T {
+    wait_for_with(what, timeout, probe, String::new)
+}
+
+/// [`wait_for`] that also appends the text of `on_timeout()` to the panic
+/// message, on its own line after `last saw`, when the deadline passes. An
+/// empty text adds nothing.
+pub(crate) fn wait_for_with<T>(
+    what: &str,
+    timeout: Duration,
     mut probe: impl FnMut() -> Result<T, String>,
+    on_timeout: impl FnOnce() -> String,
 ) -> T {
     let deadline = Instant::now() + timeout;
+    let mut on_timeout = Some(on_timeout);
     loop {
         match probe() {
             Ok(value) => return value,
             Err(last) if Instant::now() >= deadline => {
-                panic!("{what}: not reached within {timeout:?}; last saw: {last}")
+                let extra = match on_timeout.take() {
+                    Some(report) => report(),
+                    None => String::new(),
+                };
+                let suffix = if extra.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n{extra}")
+                };
+                panic!("{what}: not reached within {timeout:?}; last saw: {last}{suffix}")
             }
             Err(_) => std::thread::sleep(Duration::from_secs(2)),
         }
@@ -240,6 +262,48 @@ fn image_digest_reads_every_runtime_form() {
     }
     assert_eq!(image_digest("ghcr.io/faberline/defer:0.4.13"), None);
     assert_eq!(image_digest("sha256:ABC"), None);
+}
+
+#[test]
+fn wait_for_with_appends_the_report_on_timeout() {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_for_with::<()>(
+            "thing",
+            Duration::ZERO,
+            || Err("x".to_owned()),
+            || "REPORT".to_owned(),
+        )
+    }));
+    let err = result.expect_err("a timed-out wait must panic");
+    let message = err
+        .downcast_ref::<String>()
+        .expect("a formatted panic message");
+    assert!(message.contains("thing: not reached within"), "{message}");
+    assert!(message.contains("last saw: x"), "{message}");
+    assert!(message.contains("\nREPORT"), "{message}");
+}
+
+#[test]
+fn wait_for_keeps_its_message_without_a_report() {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_for::<()>("thing", Duration::ZERO, || Err("x".to_owned()))
+    }));
+    let err = result.expect_err("a timed-out wait must panic");
+    let message = err
+        .downcast_ref::<String>()
+        .expect("a formatted panic message");
+    assert!(message.ends_with("last saw: x"), "{message}");
+}
+
+#[test]
+fn wait_for_with_returns_the_value_on_ok() {
+    let value = wait_for_with(
+        "thing",
+        Duration::ZERO,
+        || Ok::<_, String>(7),
+        || panic!("not called"),
+    );
+    assert_eq!(value, 7);
 }
 
 /// Guard against a GKE run that passes with `running 0 tests`: every suite
