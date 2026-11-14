@@ -14,3 +14,7 @@ paths = ["**"]
 target = "rust"
 test_cmd = "cargo test --workspace"
 codegen.profile = "rust/score-crate"
+
+[standards.coverage]
+line = 82.6   # the measured value when it was last raised
+target = 100     # fixed
