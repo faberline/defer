@@ -145,7 +145,7 @@ infrastructure = "crates/defer-replication/src"
 name = "dispatch"
 depends_on = ["replication"]
 [contexts.layers]
-infrastructure = "crates/defer-dispatch/src"
+infrastructure = "crates/defer-dispatch/src/infrastructure"
 
 [[contexts]]
 name = "access"
