@@ -179,6 +179,122 @@ fn serve_exposes_declared_queues_configuration() {
     assert!(stdout.contains("DEFER_DECLARED_QUEUES"));
 }
 
+const CONFIGURATION_PAGE: &str = include_str!("../../../../docs/operations/configuration.md");
+const LIMITS_PAGE: &str = include_str!("../../../../docs/operations/limits.md");
+const ALERTS_PAGE: &str = include_str!("../../../../docs/operations/alerts.md");
+const PROMETHEUS_RULE: &str =
+    include_str!("../../../../k8s/components/observability/prometheusrule.yaml");
+
+fn serve_help() -> String {
+    let output = defer().args(["serve", "--help"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "serve --help failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn configuration_page_names_every_serve_flag() {
+    let help = serve_help();
+    let mut flags = std::collections::BTreeSet::new();
+    for token in help.split_whitespace() {
+        let token = token
+            .trim_end_matches(',')
+            .split('=')
+            .next()
+            .unwrap()
+            .split('<')
+            .next()
+            .unwrap();
+        if let Some(rest) = token.strip_prefix("--") {
+            if !rest.is_empty() && rest != "help" && rest != "version" {
+                flags.insert(format!("--{rest}"));
+            }
+        }
+    }
+    assert!(
+        flags.len() >= 15,
+        "expected at least 15 serve flags, found {}",
+        flags.len()
+    );
+    let missing: Vec<&String> = flags
+        .iter()
+        .filter(|flag| !CONFIGURATION_PAGE.contains(flag.as_str()))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "docs/operations/configuration.md lacks serve flags: {missing:?}"
+    );
+}
+
+#[test]
+fn configuration_page_names_every_serve_environment_variable() {
+    let help = serve_help();
+    let mut vars = std::collections::BTreeSet::new();
+    for (index, _) in help.match_indices("DEFER_") {
+        let var: String = help[index..]
+            .chars()
+            .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+            .collect();
+        if var.len() > "DEFER_".len() {
+            vars.insert(var);
+        }
+    }
+    assert!(!vars.is_empty(), "serve --help names no DEFER_ variable");
+    let missing: Vec<&String> = vars
+        .iter()
+        .filter(|var| !CONFIGURATION_PAGE.contains(var.as_str()))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "docs/operations/configuration.md lacks serve variables: {missing:?}"
+    );
+}
+
+#[test]
+fn limits_page_exists_and_names_each_limit() {
+    for needle in [
+        "DEFER_BODY_LIMIT_BYTES",
+        "max_in_flight",
+        "--dispatch-concurrency",
+        "terminal_retention_ms",
+        "replica",
+        "STATUS.md",
+    ] {
+        assert!(
+            LIMITS_PAGE.contains(needle),
+            "docs/operations/limits.md must name {needle}"
+        );
+    }
+}
+
+#[test]
+fn every_shipped_alert_has_a_runbook_entry() {
+    let names: Vec<&str> = PROMETHEUS_RULE
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("- alert: "))
+        .map(str::trim)
+        .collect();
+    assert!(!names.is_empty(), "prometheusrule.yaml defines no alert");
+    let missing: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|name| {
+            !ALERTS_PAGE
+                .lines()
+                .any(|line| line == format!("### {name}"))
+        })
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "docs/operations/alerts.md lacks runbook entries: {missing:?}"
+    );
+    assert!(ALERTS_PAGE.contains("no leader metric"));
+    assert!(ALERTS_PAGE.contains("no disk metric"));
+}
+
 #[test]
 fn deploy_artifacts_render_by_lifecycle_layer() {
     let crd = defer().args(["k8s", "crd", "render"]).output().unwrap();

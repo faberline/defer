@@ -11,8 +11,8 @@ use std::time::Duration;
 /// Why a membership step failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ActuatorError {
-    /// The learner has not caught up yet. The step may be retried.
-    NotCaughtUp,
+    /// The learner has not caught up yet. The step may be retried. The string is the server's answer.
+    NotCaughtUp(String),
     /// No pod accepted the step as the leader (election or leadership transfer in flight). The step may be retried.
     NotLeader(String),
     /// Any other failure. The driver stops at once.
@@ -22,7 +22,12 @@ pub enum ActuatorError {
 impl std::fmt::Display for ActuatorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotCaughtUp => write!(f, "the learner has not caught up yet."),
+            Self::NotCaughtUp(detail) if detail.is_empty() => {
+                write!(f, "the learner has not caught up yet.")
+            }
+            Self::NotCaughtUp(detail) => {
+                write!(f, "the learner has not caught up yet: {detail}")
+            }
             Self::NotLeader(reason) => {
                 write!(f, "no leader accepted the membership step: {reason}")
             }
@@ -82,7 +87,7 @@ pub async fn run_steps<A: MembershipActuator>(
             };
             match result {
                 Ok(()) => break,
-                Err(ActuatorError::NotCaughtUp)
+                Err(ActuatorError::NotCaughtUp(_))
                     if matches!(step, Step::WaitCatchUp(_) | Step::Promote(_))
                         && attempt < retry.max_attempts =>
                 {
@@ -186,7 +191,7 @@ mod tests {
     }
 
     fn not_caught_up() -> Result<(), ActuatorError> {
-        Err(ActuatorError::NotCaughtUp)
+        Err(ActuatorError::NotCaughtUp(String::new()))
     }
 
     fn not_leader() -> Result<(), ActuatorError> {
@@ -309,7 +314,7 @@ mod tests {
 
         let result = run_steps(&fake, &steps, policy(3)).await;
 
-        assert_eq!(result, Err(ActuatorError::NotCaughtUp));
+        assert_eq!(result, Err(ActuatorError::NotCaughtUp(String::new())));
         let waits = fake
             .calls()
             .iter()
@@ -353,6 +358,18 @@ mod tests {
 
         assert_eq!(result, Ok(()));
         assert!(fake.calls().is_empty());
+    }
+
+    #[test]
+    fn display_of_not_caught_up_includes_the_detail() {
+        assert_eq!(
+            ActuatorError::NotCaughtUp("TransitionInFlight".into()).to_string(),
+            "the learner has not caught up yet: TransitionInFlight"
+        );
+        assert_eq!(
+            ActuatorError::NotCaughtUp(String::new()).to_string(),
+            "the learner has not caught up yet."
+        );
     }
 }
 
