@@ -99,15 +99,12 @@ impl ManagedService for Defer {
     const MANAGER: &'static str = "defer-operator";
 
     fn render(&self) -> Vec<serde_json::Value> {
-        super::render::render(self)
+        super::render::render(self).expect("replicasPerShard must be at least 1")
     }
 
     async fn reconcile_plan(&self, client: kube::Client) -> anyhow::Result<ReconcilePlan> {
-        let children = self.render();
-        let plain = |children: Vec<Value>| ReconcilePlan {
-            children,
-            context: Value::Null,
-        };
+        let children = super::render::render(self)?;
+        let plain = |children: Vec<Value>| ReconcilePlan::new(children, Value::Null);
         let name = self.name_any();
         let Some(ns) = self.namespace() else {
             return Ok(plain(children));
@@ -133,10 +130,10 @@ impl ManagedService for Defer {
             Ok(token) => token,
             Err(text) => {
                 let decision = token_error_decision(&input, text);
-                return Ok(ReconcilePlan {
-                    children: apply_replica_decision(children, &decision),
-                    context: replica_context(&decision),
-                });
+                return Ok(ReconcilePlan::new(
+                    apply_replica_decision(children, &decision),
+                    replica_context(&decision),
+                ));
             }
         };
         let token = membership_token(&self.spec.auth, token);
@@ -151,17 +148,14 @@ impl ManagedService for Defer {
         );
         let decision =
             decide_replicas_for_reconcile(&actuator, input, RetryPolicy::default()).await;
-        Ok(ReconcilePlan {
-            children: apply_replica_decision(children, &decision),
-            context: replica_context(&decision),
-        })
+        Ok(ReconcilePlan::new(
+            apply_replica_decision(children, &decision),
+            replica_context(&decision),
+        ))
     }
 
     fn readiness_targets(&self) -> Vec<ReadinessTarget> {
-        vec![ReadinessTarget {
-            kind: "StatefulSet",
-            name: self.name_any(),
-        }]
+        vec![ReadinessTarget::new("StatefulSet", self.name_any())]
     }
 
     fn status_patch(&self, ready: &ReadyFacts) -> serde_json::Value {
@@ -271,9 +265,7 @@ mod tests {
     #[test]
     fn status_patch_carries_settled_and_message() {
         let defer = defer(true);
-        let facts = ReadyFacts {
-            ready: HashMap::from([("jobs".to_string(), 3i64)]),
-        };
+        let facts = ReadyFacts::new(HashMap::from([("jobs".to_string(), 3i64)]));
         let plain = defer.status_patch(&facts);
         let patched = defer
             .status_patch_with_context(&facts, &json!({"settledReplicas": 3, "message": "boom"}));
@@ -292,9 +284,7 @@ mod tests {
     #[test]
     fn null_context_leaves_status_unchanged() {
         let defer = defer(true);
-        let facts = ReadyFacts {
-            ready: HashMap::new(),
-        };
+        let facts = ReadyFacts::new(HashMap::new());
         let plain = defer.status_patch(&facts);
         assert_eq!(defer.status_patch_with_context(&facts, &Value::Null), plain);
     }
@@ -378,9 +368,7 @@ mod tests {
             },
             "secret defer-admin has no token key".to_string(),
         );
-        let facts = ReadyFacts {
-            ready: HashMap::from([("jobs".to_string(), 3i64)]),
-        };
+        let facts = ReadyFacts::new(HashMap::from([("jobs".to_string(), 3i64)]));
         let patch = d.status_patch_with_context(&facts, &replica_context(&decision));
         assert_eq!(
             patch["status"]["message"],

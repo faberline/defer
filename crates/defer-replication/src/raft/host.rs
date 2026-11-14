@@ -148,10 +148,7 @@ impl DeferRaft {
     }
 
     pub fn host_config(snapshot_every: u64) -> HostConfig {
-        HostConfig {
-            snapshot: SnapshotPolicy::EveryEntries(snapshot_every),
-            ..HostConfig::default()
-        }
+        HostConfig::default().with_snapshot(SnapshotPolicy::EveryEntries(snapshot_every))
     }
 
     /// Drain the shared Raft host's in-flight peer RPCs before its h2 client

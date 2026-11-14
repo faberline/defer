@@ -89,7 +89,6 @@ workspaces with one crate per context.
   today, so adopting it would change the plaintext single-cluster mode.
 - Render the operator's YAML through the service-k8s helpers and publish
   `status.conditions`.
-- Upgrade faberline/core past v0.4.14.
 - Consolidate the integration tests under `crates/defer/tests/it/`, add the
   missing docs, and turn on `ddd.toml` enforcement.
 - The served OpenAPI document references `#/components/schemas/crate.DispatchReport`

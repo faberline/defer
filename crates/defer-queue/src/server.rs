@@ -26,7 +26,9 @@ use defer_access as auth;
 use defer_dispatch::DispatchDisposition;
 use defer_replication::ProposeError;
 use defer_shared_kernel::{CreateTask, QueuePolicy, SchedulerError};
-use raft_runtime::{AdmissionRefused, DemotionRefused, Index, PromotionRefused, RemovalRefused};
+use raft_runtime::{
+    AdmissionRefused, DemotionRefused, Index, NodeId, PromotionRefused, RemovalRefused,
+};
 
 pub use dto::{
     CreateTasksRequest, CreateTasksResponse, MembershipOp, MembershipRequest, MembershipResponse,
@@ -673,36 +675,36 @@ pub async fn admin_membership(
                 "url is required for add_learner".to_string(),
             )),
             Some(url) => {
-                state.raft.upsert_peer(request.node, url).await;
+                state.raft.upsert_peer(NodeId::new(request.node), url).await;
                 state
                     .raft
-                    .add_learner(request.node)
+                    .add_learner(NodeId::new(request.node))
                     .await
                     .map_err(|error| admission_refusal(&error))
             }
         },
         MembershipOp::Promote => state
             .raft
-            .promote_learner(request.node)
+            .promote_learner(NodeId::new(request.node))
             .await
             .map_err(|error| promotion_refusal(&error)),
         MembershipOp::Demote => state
             .raft
-            .demote_voter(request.node)
+            .demote_voter(NodeId::new(request.node))
             .await
             .map_err(|error| demotion_refusal(&error)),
         MembershipOp::Remove => state
             .raft
-            .remove_member(request.node)
+            .remove_member(NodeId::new(request.node))
             .await
             .map_err(|error| removal_refusal(&error)),
     };
     match outcome {
-        Ok(index) => Json(MembershipResponse { index }).into_response(),
+        Ok(index) => Json(MembershipResponse { index: index.get() }).into_response(),
         Err((status, kind, message)) => {
             let response = ApiErr::new(status, kind, message).into_response();
             if kind == "not_leader" {
-                with_leader_hint(response, state.raft.leader().await)
+                with_leader_hint(response, state.raft.leader().await.map(NodeId::get))
             } else {
                 response
             }

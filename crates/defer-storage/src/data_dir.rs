@@ -72,7 +72,7 @@ mod tests {
     fn open_creates_the_raft_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = raft_dir(tmp.path());
-        open_raft_store(&dir, 0).unwrap();
+        open_raft_store(&dir, NodeId::new(0)).unwrap();
         assert!(dir.is_dir());
     }
 }

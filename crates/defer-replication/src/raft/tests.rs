@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeZone, Utc};
 use defer_shared_kernel::{CreateTask, DeferScheduler, QueuePolicy, Target};
-use raft_runtime::RaftStateMachine;
+use raft_runtime::{Index, NodeId, RaftStateMachine};
 
 use super::command::{DeferEnvelope, ProposalId};
 use super::{DeferCommand, DeferOutcome, DeferStateMachine};
@@ -28,7 +28,7 @@ fn task(id: &str, at: DateTime<Utc>) -> CreateTask {
 fn envelope(sequence: u64, command: DeferCommand) -> Vec<u8> {
     serde_json::to_vec(&DeferEnvelope {
         proposal_id: ProposalId {
-            node: 1,
+            node: NodeId::new(1),
             session: 9,
             sequence,
         },
@@ -43,7 +43,7 @@ fn snapshot_round_trip_preserves_fenced_attempt_and_dedupe() {
     let scheduler = Arc::new(Mutex::new(DeferScheduler::new()));
     let sm = DeferStateMachine::new(scheduler.clone(), false);
     sm.apply(
-        1,
+        Index::new(1),
         &envelope(
             1,
             DeferCommand::ConfigureQueue {
@@ -54,7 +54,7 @@ fn snapshot_round_trip_preserves_fenced_attempt_and_dedupe() {
     )
     .unwrap();
     sm.apply(
-        2,
+        Index::new(2),
         &envelope(
             2,
             DeferCommand::CreateTask {
@@ -66,13 +66,13 @@ fn snapshot_round_trip_preserves_fenced_attempt_and_dedupe() {
     .unwrap();
     let lease_command = DeferCommand::LeaseDue {
         queue: "jobs".into(),
-        executor_node: 7,
+        executor_node: NodeId::new(7),
         now,
         requested: 1,
     };
     let lease_bytes = envelope(3, lease_command);
-    sm.apply(3, &lease_bytes).unwrap();
-    let lease = match sm.claim_outcome(3).unwrap() {
+    sm.apply(Index::new(3), &lease_bytes).unwrap();
+    let lease = match sm.claim_outcome(Index::new(3)).unwrap() {
         DeferOutcome::Leased(Ok(mut leases)) => leases.remove(0),
         other => panic!("{other:?}"),
     };
@@ -84,8 +84,8 @@ fn snapshot_round_trip_preserves_fenced_attempt_and_dedupe() {
     restored
         .restore(&mut std::io::Cursor::new(&snap_bytes))
         .unwrap();
-    restored.apply(4, &lease_bytes).unwrap();
-    let repeated = match restored.claim_outcome(4).unwrap() {
+    restored.apply(Index::new(4), &lease_bytes).unwrap();
+    let repeated = match restored.claim_outcome(Index::new(4)).unwrap() {
         DeferOutcome::Leased(Ok(mut leases)) => leases.remove(0),
         other => panic!("{other:?}"),
     };

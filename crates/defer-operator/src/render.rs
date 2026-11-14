@@ -1,5 +1,6 @@
 // HANDWRITE-BEGIN gap="missing-generator:logic:defer-k8s-render" tracker="#766" reason="Defer-owned domain/env wiring (bind, Raft port, data dir, grace, body limit, log, auth, signing, peer mTLS) over shared StatefulSet, Services, PDB, Secret projection, and CronJob renderers."
 use serde_json::{json, Value};
+use service_k8s::render::stateful_instance::StatefulInstanceError;
 use service_k8s::render::{self, RenderCtx, ServiceStatefulSet, WorkloadVolumeClaim};
 
 use super::crd::Defer;
@@ -39,15 +40,7 @@ fn owner(defer: &Defer) -> Option<Value> {
 }
 
 fn ctx<'a>(defer: &Defer, name: &'a str, ns: &'a str) -> RenderCtx<'a> {
-    RenderCtx {
-        app: APP,
-        manager: MANAGER,
-        api_version: API_VERSION,
-        kind: KIND,
-        name,
-        ns,
-        owner: owner(defer),
-    }
+    RenderCtx::new(APP, MANAGER, API_VERSION, KIND, name, ns).with_owner(owner(defer))
 }
 
 fn token_source(defer: &Defer) -> Option<render::TokenRegistrySource<'_>> {
@@ -70,14 +63,14 @@ fn token_source(defer: &Defer) -> Option<render::TokenRegistrySource<'_>> {
         })
 }
 
-pub fn render(defer: &Defer) -> Vec<Value> {
+pub fn render(defer: &Defer) -> Result<Vec<Value>, StatefulInstanceError> {
     let name = name(defer);
     let ns = namespace(defer);
     let cx = ctx(defer, &name, &ns);
     let headless = format!("{name}-headless");
     let mut objects = vec![
         render::service_account(&cx, COMPONENT),
-        statefulset(defer, &cx, &headless),
+        statefulset(defer, &cx, &headless)?,
         render::headless_service_with_ports(
             &cx,
             &headless,
@@ -93,12 +86,12 @@ pub fn render(defer: &Defer) -> Vec<Value> {
     if let Some(backup) = backup_cron_job(defer, &cx) {
         objects.push(backup);
     }
-    objects
+    Ok(objects)
 }
 
 fn backup_cron_job(defer: &Defer, cx: &RenderCtx<'_>) -> Option<Value> {
     let backup = defer.spec.backup.as_ref()?;
-    let cron_name = format!("{}-backup", cx.name);
+    let cron_name = format!("{}-backup", cx.name());
     let mut args = vec![
         "backup".into(),
         "--url".into(),
@@ -109,8 +102,8 @@ fn backup_cron_job(defer: &Defer, cx: &RenderCtx<'_>) -> Option<Value> {
             } else {
                 "http"
             },
-            cx.name,
-            cx.ns
+            cx.name(),
+            cx.ns()
         ),
         "--dest".into(),
         backup.destination.clone(),
@@ -144,7 +137,7 @@ fn backup_cron_job(defer: &Defer, cx: &RenderCtx<'_>) -> Option<Value> {
         env_from: vec![],
         volumes: vec![],
         volume_mounts: vec![],
-        service_account_name: Some(cx.name),
+        service_account_name: Some(cx.name()),
         cpu: "100m",
         memory: "128Mi",
         successful_jobs_history_limit: 3,
@@ -165,7 +158,11 @@ fn http_get(path: &str, tls: bool) -> Value {
     get
 }
 
-fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
+fn statefulset(
+    defer: &Defer,
+    cx: &RenderCtx<'_>,
+    headless: &str,
+) -> Result<Value, StatefulInstanceError> {
     let spec = &defer.spec;
     let mut pvc = json!({
         "metadata": {"name": "data", "labels": cx.labels(COMPONENT)},
@@ -265,7 +262,7 @@ fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
 
     let mut sts = render::service_statefulset(ServiceStatefulSet {
         cx,
-        name: cx.name,
+        name: cx.name(),
         component: COMPONENT,
         image: &spec.cluster.image,
         image_pull_policy: spec
@@ -286,7 +283,7 @@ fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
         replicas_per_shard: spec.cluster.replicas_per_shard,
         voter_count: spec.cluster.voter_count,
         headless_env_key: "DEFER_PEER_SERVICE",
-        service_account_name: Some(cx.name),
+        service_account_name: Some(cx.name()),
         env,
         env_from: vec![],
         resources: render::requested_resources(
@@ -321,13 +318,13 @@ fn statefulset(defer: &Defer, cx: &RenderCtx<'_>, headless: &str) -> Value {
             mount_path: "/data",
             read_only: false,
         }),
-    });
+    })?;
     set_image_pull_secrets(&mut sts["spec"]["template"]["spec"], defer);
     apply_limits(
         &mut sts["spec"]["template"]["spec"]["containers"][0],
         &defer.spec.limits,
     );
-    sts
+    Ok(sts)
 }
 
 /// `spec.placement.nodeSelector` as a pod `nodeSelector`, or `None` when the
