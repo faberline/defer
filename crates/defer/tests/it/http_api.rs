@@ -8,7 +8,7 @@ use axum::routing::post;
 use axum::Router;
 use chrono::Utc;
 use defer::{AuthConfig, DeferRaft, DeferScheduler, HttpDispatcher, QueuePolicy};
-use raft_runtime::Membership;
+use raft_runtime::{Membership, NodeId};
 
 async fn raft() -> (tempfile::TempDir, Arc<DeferRaft>) {
     let dir = tempfile::tempdir().unwrap();
@@ -16,11 +16,8 @@ async fn raft() -> (tempfile::TempDir, Arc<DeferRaft>) {
         DeferRaft::spawn(
             Arc::new(Mutex::new(DeferScheduler::new())),
             &dir.path().join("raft"),
-            0,
-            Membership {
-                voters: vec![0],
-                learners: vec![],
-            },
+            NodeId::new(0),
+            Membership::new(vec![NodeId::new(0)], vec![]),
             HashMap::new(),
             DeferRaft::host_config(8),
         )
@@ -291,21 +288,18 @@ async fn h2c_routes_probes_openapi_metrics_dispatch_and_auth_are_live() {
         .await
         .unwrap();
     let seed = tempfile::tempdir().unwrap();
-    defer::raft::prepare_bootstrap_seed(seed.path(), 0, &snapshot).unwrap();
+    defer::raft::prepare_bootstrap_seed(seed.path(), NodeId::new(0), &snapshot).unwrap();
     let recovered = Arc::new(Mutex::new(DeferScheduler::new()));
     let recovered_raft = DeferRaft::spawn(
         recovered.clone(),
         &seed.path().join("raft"),
-        0,
-        Membership {
-            voters: vec![0],
-            learners: vec![],
-        },
+        NodeId::new(0),
+        Membership::new(vec![NodeId::new(0)], vec![]),
         HashMap::new(),
         DeferRaft::host_config(8),
     )
     .unwrap();
-    assert!(recovered_raft.applied_index() > 0);
+    assert!(recovered_raft.applied_index().get() > 0);
     assert!(matches!(
         recovered.lock().unwrap().status("jobs", "hello").unwrap(),
         Some(defer::TaskStatus::Succeeded)

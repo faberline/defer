@@ -15,7 +15,7 @@ use defer::{
     Target, TargetSigningKey,
 };
 use hmac::{Hmac, Mac};
-use raft_runtime::Membership;
+use raft_runtime::{Membership, NodeId};
 use sha2::Sha256;
 
 #[derive(Clone, Debug)]
@@ -116,11 +116,8 @@ async fn target_oracle_verifies_exact_signature_and_rejects_tampering() {
     let raft = DeferRaft::spawn(
         scheduler,
         &dir.path().join("raft"),
-        0,
-        Membership {
-            voters: vec![0],
-            learners: vec![],
-        },
+        NodeId::new(0),
+        Membership::new(vec![NodeId::new(0)], vec![]),
         HashMap::new(),
         DeferRaft::host_config(8),
     )

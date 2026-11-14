@@ -47,14 +47,14 @@ pub(crate) enum Command {
     Dockerfile(DockerfileArgs),
 }
 
-pub(crate) const TOOL: cli_std::ToolInfo = cli_std::ToolInfo {
-    project: "defer",
-    repo: "faberline/defer",
-    target: env!("DEFER_TARGET"),
-    version: env!("CARGO_PKG_VERSION"),
-    git_sha: env!("DEFER_GIT_SHA"),
-    built_at: env!("DEFER_BUILT_AT"),
-};
+pub(crate) const TOOL: cli_std::ToolInfo = cli_std::ToolInfo::new(
+    "defer",
+    "faberline/defer",
+    env!("DEFER_TARGET"),
+    env!("CARGO_PKG_VERSION"),
+    env!("DEFER_GIT_SHA"),
+    env!("DEFER_BUILT_AT"),
+);
 
 pub(crate) async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {

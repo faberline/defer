@@ -8,7 +8,7 @@ use defer::{
     ensure_declared_queues, CreateTask, DeclaredQueue, DeclaredQueueDecision, DeferRaft,
     DeferScheduler, NackOutcome, QueueControlState, QueuePolicy, Target, TaskStatus,
 };
-use raft_runtime::Membership;
+use raft_runtime::{Membership, NodeId};
 
 struct Node {
     raft: Arc<DeferRaft>,
@@ -41,10 +41,7 @@ impl Cluster {
             listeners,
             nodes: (0..size).map(|_| None).collect(),
             dirs: (0..size).map(|_| tempfile::tempdir().unwrap()).collect(),
-            membership: Membership {
-                voters: (0..size as u64).collect(),
-                learners: vec![],
-            },
+            membership: Membership::new((0..size as u64).map(NodeId::new).collect(), vec![]),
         }
     }
 
@@ -53,13 +50,13 @@ impl Cluster {
             .urls
             .iter()
             .filter(|(peer, _)| **peer != id as u64)
-            .map(|(peer, url)| (*peer, url.clone()))
+            .map(|(peer, url)| (NodeId::new(*peer), url.clone()))
             .collect();
         let raft = Arc::new(
             DeferRaft::spawn(
                 Arc::new(Mutex::new(DeferScheduler::new())),
                 &self.dirs[id].path().join("raft"),
-                id as u64,
+                NodeId::new(id as u64),
                 self.membership.clone(),
                 peers,
                 DeferRaft::host_config(8),

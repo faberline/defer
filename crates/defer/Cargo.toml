@@ -50,6 +50,7 @@ axum.workspace = true
 base64.workspace = true
 hmac.workspace = true
 proptest.workspace = true
+raft-runtime-v0414.workspace = true
 rcgen.workspace = true
 relay.workspace = true
 service-observability.workspace = true

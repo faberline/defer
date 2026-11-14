@@ -4,9 +4,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::Result;
 use defer_shared_kernel::{DeferScheduler, QueueControlState};
-use raft_runtime::{Index, OutcomeWindow, ProposalCache, RaftStateMachine};
+use raft_runtime::{Index, OutcomeWindow, ProposalCache, RaftStateMachine, StateMachineError};
 
 use super::command::{DeferCommand, DeferEnvelope, DeferOutcome, ProposalId, SchedulerSnapshot};
 
@@ -36,7 +35,10 @@ impl DeferStateMachine {
     }
 
     pub fn claim_outcome(&self, index: Index) -> Option<DeferOutcome> {
-        self.outcomes.lock().expect("outcome window").claim(index)
+        self.outcomes
+            .lock()
+            .expect("outcome window")
+            .claim(index.get())
     }
 
     fn apply_command(&self, command: DeferCommand) -> DeferOutcome {
@@ -73,7 +75,7 @@ impl DeferStateMachine {
                 requested,
             } => DeferOutcome::Leased(scheduler.lease_due_on_node(
                 &queue,
-                executor_node,
+                executor_node.get(),
                 now,
                 requested,
             )),
@@ -86,7 +88,7 @@ impl DeferStateMachine {
             } => DeferOutcome::Acked(scheduler.ack_on_node(
                 &queue,
                 &attempt_id,
-                executor_node,
+                executor_node.get(),
                 epoch,
                 now,
             )),
@@ -99,7 +101,7 @@ impl DeferStateMachine {
             } => DeferOutcome::Nacked(scheduler.nack_on_node(
                 &queue,
                 &attempt_id,
-                executor_node,
+                executor_node.get(),
                 epoch,
                 now,
             )),
@@ -107,7 +109,9 @@ impl DeferStateMachine {
                 queue,
                 executor_node,
                 attempts,
-            } => DeferOutcome::Settled(scheduler.settle_batch(&queue, executor_node, attempts)),
+            } => {
+                DeferOutcome::Settled(scheduler.settle_batch(&queue, executor_node.get(), attempts))
+            }
             DeferCommand::ReclaimExpired { queue, now } => {
                 DeferOutcome::Reclaimed(scheduler.reclaim_expired(&queue, now))
             }
@@ -128,11 +132,12 @@ impl DeferStateMachine {
 }
 
 impl RaftStateMachine for DeferStateMachine {
-    fn apply(&self, index: Index, command: &[u8]) -> Result<()> {
-        if index <= self.applied.load(Ordering::Acquire) && self.skip_replayed {
+    fn apply(&self, index: Index, command: &[u8]) -> Result<(), StateMachineError> {
+        if index.get() <= self.applied.load(Ordering::Acquire) && self.skip_replayed {
             return Ok(());
         }
-        let envelope: DeferEnvelope = serde_json::from_slice(command)?;
+        let envelope: DeferEnvelope =
+            serde_json::from_slice(command).map_err(StateMachineError::other)?;
         let cached = self
             .completed
             .lock()
@@ -144,14 +149,14 @@ impl RaftStateMachine for DeferStateMachine {
             .expect("completed proposals")
             .insert(envelope.proposal_id, outcome.clone());
         let mut outcomes = self.outcomes.lock().expect("outcome window");
-        outcomes.insert(index, outcome);
-        outcomes.advance(index);
+        outcomes.insert(index.get(), outcome);
+        outcomes.advance(index.get());
         drop(outcomes);
-        self.applied.store(index, Ordering::Release);
+        self.applied.store(index.get(), Ordering::Release);
         Ok(())
     }
 
-    fn snapshot(&self, writer: &mut dyn std::io::Write) -> Result<()> {
+    fn snapshot(&self, writer: &mut dyn std::io::Write) -> Result<(), StateMachineError> {
         let bytes = serde_json::to_vec(&SchedulerSnapshot {
             up_to: self.applied_index(),
             scheduler: self
@@ -164,26 +169,30 @@ impl RaftStateMachine for DeferStateMachine {
                 .lock()
                 .expect("completed proposals")
                 .snapshot(),
-        })?;
-        writer.write_all(&bytes)?;
+        })
+        .map_err(StateMachineError::other)?;
+        writer.write_all(&bytes).map_err(StateMachineError::other)?;
         Ok(())
     }
 
-    fn restore(&self, reader: &mut dyn std::io::Read) -> Result<()> {
+    fn restore(&self, reader: &mut dyn std::io::Read) -> Result<(), StateMachineError> {
         let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes)?;
-        let snapshot: SchedulerSnapshot = serde_json::from_slice(&bytes)?;
+        reader
+            .read_to_end(&mut bytes)
+            .map_err(StateMachineError::other)?;
+        let snapshot: SchedulerSnapshot =
+            serde_json::from_slice(&bytes).map_err(StateMachineError::other)?;
         *self.scheduler.lock().expect("scheduler mutex poisoned") = snapshot.scheduler;
         self.completed
             .lock()
             .expect("completed proposals")
             .restore(snapshot.completed_proposals);
-        self.applied.store(snapshot.up_to, Ordering::Release);
+        self.applied.store(snapshot.up_to.get(), Ordering::Release);
         Ok(())
     }
 
     fn applied_index(&self) -> Index {
-        self.applied.load(Ordering::Acquire)
+        Index::new(self.applied.load(Ordering::Acquire))
     }
 }
 // HANDWRITE-END

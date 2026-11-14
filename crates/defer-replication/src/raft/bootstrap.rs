@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use raft_runtime::NodeId;
+use raft_runtime::{NodeId, Term};
 
 use super::command::SchedulerSnapshot;
 
@@ -16,7 +16,7 @@ pub fn prepare_bootstrap_seed(data_dir: &Path, node_id: NodeId, bytes: &[u8]) ->
         serde_json::from_slice(bytes).context("decode Defer scheduler snapshot")?;
     defer_storage::ensure_empty_data_dir(data_dir)?;
     let store = defer_storage::open_raft_store(&defer_storage::raft_dir(data_dir), node_id)?;
-    store.seed_snapshot(snapshot.up_to, 0, bytes.to_vec())?;
+    store.seed_snapshot(snapshot.up_to, Term::new(0), bytes.to_vec())?;
     Ok(())
 }
 // HANDWRITE-END
