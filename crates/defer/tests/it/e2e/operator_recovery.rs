@@ -41,7 +41,8 @@ const TASK_B: &str = "before-restart-b";
 const FIRST_POD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const REPLACEMENT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const API_TIMEOUT: Duration = Duration::from_secs(2 * 60);
-const SCALED_REPLICAS: usize = 2;
+/// One more replica than REPLICAS. The step back to REPLICAS keeps the Raft fault tolerance (4 voters tolerate 1, 3 voters tolerate 1); a step from 3 to 2 is refused by core with ToleranceWouldDrop.
+const GROWN_REPLICAS: usize = 4;
 const SCALE_QUEUE: &str = "scale-jobs";
 const SCALE_TASK: &str = "scale-task";
 const TOKEN_SECRET: &str = "defer-admin-token";
@@ -334,8 +335,31 @@ async fn scales_replicas_per_shard_by_one_layer_and_back() {
         send(http.get(format!("{base}/v1/queues/{SCALE_QUEUE}/tasks/{SCALE_TASK}"))).await;
     assert_eq!(fetched["status"], "Scheduled", "{fetched}");
 
-    let kept_pvc = pvc_uid(&pvc(REPLICAS - 1));
-    let shrink = replicas_patch(SCALED_REPLICAS).to_string();
+    // Scale out first (3 -> 4), then back in (4 -> 3). The step 3 -> 2 is
+    // refused by core (ToleranceWouldDrop), so the test never asks for it.
+    let grow = replicas_patch(GROWN_REPLICAS).to_string();
+    kubectl(&[
+        "patch",
+        "defer",
+        DEFER,
+        "--type",
+        "merge",
+        "-p",
+        grow.as_str(),
+    ]);
+    wait_for_replicas(GROWN_REPLICAS);
+    wait_for_ready_pod(&pod(GROWN_REPLICAS - 1), None, SCALE_TIMEOUT);
+    wait_healthy(&http, &base).await;
+    put_scale_queue_when_ready(&http, &base).await;
+    let after_out = send(http.get(format!("{base}/v1/queues/{SCALE_QUEUE}"))).await;
+    assert_eq!(after_out["task_count"], 1, "{after_out}");
+    let still_out =
+        send(http.get(format!("{base}/v1/queues/{SCALE_QUEUE}/tasks/{SCALE_TASK}"))).await;
+    assert_eq!(still_out["status"], "Scheduled", "{still_out}");
+    let kept_pvc = pvc_uid(&pvc(GROWN_REPLICAS - 1));
+    evidence(SUITE, "scaled out", json!({ "replicas": GROWN_REPLICAS }));
+
+    let shrink = replicas_patch(REPLICAS).to_string();
     kubectl(&[
         "patch",
         "defer",
@@ -345,8 +369,8 @@ async fn scales_replicas_per_shard_by_one_layer_and_back() {
         "-p",
         shrink.as_str(),
     ]);
-    wait_for_replicas(SCALED_REPLICAS);
-    let gone = pod(REPLICAS - 1);
+    wait_for_replicas(REPLICAS);
+    let gone = pod(GROWN_REPLICAS - 1);
     wait_for(
         &format!("pod {gone} removed"),
         API_TIMEOUT,
@@ -357,10 +381,10 @@ async fn scales_replicas_per_shard_by_one_layer_and_back() {
         },
     );
     assert_eq!(
-        pvc_uid(&pvc(REPLICAS - 1)),
+        pvc_uid(&pvc(GROWN_REPLICAS - 1)),
         kept_pvc,
         "PVC {} was replaced, not kept",
-        pvc(REPLICAS - 1)
+        pvc(GROWN_REPLICAS - 1)
     );
     wait_healthy(&http, &base).await;
     put_scale_queue_when_ready(&http, &base).await;
@@ -368,28 +392,7 @@ async fn scales_replicas_per_shard_by_one_layer_and_back() {
     assert_eq!(after_in["task_count"], 1, "{after_in}");
     let still = send(http.get(format!("{base}/v1/queues/{SCALE_QUEUE}/tasks/{SCALE_TASK}"))).await;
     assert_eq!(still["status"], "Scheduled", "{still}");
-    evidence(
-        SUITE,
-        "scaled in",
-        json!({ "replicas": SCALED_REPLICAS, "pvc_kept": true }),
-    );
 
-    let grow = replicas_patch(REPLICAS).to_string();
-    kubectl(&[
-        "patch",
-        "defer",
-        DEFER,
-        "--type",
-        "merge",
-        "-p",
-        grow.as_str(),
-    ]);
-    wait_for_replicas(REPLICAS);
-    wait_for_ready_pod(&pod(REPLICAS - 1), None, SCALE_TIMEOUT);
-    wait_healthy(&http, &base).await;
-    put_scale_queue_when_ready(&http, &base).await;
-    let after_out = send(http.get(format!("{base}/v1/queues/{SCALE_QUEUE}"))).await;
-    assert_eq!(after_out["task_count"], 1, "{after_out}");
     let second = send(
         http.post(format!("{base}/v1/queues/{SCALE_QUEUE}/tasks:batch"))
             .json(&json!({ "tasks": [task("scale-task-after", "s2", 10)] })),
@@ -400,8 +403,8 @@ async fn scales_replicas_per_shard_by_one_layer_and_back() {
     assert_eq!(after_write["task_count"], 2, "{after_write}");
     evidence(
         SUITE,
-        "scaled out",
-        json!({ "replicas": REPLICAS, "task_count": 2 }),
+        "scaled in",
+        json!({ "replicas": REPLICAS, "pvc_kept": true, "task_count": 2 }),
     );
 }
 
@@ -713,11 +716,6 @@ fn admin_token_patch_names_the_secret() {
 }
 
 #[test]
-fn scale_in_target_fits_the_pool() {
-    assert!((1..REPLICAS).contains(&SCALED_REPLICAS));
-}
-
-#[test]
 fn gibibytes_reads_cloud_and_local_capacities() {
     assert_eq!(gibibytes("1Gi"), Some(1));
     assert_eq!(gibibytes("10Gi"), Some(10));
@@ -732,7 +730,33 @@ mod tests {
     use std::net::TcpListener;
     use std::thread::{self, JoinHandle};
 
-    use super::put_scale_queue_when_ready;
+    use super::{put_scale_queue_when_ready, GROWN_REPLICAS, REPLICAS};
+
+    /// Voters that a Raft group of `voters` members tolerates losing (core rule:
+    /// `n - (n / 2 + 1)`).
+    fn voter_tolerance(voters: usize) -> usize {
+        voters.saturating_sub(voters / 2 + 1)
+    }
+
+    #[test]
+    fn scale_in_keeps_the_voter_fault_tolerance() {
+        assert!(voter_tolerance(GROWN_REPLICAS - 1) >= voter_tolerance(GROWN_REPLICAS));
+        assert_eq!(GROWN_REPLICAS, REPLICAS + 1);
+    }
+
+    #[test]
+    fn refused_step_three_to_two_is_not_the_test_path() {
+        assert!(voter_tolerance(2) < voter_tolerance(3));
+        assert!(voter_tolerance(REPLICAS - 1) < voter_tolerance(REPLICAS));
+    }
+
+    #[test]
+    fn voter_tolerance_matches_core() {
+        assert_eq!(voter_tolerance(1), 0);
+        assert_eq!(voter_tolerance(2), 0);
+        assert_eq!(voter_tolerance(3), 1);
+        assert_eq!(voter_tolerance(4), 1);
+    }
 
     /// Reads one HTTP request (headers and body) from `stream`.
     fn read_request(stream: &mut std::net::TcpStream) {
