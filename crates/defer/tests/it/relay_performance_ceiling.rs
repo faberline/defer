@@ -69,24 +69,31 @@ fn directory_bytes(path: &Path) -> u64 {
         .sum()
 }
 
-/// CPU seconds (utime + stime) from the text of `/proc/<pid>/stat`.
-/// The command name sits in parentheses and may hold spaces, so split after the last ')'.
-/// After it, field 3 (state) is index 0, so utime (field 14) is index 11 and stime (field 15) is index 12.
-/// Linux counts these in ticks of 10 ms (CLK_TCK = 100).
-fn cpu_seconds_from_stat(stat: &str) -> Option<f64> {
-    let after = stat.rsplit_once(')')?.1;
-    let fields: Vec<&str> = after.split_whitespace().collect();
-    let utime: u64 = fields.get(11)?.parse().ok()?;
-    let stime: u64 = fields.get(12)?.parse().ok()?;
-    Some((utime + stime) as f64 / 100.0)
+/// CPU seconds (user + system) of this process, all threads, also the ones
+/// that exited. `clock_gettime` counts in nanoseconds, so a short phase is not
+/// rounded to zero as the 10 ms ticks of `/proc/self/stat` are.
+#[cfg(unix)]
+fn process_cpu_seconds() -> Option<f64> {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `ts` is a valid, writable `timespec` for the whole call.
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, &mut ts) };
+    (rc == 0).then(|| ts.tv_sec as f64 + ts.tv_nsec as f64 / 1e9)
+}
+
+#[cfg(not(unix))]
+fn process_cpu_seconds() -> Option<f64> {
+    None
 }
 
 fn sample_process() -> (f64, u64) {
     let usage = process_usage(std::process::id()).expect("sample benchmark process");
-    let cpu = std::fs::read_to_string("/proc/self/stat")
-        .ok()
-        .and_then(|text| cpu_seconds_from_stat(&text));
-    (cpu.unwrap_or(usage.cpu_seconds), usage.rss_bytes)
+    (
+        process_cpu_seconds().unwrap_or(usage.cpu_seconds),
+        usage.rss_bytes,
+    )
 }
 
 /// The numbers of one run of the defer and relay workload.
@@ -372,14 +379,17 @@ async fn defer_stays_within_twenty_percent_of_relay_scheduler_ceiling() {
     );
 }
 
+#[cfg(unix)]
 #[test]
-fn cpu_seconds_from_stat_reads_utime_and_stime() {
-    assert_eq!(
-        cpu_seconds_from_stat("42 (a b) c) S 1 1 1 0 -1 0 0 0 0 0 250 150 0 0 20 0 1 0 5 0 0"),
-        Some(4.0)
-    );
-    assert_eq!(cpu_seconds_from_stat("garbage"), None);
-    assert_eq!(cpu_seconds_from_stat("1 (x) S 1"), None);
+fn process_cpu_seconds_resolves_a_few_milliseconds() {
+    let before = process_cpu_seconds().expect("clock");
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_millis(3) {
+        std::hint::black_box(0u64);
+    }
+    let after = process_cpu_seconds().expect("clock");
+    assert!(after > before);
+    assert!(after - before < 5.0);
 }
 // </HANDWRITE>
 // HANDWRITE-END
