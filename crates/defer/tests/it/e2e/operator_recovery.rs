@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use super::{
     assert_pods_run, endpoint, evidence, kubectl, kubectl_json, only_container, try_kubectl,
-    wait_for, Expected,
+    wait_for, wait_for_with, Expected,
 };
 
 const SUITE: &str = "operator_recovery";
@@ -542,10 +542,70 @@ fn admin_token_patch() -> Value {
     json!({ "spec": { "adminTokenSecret": TOKEN_SECRET } })
 }
 
+/// Names of the pods in `pods` (`kubectl get pods -o json`) that have no
+/// condition `Ready` with status `True`.
+fn unready_pod_names(pods: &Value) -> Vec<String> {
+    pods["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|pod| {
+            !pod["status"]["conditions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|cond| cond["type"] == "Ready" && cond["status"] == "True")
+        })
+        .filter_map(|pod| pod["metadata"]["name"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The report that a replica wait adds to its panic message: the pods, the
+/// `describe` of each pod in `described`, then the events. Each section has
+/// a `== heading ==` line, and every text is trimmed at its end.
+fn unready_pod_report(pods_wide: &str, described: &[(String, String)], events: &str) -> String {
+    let mut report = format!("== pods ==\n{}\n", pods_wide.trim_end());
+    for (name, text) in described {
+        report.push_str(&format!("== describe {name} ==\n{}\n", text.trim_end()));
+    }
+    report.push_str(&format!("== events ==\n{}\n", events.trim_end()));
+    report
+}
+
+/// What a replica wait prints on timeout. Every read goes through
+/// `try_kubectl`, so a kubectl error becomes text in the report and not a
+/// second panic. The Job's Role is namespaced, so Nodes are not read.
+fn replica_timeout_report() -> String {
+    let or_error =
+        |out: Result<String, String>| out.unwrap_or_else(|err| format!("kubectl failed: {err}"));
+    let pods_wide = or_error(try_kubectl(&[
+        "get",
+        "pods",
+        "-l",
+        SERVER_LABEL,
+        "-o",
+        "wide",
+    ]));
+    let names = try_kubectl(&["get", "pods", "-l", SERVER_LABEL, "-o", "json"])
+        .ok()
+        .and_then(|out| serde_json::from_str::<Value>(&out).ok())
+        .map(|pods| unready_pod_names(&pods))
+        .unwrap_or_default();
+    let described: Vec<(String, String)> = names
+        .into_iter()
+        .map(|name| {
+            let text = or_error(try_kubectl(&["describe", "pod", name.as_str()]));
+            (name, text)
+        })
+        .collect();
+    let events = or_error(try_kubectl(&["get", "events", "--sort-by=.lastTimestamp"]));
+    unready_pod_report(&pods_wide, &described, &events)
+}
+
 /// Waits until the StatefulSet and the Defer CR status both show `want`
 /// replicas, all of them ready.
 fn wait_for_replicas(want: usize) {
-    wait_for(
+    wait_for_with(
         &format!("Defer/{DEFER} settled at {want} replicas"),
         SCALE_TIMEOUT,
         || {
@@ -565,6 +625,7 @@ fn wait_for_replicas(want: usize) {
                 ))
             }
         },
+        replica_timeout_report,
     )
 }
 
@@ -722,6 +783,30 @@ fn gibibytes_reads_cloud_and_local_capacities() {
     assert_eq!(gibibytes("1Ti"), Some(1024));
     assert_eq!(gibibytes("2G"), Some(1));
     assert_eq!(gibibytes("512Mi"), None);
+}
+
+#[test]
+fn unready_pod_names_lists_pods_without_ready_true() {
+    let pods = json!({"items": [
+        {"metadata": {"name": "defer-0"}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}},
+        {"metadata": {"name": "defer-3"}, "status": {"conditions": [{"type": "Ready", "status": "False"}]}},
+        {"metadata": {"name": "defer-4"}, "status": {}}
+    ]});
+    assert_eq!(unready_pod_names(&pods), vec!["defer-3", "defer-4"]);
+    assert!(unready_pod_names(&json!({})).is_empty());
+}
+
+#[test]
+fn unready_pod_report_names_each_section() {
+    let report = unready_pod_report(
+        "NAME READY\ndefer-3 0/1\n",
+        &[("defer-3".to_owned(), "Events: none\n".to_owned())],
+        "LAST SEEN\n",
+    );
+    assert_eq!(
+        report,
+        "== pods ==\nNAME READY\ndefer-3 0/1\n== describe defer-3 ==\nEvents: none\n== events ==\nLAST SEEN\n"
+    );
 }
 
 #[cfg(test)]
