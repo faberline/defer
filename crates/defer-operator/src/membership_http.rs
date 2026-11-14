@@ -99,7 +99,7 @@ impl HttpMembershipActuator {
             }
             if status == reqwest::StatusCode::CONFLICT && text.contains("retry_later") {
                 *self.leader.lock().unwrap() = Some(ordinal);
-                return Err(ActuatorError::NotCaughtUp);
+                return Err(ActuatorError::NotCaughtUp(text));
             }
             if status == reqwest::StatusCode::CONFLICT
                 && text.contains("not_leader")
@@ -302,7 +302,22 @@ mod tests {
 
         let result = actuator.promote(2).await;
 
-        assert_eq!(result, Err(ActuatorError::NotCaughtUp));
+        assert_eq!(
+            result,
+            Err(ActuatorError::NotCaughtUp(
+                r#"{"error":"retry_later"}"#.to_string()
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn not_caught_up_error_carries_the_response_body() {
+        let body = r#"{"error":{"kind":"retry_later","message":"NotCaughtUp { lag: 12 }"}}"#;
+        let (actuator, _seen) = spawn(409, body).await;
+
+        let result = actuator.promote(2).await;
+
+        assert_eq!(result, Err(ActuatorError::NotCaughtUp(body.to_string())));
     }
 
     #[tokio::test]
@@ -448,7 +463,12 @@ mod tests {
         let (pod0, seen0) = spawn_pod(409, r#"{"error":"retry_later"}"#, None).await;
         let actuator = discover(vec![pod0]);
 
-        assert_eq!(actuator.promote(2).await, Err(ActuatorError::NotCaughtUp));
+        assert_eq!(
+            actuator.promote(2).await,
+            Err(ActuatorError::NotCaughtUp(
+                r#"{"error":"retry_later"}"#.to_string()
+            ))
+        );
 
         assert_eq!(seen0.lock().unwrap().len(), 1);
     }
