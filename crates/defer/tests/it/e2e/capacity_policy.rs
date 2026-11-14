@@ -246,4 +246,19 @@ mod tests {
         );
         assert!(!wf.contains("push:"), "workflow runs on push");
     }
+
+    #[test]
+    fn kind_workflow_applies_the_crd_before_the_overlay() {
+        let wf = repo_file(".github/workflows/kind-capacity.yml");
+        let established = wf
+            .find("kubectl wait --for=condition=established crd/defers.defer.dev")
+            .expect("workflow does not wait for the Defer CRD to be established");
+        let overlay = wf
+            .find("kubectl apply -k k8s/overlays/kind")
+            .expect("workflow does not apply the Kind overlay");
+        assert!(
+            established < overlay,
+            "the CRD must be established before the Defer CR is applied"
+        );
+    }
 }

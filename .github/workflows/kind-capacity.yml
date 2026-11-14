@@ -46,6 +46,8 @@ jobs:
       - name: Deploy the operator and the Defer CR
         run: |
           kubectl create namespace defer
+          kubectl apply -f k8s/operator/crd.yaml
+          kubectl wait --for=condition=established crd/defers.defer.dev --timeout=60s
           kubectl apply -k k8s/overlays/kind
           kubectl -n defer rollout status deployment/defer-operator --timeout=180s
 
