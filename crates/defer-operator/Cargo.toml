@@ -20,6 +20,7 @@ serde_yaml.workspace = true
 service-backup.workspace = true
 service-k8s.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 axum.workspace = true

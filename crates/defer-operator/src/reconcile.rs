@@ -190,6 +190,8 @@ impl ManagedService for Defer {
 }
 
 pub async fn run() -> anyhow::Result<()> {
+    let client = kube::Client::try_default().await?;
+    tokio::spawn(crate::capacity_loop::run_capacity_loop(client));
     service_k8s::run::<Defer>().await
 }
 
