@@ -1,0 +1,100 @@
+# Runs the e2e suite capacity_policy on a Kind cluster on the runner. Manual
+# only: it is not a required check and not part of ci.yml. The cluster is
+# deleted at the end, even when a step failed.
+name: kind-capacity
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capacity-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the defer image
+        run: docker build -t defer:kind -f Dockerfile .
+
+      - name: Build the test client image
+        run: docker build -t defer-test-client:kind -f Dockerfile.test --target test-client .
+
+      - name: Install Kind
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/kind" https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          chmod +x "$RUNNER_TEMP/kind"
+
+      - name: Create the cluster
+        run: |
+          "$RUNNER_TEMP/kind" create cluster --name defer-capacity --wait 120s
+
+      - name: Load the images into the cluster
+        run: |
+          "$RUNNER_TEMP/kind" load docker-image defer:kind defer-test-client:kind --name defer-capacity
+
+      - name: Install metrics-server
+        run: |
+          kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml
+          kubectl -n kube-system patch deployment metrics-server --type json -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+          kubectl -n kube-system rollout status deployment/metrics-server --timeout=180s
+          for i in $(seq 1 30); do kubectl top nodes && exit 0; sleep 10; done
+          exit 1
+
+      - name: Deploy the operator and the Defer CR
+        run: |
+          kubectl create namespace defer
+          kubectl apply -k k8s/overlays/kind
+          kubectl -n defer rollout status deployment/defer-operator --timeout=180s
+
+      - name: Create the suite's config
+        run: |
+          kubectl -n defer create configmap gke-test-env \
+            --from-literal=E2E_EXPECTED_VERSION=0.0.0 \
+            --from-literal=E2E_EXPECTED_GIT_SHA=00000000 \
+            --from-literal=E2E_EXPECTED_IMAGE=ghcr.io/faberline/defer@sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+            --from-literal=E2E_EXPECTED_RUNTIME_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+      - name: Run the capacity_policy Job
+        run: |
+          cp -r k8s/gke-test-job/capacity_policy "$RUNNER_TEMP/job"
+          python3 - <<'PY'
+          import os
+          import yaml
+
+          path = os.path.join(os.environ["RUNNER_TEMP"], "job", "job.yaml")
+          with open(path) as f:
+              job = yaml.safe_load(f)
+          pod = job["spec"]["template"]["spec"]
+          for key in ("nodeSelector", "tolerations", "imagePullSecrets", "affinity"):
+              pod.pop(key, None)
+          container = pod["containers"][0]
+          container["image"] = "defer-test-client:kind"
+          container["imagePullPolicy"] = "Never"
+          with open(path, "w") as f:
+              yaml.safe_dump(job, f)
+          PY
+          kubectl apply -k "$RUNNER_TEMP/job"
+          kubectl -n defer wait --for=condition=complete job/defer-e2e --timeout=30m
+
+      - name: Collect logs and evidence
+        if: always()
+        run: |
+          kubectl -n defer logs job/defer-e2e | tee "$RUNNER_TEMP/e2e.log" || true
+          kubectl -n defer get defer -o yaml || true
+          grep E2E_EVIDENCE "$RUNNER_TEMP/e2e.log" > "$RUNNER_TEMP/evidence.txt" || true
+
+      - name: Upload the evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kind-capacity-evidence
+          path: ${{ runner.temp }}/evidence.txt
+          if-no-files-found: warn
+
+      - name: Delete the cluster
+        if: always()
+        run: |
+          "$RUNNER_TEMP/kind" delete cluster --name defer-capacity

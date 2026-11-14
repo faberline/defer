@@ -207,4 +207,43 @@ mod tests {
             json!({"spec": {"adminTokenSecret": "defer-admin-token"}})
         );
     }
+
+    /// Reads a file relative to the repository root.
+    fn repo_file(relative: &str) -> String {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        std::fs::read_to_string(root.join(relative))
+            .unwrap_or_else(|err| panic!("read {relative}: {err}"))
+    }
+
+    #[test]
+    fn kind_overlay_has_a_limit_on_both_axes() {
+        let cr = repo_file("k8s/overlays/kind/defer-cr.yaml");
+        assert!(cr.contains("limits:"), "Kind CR has no limits: block");
+        assert!(cr.contains("cpu: 250m"), "Kind CR has no CPU limit");
+        assert!(cr.contains("memory: 512Mi"), "Kind CR has no memory limit");
+        assert!(!cr.contains("placement:"), "Kind CR must not set placement");
+        assert!(
+            !cr.contains("storageClass"),
+            "Kind CR must not set storageClass"
+        );
+    }
+
+    #[test]
+    fn kind_workflow_is_manual_only_and_cleans_up() {
+        let wf = repo_file(".github/workflows/kind-capacity.yml");
+        assert!(wf.contains("workflow_dispatch:"), "no workflow_dispatch");
+        assert!(
+            wf.contains("delete cluster --name defer-capacity"),
+            "cluster is not deleted"
+        );
+        assert!(
+            wf.contains("--kubelet-insecure-tls"),
+            "metrics-server patch is missing"
+        );
+        assert!(
+            !wf.contains("pull_request:"),
+            "workflow runs on pull_request"
+        );
+        assert!(!wf.contains("push:"), "workflow runs on push");
+    }
 }
