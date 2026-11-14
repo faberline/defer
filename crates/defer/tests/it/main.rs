@@ -19,6 +19,7 @@ mod raft_peer_mtls;
 mod raft_scheduler;
 mod rate_limits;
 mod relay_performance_ceiling;
+mod security_gates;
 mod service_admission;
 mod service_auth;
 mod soak_script;
