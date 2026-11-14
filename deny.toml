@@ -10,8 +10,19 @@ no-default-features = false
 [advisories]
 db-path = "~/.cargo/advisory-db"
 version = 2
-# Ignore specific advisories (none currently)
-ignore = []
+# Ignore specific advisories. Each ID has a reason and an expiry date above it.
+ignore = [
+    # reason: backoff is unmaintained; it is locked by a dependency and replacing it changes product code, out of scope for this issue; expires: 2027-02-12
+    "RUSTSEC-2025-0012",
+    # reason: instant is unmaintained; it is locked by a dependency and has no replacement in this change; expires: 2027-02-12
+    "RUSTSEC-2024-0384",
+    # reason: proc-macro-error is unmaintained; it is build-time only and locked by a dependency; expires: 2027-02-12
+    "RUSTSEC-2024-0370",
+    # reason: rustls-pemfile is unmaintained; it is locked by a dependency; expires: 2027-02-12
+    "RUSTSEC-2025-0134",
+    # reason: unsafe-libyaml is unmaintained; it is locked by a dependency; expires: 2027-02-12
+    "RUSTSEC-2024-0449",
+]
 
 [licenses]
 version = 2
@@ -41,6 +52,84 @@ license-files = [
     { path = "LICENSE", hash = 0xbd0eed23 },
 ]
 
+# First-party faberline/core crates have no `license` field in their Cargo.toml.
+# The core repository LICENSE is MIT (desk decision, issue #180). Remove these
+# entries once faberline/core#364 (license field in every crate) is in the pinned tag.
+[[licenses.clarify]]
+name = "cli-std"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "metrics-prometheus"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "peer-tls"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "raft-runtime"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "server-http"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "server-lifecycle"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "server-tcp"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "service-auth"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "service-backup"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "service-http"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "service-k8s"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "service-observability"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "storage-durable"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "storage-object"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "transport-h2c"
+expression = "MIT"
+license-files = []
+
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"  # Allow path dependencies in workspace
@@ -52,3 +141,5 @@ external-default-features = "allow"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# First-party git sources of faberline/core and faberline/relay (desk-approved for issue #180).
+allow-git = ["https://github.com/faberline/core", "https://github.com/faberline/relay"]
