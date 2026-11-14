@@ -306,7 +306,7 @@ its direct contribution.
   - `external:kubernetes` stores desired state and runs the workload,
     network, RBAC, and Secret contracts.
 - Gate: `cargo test -p defer --features operator --test it -- direct_k8s_assets::`
-- Gate: `cargo test -p defer --features operator --test operator`
+- Gate: `cargo test -p defer --features operator --test it -- operator::`
 - Gate: `gh workflow run gke-test.yml -f suite=operator_recovery`
 
 ### Operations and observability

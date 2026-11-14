@@ -54,7 +54,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked --workspace
-          cargo test --locked -p defer --features operator --test operator
+          cargo test --locked -p defer --features operator --test it -- operator::
           python3 -B scripts/meta/project_docs_contract.py check .
       - name: Release contract
         shell: bash
