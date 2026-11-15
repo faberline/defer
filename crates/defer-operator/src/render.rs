@@ -209,6 +209,17 @@ fn statefulset(
         volumes.push(render::token_registry_volume(&projection));
         mounts.push(render::token_registry_mount(&projection));
     }
+    if let Some(cm) = spec.bootstrap_seed_config_map.as_deref() {
+        env.push(
+            json!({"name": "DEFER_BOOTSTRAP_SEED_URI", "value": "file:///seed/snapshot.json"}),
+        );
+        volumes.push(json!({
+            "name": "defer-bootstrap-seed",
+            "configMap": {"name": cm, "items": [{"key": "snapshot.json", "path": "snapshot.json"}]}
+        }));
+        mounts
+            .push(json!({"name": "defer-bootstrap-seed", "mountPath": "/seed", "readOnly": true}));
+    }
     if let (Some(secret), Some(key_id)) = (
         spec.target_signing_secret.as_deref(),
         spec.target_signing_key_id.as_deref(),
@@ -514,5 +525,94 @@ fn declared_queues_json(queues: &[super::crd::DeclaredQueueSpec]) -> String {
         })
         .collect();
     serde_json::to_string(&serve_queues).expect("valid declared queues JSON")
+}
+
+#[cfg(test)]
+mod seed_render_tests {
+    use super::{render, Defer, Value};
+    use serde_json::json;
+
+    fn defer_with(seed_fields: Value) -> Defer {
+        let mut spec = json!({"image": "registry/defer:1", "replicasPerShard": 3, "voterCount": 3});
+        if let (Some(map), Some(extra)) = (spec.as_object_mut(), seed_fields.as_object()) {
+            for (k, v) in extra {
+                map.insert(k.clone(), v.clone());
+            }
+        }
+        serde_json::from_value(json!({
+            "apiVersion": "defer.dev/v1alpha1",
+            "kind": "Defer",
+            "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+            "spec": spec
+        }))
+        .unwrap()
+    }
+
+    fn statefulset(defer: &Defer) -> Value {
+        render(defer)
+            .unwrap()
+            .into_iter()
+            .find(|v| v["kind"] == "StatefulSet")
+            .expect("a StatefulSet is rendered")
+    }
+
+    fn container(sts: &Value) -> &Value {
+        &sts["spec"]["template"]["spec"]["containers"][0]
+    }
+
+    #[test]
+    fn seed_config_map_mounts_read_only_at_seed() {
+        let sts = statefulset(&defer_with(json!({"bootstrapSeedConfigMap": "drill-seed"})));
+        let volume = sts["spec"]["template"]["spec"]["volumes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["name"] == "defer-bootstrap-seed")
+            .expect("seed volume present");
+        assert_eq!(volume["configMap"]["name"], "drill-seed");
+        assert_eq!(
+            volume["configMap"]["items"],
+            json!([{"key": "snapshot.json", "path": "snapshot.json"}])
+        );
+        let mount = container(&sts)["volumeMounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["name"] == "defer-bootstrap-seed")
+            .expect("seed mount present");
+        assert_eq!(mount["mountPath"], "/seed");
+        assert_eq!(mount["readOnly"], true);
+        let env = container(&sts)["env"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == "DEFER_BOOTSTRAP_SEED_URI")
+            .expect("seed env present");
+        assert_eq!(env["value"], "file:///seed/snapshot.json");
+    }
+
+    #[test]
+    fn unset_seed_renders_no_seed_volume_mount_or_env() {
+        // Negative test: without the `if let` block the seed volume would appear here.
+        let sts = statefulset(&defer_with(json!({})));
+        let has_seed_volume = sts["spec"]["template"]["spec"]["volumes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v["name"] == "defer-bootstrap-seed");
+        assert!(!has_seed_volume);
+        let has_seed_mount = container(&sts)["volumeMounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["name"] == "defer-bootstrap-seed");
+        assert!(!has_seed_mount);
+        let has_seed_env = container(&sts)["env"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["name"] == "DEFER_BOOTSTRAP_SEED_URI");
+        assert!(!has_seed_env);
+    }
 }
 // HANDWRITE-END

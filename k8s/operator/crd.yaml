@@ -65,6 +65,10 @@ spec:
                 description: 'Data-plane request body size limit (bytes). Requests with `Content-Length` over it are rejected with 413; streamed bodies are bounded mid-read. Defaults to 8 MiB, the `defer serve` default (`DEFER_BODY_LIMIT_BYTES`, #18).'
                 type: integer
                 minimum: 0.0
+              bootstrapSeedConfigMap:
+                description: Name of a ConfigMap in the instance's namespace with the key `snapshot.json`. The operator mounts it read-only at `/seed` and sets `DEFER_BOOTSTRAP_SEED_URI=file:///seed/snapshot.json`. Mutually exclusive with `bootstrapSeedUri`.
+                nullable: true
+                type: string
               bootstrapSeedUri:
                 nullable: true
                 type: string

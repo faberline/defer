@@ -60,6 +60,11 @@ pub struct DeferSpec {
     pub tls_secret: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bootstrap_seed_uri: Option<String>,
+    /// Name of a ConfigMap in the instance's namespace with the key `snapshot.json`.
+    /// The operator mounts it read-only at `/seed` and sets
+    /// `DEFER_BOOTSTRAP_SEED_URI=file:///seed/snapshot.json`. Mutually exclusive with `bootstrapSeedUri`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bootstrap_seed_config_map: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup: Option<DeferBackupSpec>,
     /// Secrets in the instance's namespace used to pull `image`, copied to
@@ -93,6 +98,18 @@ pub struct DeferSpec {
     /// Unset means no capacity automation, the previous behavior.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capacity_policy: Option<DeferCapacityPolicySpec>,
+}
+
+impl DeferSpec {
+    /// Rejects specs that set both seed sources.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.bootstrap_seed_uri.is_some() && self.bootstrap_seed_config_map.is_some() {
+            return Err(
+                "bootstrapSeedUri and bootstrapSeedConfigMap are mutually exclusive".to_string(),
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Container resource limits for the serving StatefulSet container.
@@ -402,6 +419,52 @@ mod capacity_policy_tests {
                 ceiling: 3
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod seed_validate_tests {
+    use super::Defer;
+    use serde_json::json;
+
+    fn defer_with(seed_fields: serde_json::Value) -> Defer {
+        let mut spec = json!({"image": "registry/defer:1", "replicasPerShard": 3, "voterCount": 3});
+        if let (Some(map), Some(extra)) = (spec.as_object_mut(), seed_fields.as_object()) {
+            for (k, v) in extra {
+                map.insert(k.clone(), v.clone());
+            }
+        }
+        serde_json::from_value(json!({
+            "apiVersion": "defer.dev/v1alpha1",
+            "kind": "Defer",
+            "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+            "spec": spec
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn validate_refuses_both_seed_sources() {
+        // Negative test: without `validate` this spec is accepted.
+        let defer = defer_with(json!({
+            "bootstrapSeedUri": "gs://b/o",
+            "bootstrapSeedConfigMap": "drill-seed"
+        }));
+        let err = defer.spec.validate().unwrap_err();
+        assert!(err.contains("mutually exclusive"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_accepts_one_seed_source_or_none() {
+        assert!(defer_with(json!({"bootstrapSeedUri": "gs://b/o"}))
+            .spec
+            .validate()
+            .is_ok());
+        assert!(defer_with(json!({"bootstrapSeedConfigMap": "drill-seed"}))
+            .spec
+            .validate()
+            .is_ok());
+        assert!(defer_with(json!({})).spec.validate().is_ok());
     }
 }
 // HANDWRITE-END
