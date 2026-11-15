@@ -103,6 +103,7 @@ impl ManagedService for Defer {
     }
 
     async fn reconcile_plan(&self, client: kube::Client) -> anyhow::Result<ReconcilePlan> {
+        self.spec.validate().map_err(anyhow::Error::msg)?;
         let children = super::render::render(self)?;
         let plain = |children: Vec<Value>| ReconcilePlan::new(children, Value::Null);
         let name = self.name_any();

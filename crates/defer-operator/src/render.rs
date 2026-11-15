@@ -209,6 +209,17 @@ fn statefulset(
         volumes.push(render::token_registry_volume(&projection));
         mounts.push(render::token_registry_mount(&projection));
     }
+    if let Some(cm) = spec.bootstrap_seed_config_map.as_deref() {
+        env.push(
+            json!({"name": "DEFER_BOOTSTRAP_SEED_URI", "value": "file:///seed/snapshot.json"}),
+        );
+        volumes.push(json!({
+            "name": "defer-bootstrap-seed",
+            "configMap": {"name": cm, "items": [{"key": "snapshot.json", "path": "snapshot.json"}]}
+        }));
+        mounts
+            .push(json!({"name": "defer-bootstrap-seed", "mountPath": "/seed", "readOnly": true}));
+    }
     if let (Some(secret), Some(key_id)) = (
         spec.target_signing_secret.as_deref(),
         spec.target_signing_key_id.as_deref(),
