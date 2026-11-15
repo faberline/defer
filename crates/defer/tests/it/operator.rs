@@ -211,6 +211,7 @@ fn generated_crd_is_structural_and_includes_backup_and_signing() {
     assert!(yaml.contains("targetSigningSecret"));
     assert!(yaml.contains("backup"));
     assert!(yaml.contains("tokensSecretCsiDriver"));
+    assert!(yaml.contains("bootstrapSeedConfigMap"));
     assert!(!yaml.contains("format: uint64"));
     assert!(!yaml.contains("format: uint32"));
 }
@@ -727,3 +728,122 @@ fn generated_crd_carries_tls_secret() {
     assert!(operator::crd_yaml().contains("tlsSecret"));
 }
 // HANDWRITE-END
+
+/// `spec.bootstrapSeedConfigMap` mounts the ConfigMap read-only at `/seed`
+/// and points `DEFER_BOOTSTRAP_SEED_URI` at its `snapshot.json`.
+#[test]
+fn bootstrap_seed_config_map_mounts_the_seed() {
+    let defer: Defer = serde_json::from_value(json!({
+        "apiVersion": "defer.dev/v1alpha1",
+        "kind": "Defer",
+        "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+        "spec": {
+            "image": "registry/defer:1",
+            "replicasPerShard": 3,
+            "voterCount": 3,
+            "bootstrapSeedConfigMap": "drill-seed"
+        }
+    }))
+    .unwrap();
+    let objects = operator::render::render(&defer).unwrap();
+    let stateful = object(&objects, "StatefulSet", "jobs");
+    let volume = named(
+        &stateful["spec"]["template"]["spec"]["volumes"],
+        "defer-bootstrap-seed",
+    );
+    assert_eq!(volume["configMap"]["name"], "drill-seed");
+    assert_eq!(
+        volume["configMap"]["items"],
+        json!([{"key": "snapshot.json", "path": "snapshot.json"}])
+    );
+    let container = &stateful["spec"]["template"]["spec"]["containers"][0];
+    let mount = named(&container["volumeMounts"], "defer-bootstrap-seed");
+    assert_eq!(mount["mountPath"], "/seed");
+    assert_eq!(mount["readOnly"], true);
+    let env = named(&container["env"], "DEFER_BOOTSTRAP_SEED_URI");
+    assert_eq!(env["value"], "file:///seed/snapshot.json");
+}
+
+/// Without the seed fields the render has no seed volume, mount or env;
+/// `bootstrapSeedUri` alone keeps its own env value and still no volume.
+#[test]
+fn bootstrap_seed_unset_renders_no_seed_volume_or_env() {
+    let objects = operator::render::render(&production()).unwrap();
+    let stateful = object(&objects, "StatefulSet", "jobs");
+    let container = &stateful["spec"]["template"]["spec"]["containers"][0];
+    let has_name = |array: &Value, name: &str| {
+        array
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value["name"] == name)
+    };
+    assert!(!has_name(
+        &stateful["spec"]["template"]["spec"]["volumes"],
+        "defer-bootstrap-seed"
+    ));
+    assert!(!has_name(
+        &container["volumeMounts"],
+        "defer-bootstrap-seed"
+    ));
+    assert!(!has_name(&container["env"], "DEFER_BOOTSTRAP_SEED_URI"));
+
+    let defer: Defer = serde_json::from_value(json!({
+        "apiVersion": "defer.dev/v1alpha1",
+        "kind": "Defer",
+        "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+        "spec": {
+            "image": "registry/defer:1",
+            "replicasPerShard": 3,
+            "voterCount": 3,
+            "bootstrapSeedUri": "gs://b/o"
+        }
+    }))
+    .unwrap();
+    let objects = operator::render::render(&defer).unwrap();
+    let stateful = object(&objects, "StatefulSet", "jobs");
+    let container = &stateful["spec"]["template"]["spec"]["containers"][0];
+    assert_eq!(
+        named(&container["env"], "DEFER_BOOTSTRAP_SEED_URI")["value"],
+        "gs://b/o"
+    );
+    assert!(!has_name(
+        &stateful["spec"]["template"]["spec"]["volumes"],
+        "defer-bootstrap-seed"
+    ));
+}
+
+/// Both seed fields set together are refused by `DeferSpec::validate`;
+/// either one alone is accepted.
+#[test]
+fn bootstrap_seed_uri_and_config_map_together_are_refused() {
+    let both: Defer = serde_json::from_value(json!({
+        "apiVersion": "defer.dev/v1alpha1",
+        "kind": "Defer",
+        "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+        "spec": {
+            "image": "registry/defer:1",
+            "replicasPerShard": 3,
+            "voterCount": 3,
+            "bootstrapSeedUri": "gs://b/o",
+            "bootstrapSeedConfigMap": "drill-seed"
+        }
+    }))
+    .unwrap();
+    let err = both.spec.validate().unwrap_err();
+    assert!(err.contains("mutually exclusive"), "{err}");
+
+    let map_only: Defer = serde_json::from_value(json!({
+        "apiVersion": "defer.dev/v1alpha1",
+        "kind": "Defer",
+        "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+        "spec": {
+            "image": "registry/defer:1",
+            "replicasPerShard": 3,
+            "voterCount": 3,
+            "bootstrapSeedConfigMap": "drill-seed"
+        }
+    }))
+    .unwrap();
+    assert!(map_only.spec.validate().is_ok());
+}
