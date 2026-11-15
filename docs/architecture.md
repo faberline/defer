@@ -51,7 +51,7 @@ crates/
                                 remote, offline, backup, k8s, dockerfile
     tests/it/main.rs            the integration-test binary; one module per file
     tests/it/e2e/               the cluster suites (all #[ignore])
-    tests/operator.rs           standalone: needs --features operator
+    tests/it/operator.rs        behind --features operator
 ```
 
 Every crate's `lib.rs` holds only `mod`, `pub mod` and `pub use` lines.

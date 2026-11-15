@@ -1,7 +1,8 @@
 //! The `defer` integration tests, linked into one test binary `it`
 //! (faberline/aw docs/standards/rust-tests.md). Each module is one former
-//! `tests/<name>.rs` binary; `e2e` holds the cluster suites. `operator.rs`
-//! stays its own binary because CI runs it by name with `--features operator`.
+//! `tests/<name>.rs` binary; `e2e` holds the cluster suites. `operator` is
+//! compiled only with `--features operator`; CI runs it with
+//! `cargo test -p defer --features operator --test it -- operator::`.
 
 mod cli_contract;
 mod cli_efficiency;
@@ -14,7 +15,8 @@ mod e2e;
 mod http_api;
 mod http_dispatch;
 mod http_dispatch_signing;
-mod perf_gate;
+#[cfg(feature = "operator")]
+mod operator;
 mod process_journey;
 mod process_security;
 mod raft_peer_mtls;
@@ -22,6 +24,7 @@ mod raft_scheduler;
 mod rate_limits;
 mod relay_performance_ceiling;
 mod scheduler_props;
+mod security_gates;
 mod service_admission;
 mod service_auth;
 mod soak_script;

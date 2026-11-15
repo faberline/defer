@@ -85,7 +85,7 @@ serve port. `/readyz` turns false the moment shutdown starts.
 |---------|-----------|
 | `cargo test --workspace` | unit tests and the `it` integration binary |
 | `cargo test -p defer --test it -- declarative_queues::` | declarative queue provisioning unit and lifecycle integration |
-| `cargo test -p defer --features operator --test operator` | operator render conformance |
+| `cargo test -p defer --features operator --test it -- operator::` | operator render conformance |
 | `gh workflow run gke-test.yml -f suite=operator_recovery` | the cluster suite `e2e::operator_recovery::` on the shared GKE test cluster |
 
 The cluster suites in `crates/defer/tests/it/e2e/` are `#[ignore]`. Each one
