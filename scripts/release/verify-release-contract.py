@@ -125,7 +125,7 @@ STANDALONE_GATES = (
     "cargo fmt --all -- --check",
     "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
     "cargo test --locked --workspace",
-    "cargo test --locked -p defer --features operator --test operator",
+    "cargo test --locked -p defer --features operator --test it -- operator::",
     "python3 -B scripts/meta/project_docs_contract.py check .",
 )
 # The gates ci.yml runs. Its lint stage is fixed by aw docs/standards/ci.md, so its clippy line has no --all-features; the candidate keeps the stronger line in STANDALONE_GATES.
@@ -133,7 +133,7 @@ CI_GATES = (
     "cargo fmt --all -- --check",
     "cargo clippy --workspace --all-targets --locked -- -D warnings",
     "cargo test --locked --workspace",
-    "cargo test --locked -p defer --features operator --test operator",
+    "cargo test --locked -p defer --features operator --test it -- operator::",
     "python3 -B scripts/meta/project_docs_contract.py check .",
 )
 
