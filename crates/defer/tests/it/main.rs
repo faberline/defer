@@ -17,6 +17,7 @@ mod http_dispatch;
 mod http_dispatch_signing;
 #[cfg(feature = "operator")]
 mod operator;
+mod perf_gate;
 mod process_journey;
 mod process_security;
 mod raft_peer_mtls;
