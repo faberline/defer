@@ -6,7 +6,14 @@ const RELAY_CEILING_DOC: &str = include_str!("../../../../benchmarks/relay-perfo
 
 const TASK_LIFECYCLE_SRC: &str = include_str!("task_lifecycle.rs");
 const HTTP_DISPATCH_SRC: &str = include_str!("http_dispatch.rs");
-const HTTP_API_SRC: &str = include_str!("http_api.rs");
+const HTTP_API_SRCS: [&str; 6] = [
+    include_str!("http_api/body_limit.rs"),
+    include_str!("http_api/membership.rs"),
+    include_str!("http_api/metrics.rs"),
+    include_str!("http_api/queues.rs"),
+    include_str!("http_api/routes.rs"),
+    include_str!("http_api/tasks.rs"),
+];
 const RATE_LIMITS_SRC: &str = include_str!("rate_limits.rs");
 const RAFT_SCHEDULER_SRC: &str = include_str!("raft_scheduler.rs");
 
@@ -227,7 +234,12 @@ fn claimed_matrix_rows_map_to_existing_tests_and_relay_ratio_matches_contract() 
     let test_fns = scan_test_functions(&[
         TASK_LIFECYCLE_SRC,
         HTTP_DISPATCH_SRC,
-        HTTP_API_SRC,
+        HTTP_API_SRCS[0],
+        HTTP_API_SRCS[1],
+        HTTP_API_SRCS[2],
+        HTTP_API_SRCS[3],
+        HTTP_API_SRCS[4],
+        HTTP_API_SRCS[5],
         RATE_LIMITS_SRC,
         RAFT_SCHEDULER_SRC,
     ]);
