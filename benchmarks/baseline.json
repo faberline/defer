@@ -1,0 +1,26 @@
+{
+  "recorded": "2026-11-14",
+  "machine": "Linux x86_64, 4 CPUs, rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "workload": {
+    "messages": 1000,
+    "batches": 10,
+    "batch_size": 100,
+    "payload_serialized_bytes": 128,
+    "raft": "single voter, fsync always"
+  },
+  "defer": {
+    "throughput_ops_s": 16172.92,
+    "p50_us": 5250,
+    "p99_us": 8661
+  },
+  "relay": {
+    "throughput_ops_s": 2950.52,
+    "p50_us": 34911,
+    "p99_us": 39607
+  },
+  "ratios": {
+    "throughput_vs_relay": 5.4814,
+    "p50_vs_relay": 0.1504,
+    "p99_vs_relay": 0.2187
+  }
+}
