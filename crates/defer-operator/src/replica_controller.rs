@@ -75,12 +75,21 @@ pub fn pod_http_url(name: &str, namespace: &str, ordinal: u32) -> String {
     )
 }
 
-/// Raft peer URL of one replica pod through the headless service.
-pub fn pod_peer_url(name: &str, namespace: &str, ordinal: u32) -> String {
-    format!(
-        "http://{name}-{ordinal}.{name}-headless.{namespace}.svc:{}",
-        crate::render::RAFT_PORT
-    )
+/// Peer URL of one replica pod through the headless service, the scheme and port
+/// that `serve.rs` serves its peer routes on: with peer mTLS on it is https on the
+/// raft port, with peer mTLS off it is http on the client port.
+pub fn pod_peer_url(name: &str, namespace: &str, ordinal: u32, peer_tls: bool) -> String {
+    if peer_tls {
+        format!(
+            "https://{name}-{ordinal}.{name}-headless.{namespace}.svc:{}",
+            crate::render::RAFT_PORT
+        )
+    } else {
+        format!(
+            "http://{name}-{ordinal}.{name}-headless.{namespace}.svc:{}",
+            crate::render::CLIENT_PORT
+        )
+    }
 }
 
 /// Parses the `x-defer-leader` header, the leader node id, which equals the ordinal.
@@ -226,14 +235,26 @@ mod tests {
     }
 
     #[test]
-    fn pod_urls_use_headless_dns() {
+    fn pod_http_url_uses_headless_dns() {
         assert_eq!(
             super::pod_http_url("q", "ns", 2),
             "http://q-2.q-headless.ns.svc:7141"
         );
+    }
+
+    #[test]
+    fn pod_peer_url_without_peer_tls_uses_http_on_the_client_port() {
         assert_eq!(
-            super::pod_peer_url("q", "ns", 2),
-            "http://q-2.q-headless.ns.svc:7142"
+            super::pod_peer_url("q", "ns", 2, false),
+            "http://q-2.q-headless.ns.svc:7141"
+        );
+    }
+
+    #[test]
+    fn pod_peer_url_with_peer_tls_uses_https_on_the_raft_port() {
+        assert_eq!(
+            super::pod_peer_url("q", "ns", 2, true),
+            "https://q-2.q-headless.ns.svc:7142"
         );
     }
 
