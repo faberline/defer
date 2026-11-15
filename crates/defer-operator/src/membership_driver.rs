@@ -66,7 +66,7 @@ impl Default for RetryPolicy {
 
 /// Runs `steps` in order through `actuator`.
 ///
-/// `WaitCatchUp` and `Promote` retry on `NotCaughtUp`, and every step
+/// `WaitCatchUp`, `Promote`, `Demote` and `Remove` retry on `NotCaughtUp`, and every step
 /// retries on `NotLeader`, up to `retry.max_attempts` times in total. Any
 /// other error, or `NotCaughtUp` from another step, returns at once and
 /// later steps do not run.
@@ -88,8 +88,10 @@ pub async fn run_steps<A: MembershipActuator>(
             match result {
                 Ok(()) => break,
                 Err(ActuatorError::NotCaughtUp(_))
-                    if matches!(step, Step::WaitCatchUp(_) | Step::Promote(_))
-                        && attempt < retry.max_attempts =>
+                    if matches!(
+                        step,
+                        Step::WaitCatchUp(_) | Step::Promote(_) | Step::Demote(_) | Step::Remove(_)
+                    ) && attempt < retry.max_attempts =>
                 {
                     attempt += 1;
                     tokio::time::sleep(retry.delay).await;
@@ -118,6 +120,8 @@ mod tests {
         calls: Mutex<Vec<String>>,
         wait_results: Mutex<VecDeque<Result<(), ActuatorError>>>,
         promote_results: Mutex<VecDeque<Result<(), ActuatorError>>>,
+        demote_results: Mutex<VecDeque<Result<(), ActuatorError>>>,
+        remove_results: Mutex<VecDeque<Result<(), ActuatorError>>>,
         add_results: Mutex<VecDeque<Result<(), ActuatorError>>>,
     }
 
@@ -140,6 +144,20 @@ mod tests {
         fn with_promote(results: Vec<Result<(), ActuatorError>>) -> Self {
             Self {
                 promote_results: Mutex::new(results.into()),
+                ..Self::default()
+            }
+        }
+
+        fn with_demote(results: Vec<Result<(), ActuatorError>>) -> Self {
+            Self {
+                demote_results: Mutex::new(results.into()),
+                ..Self::default()
+            }
+        }
+
+        fn with_remove(results: Vec<Result<(), ActuatorError>>) -> Self {
+            Self {
+                remove_results: Mutex::new(results.into()),
                 ..Self::default()
             }
         }
@@ -174,12 +192,12 @@ mod tests {
 
         async fn demote(&self, ordinal: u32) -> Result<(), ActuatorError> {
             self.record(format!("demote({ordinal})"));
-            Ok(())
+            next(&self.demote_results)
         }
 
         async fn remove(&self, ordinal: u32) -> Result<(), ActuatorError> {
             self.record(format!("remove({ordinal})"));
-            Ok(())
+            next(&self.remove_results)
         }
     }
 
@@ -299,6 +317,53 @@ mod tests {
 
         assert_eq!(result, Ok(()));
         assert_eq!(fake.calls(), vec!["promote(2)", "promote(2)"]);
+    }
+
+    #[tokio::test]
+    async fn demote_retries_on_not_caught_up() {
+        let fake = Fake::with_demote(vec![not_caught_up(), Ok(())]);
+        let steps = [Step::Demote(3)];
+
+        let result = run_steps(&fake, &steps, policy(3)).await;
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(fake.calls(), vec!["demote(3)", "demote(3)"]);
+    }
+
+    #[tokio::test]
+    async fn remove_retries_on_not_caught_up() {
+        let fake = Fake::with_remove(vec![not_caught_up(), not_caught_up(), Ok(())]);
+        let steps = [Step::Demote(3), Step::Remove(3)];
+
+        let result = run_steps(&fake, &steps, policy(3)).await;
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            fake.calls(),
+            vec!["demote(3)", "remove(3)", "remove(3)", "remove(3)"]
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_gives_up_after_max_attempts() {
+        let fake = Fake::with_remove(vec![
+            not_caught_up(),
+            not_caught_up(),
+            not_caught_up(),
+            not_caught_up(),
+            not_caught_up(),
+        ]);
+        let steps = [Step::Remove(3)];
+
+        let result = run_steps(&fake, &steps, policy(3)).await;
+
+        assert_eq!(result, Err(ActuatorError::NotCaughtUp(String::new())));
+        let removes = fake
+            .calls()
+            .iter()
+            .filter(|c| c.as_str() == "remove(3)")
+            .count();
+        assert_eq!(removes, 3);
     }
 
     #[tokio::test]

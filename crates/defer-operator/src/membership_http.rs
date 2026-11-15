@@ -132,6 +132,19 @@ fn leader_from_hint(header: Option<&str>) -> Option<u32> {
     header?.trim().parse().ok()
 }
 
+/// Treats a `membership_refused` answer with `refusal` (for example
+/// `NotAVoter`) as done: the node already has the state the step wants.
+fn already_done(result: Result<(), ActuatorError>, refusal: &str) -> Result<(), ActuatorError> {
+    match &result {
+        Err(ActuatorError::Hard(text))
+            if text.contains("membership_refused") && text.contains(refusal) =>
+        {
+            Ok(())
+        }
+        _ => result,
+    }
+}
+
 impl MembershipActuator for HttpMembershipActuator {
     async fn add_learner(&self, ordinal: u32) -> Result<(), ActuatorError> {
         let url = (self.peer_url)(ordinal);
@@ -151,15 +164,17 @@ impl MembershipActuator for HttpMembershipActuator {
     }
 
     async fn demote(&self, ordinal: u32) -> Result<(), ActuatorError> {
-        self.post(json!({"op": "demote", "node": u64::from(ordinal)}))
-            .await
+        let result = self
+            .post(json!({"op": "demote", "node": u64::from(ordinal)}))
+            .await;
+        already_done(result, "NotAVoter")
     }
 
-    // The server has no `remove` op yet; follow-up #98 adds it. Until then
-    // the server answers 4xx and this returns `Hard`.
     async fn remove(&self, ordinal: u32) -> Result<(), ActuatorError> {
-        self.post(json!({"op": "remove", "node": u64::from(ordinal)}))
-            .await
+        let result = self
+            .post(json!({"op": "remove", "node": u64::from(ordinal)}))
+            .await;
+        already_done(result, "NotAMember")
     }
 }
 
@@ -526,6 +541,73 @@ mod tests {
         );
 
         assert_eq!(seen0.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn demote_of_a_non_voter_is_done() {
+        let (actuator, _seen) = spawn(
+            422,
+            r#"{"error":"membership_refused","message":"NotAVoter { target: 3 }"}"#,
+        )
+        .await;
+
+        assert_eq!(actuator.demote(3).await, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn remove_of_a_non_member_is_done() {
+        let (actuator, _seen) = spawn(
+            422,
+            r#"{"error":"membership_refused","message":"NotAMember { target: 3 }"}"#,
+        )
+        .await;
+
+        assert_eq!(actuator.remove(3).await, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn other_membership_refusals_stay_hard() {
+        let (demote, _seen) = spawn(
+            422,
+            r#"{"error":"membership_refused","message":"ToleranceWouldDrop { target: 2 }"}"#,
+        )
+        .await;
+        assert!(matches!(
+            demote.demote(2).await,
+            Err(ActuatorError::Hard(_))
+        ));
+
+        let (remove, _seen) = spawn(
+            422,
+            r#"{"error":"membership_refused","message":"ToleranceWouldDrop { target: 2 }"}"#,
+        )
+        .await;
+        assert!(matches!(
+            remove.remove(2).await,
+            Err(ActuatorError::Hard(_))
+        ));
+
+        let (promote, _seen) = spawn(
+            422,
+            r#"{"error":"membership_refused","message":"NotAVoter { target: 3 }"}"#,
+        )
+        .await;
+        assert!(matches!(
+            promote.promote(3).await,
+            Err(ActuatorError::Hard(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn demote_retry_later_is_not_caught_up() {
+        let (actuator, _seen) = spawn(409, r#"{"error":"retry_later"}"#).await;
+
+        assert_eq!(
+            actuator.demote(3).await,
+            Err(ActuatorError::NotCaughtUp(
+                r#"{"error":"retry_later"}"#.to_string()
+            ))
+        );
     }
 }
 
