@@ -39,7 +39,7 @@ crates/
   defer-shared-kernel/src/      scheduler.rs + scheduler/, types.rs
   defer-storage/src/            data_dir.rs
   defer-replication/src/        raft.rs + raft/
-  defer-dispatch/src/           dispatcher.rs
+  defer-dispatch/src/           infrastructure.rs + infrastructure/
   defer-access/src/             policy.rs
   defer-queue/src/              server.rs + server/, openapi.rs, metrics.rs
   defer-operator/src/           crd.rs, render.rs, reconcile.rs
