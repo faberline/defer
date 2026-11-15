@@ -421,4 +421,50 @@ mod capacity_policy_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod seed_validate_tests {
+    use super::Defer;
+    use serde_json::json;
+
+    fn defer_with(seed_fields: serde_json::Value) -> Defer {
+        let mut spec = json!({"image": "registry/defer:1", "replicasPerShard": 3, "voterCount": 3});
+        if let (Some(map), Some(extra)) = (spec.as_object_mut(), seed_fields.as_object()) {
+            for (k, v) in extra {
+                map.insert(k.clone(), v.clone());
+            }
+        }
+        serde_json::from_value(json!({
+            "apiVersion": "defer.dev/v1alpha1",
+            "kind": "Defer",
+            "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+            "spec": spec
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn validate_refuses_both_seed_sources() {
+        // Negative test: without `validate` this spec is accepted.
+        let defer = defer_with(json!({
+            "bootstrapSeedUri": "gs://b/o",
+            "bootstrapSeedConfigMap": "drill-seed"
+        }));
+        let err = defer.spec.validate().unwrap_err();
+        assert!(err.contains("mutually exclusive"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_accepts_one_seed_source_or_none() {
+        assert!(defer_with(json!({"bootstrapSeedUri": "gs://b/o"}))
+            .spec
+            .validate()
+            .is_ok());
+        assert!(defer_with(json!({"bootstrapSeedConfigMap": "drill-seed"}))
+            .spec
+            .validate()
+            .is_ok());
+        assert!(defer_with(json!({})).spec.validate().is_ok());
+    }
+}
 // HANDWRITE-END
