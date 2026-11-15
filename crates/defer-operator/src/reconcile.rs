@@ -139,12 +139,13 @@ impl ManagedService for Defer {
         let token = membership_token(&self.spec.auth, token);
         let (name_http, ns_http) = (name.clone(), ns.clone());
         let (name_peer, ns_peer) = (name.clone(), ns.clone());
+        let peer_tls = self.spec.peer_tls_secret.is_some();
         let actuator = HttpMembershipActuator::with_leader_discovery(
             reqwest::Client::new(),
             move |ordinal| pod_http_url(&name_http, &ns_http, ordinal),
             input.live_replicas,
             token,
-            move |ordinal| pod_peer_url(&name_peer, &ns_peer, ordinal),
+            move |ordinal| pod_peer_url(&name_peer, &ns_peer, ordinal, peer_tls),
         );
         let decision =
             decide_replicas_for_reconcile(&actuator, input, RetryPolicy::default()).await;
