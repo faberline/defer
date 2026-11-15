@@ -489,12 +489,11 @@ mod tests {
         assert_eq!(total, 4);
     }
 
-    /// A base URL where nothing listens: bind a port, read it, drop the listener.
+    /// A base URL where nothing listens. Port 1 is outside the ephemeral range
+    /// that `bind("127.0.0.1:0")` hands to the other tests, so no parallel test
+    /// can bind it, and a connection to it is refused.
     async fn closed_url() -> String {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
-        format!("http://{addr}")
+        "http://127.0.0.1:1".to_string()
     }
 
     #[tokio::test]
