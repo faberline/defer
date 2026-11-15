@@ -5,15 +5,13 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use base64::Engine as _;
 use chrono::{DateTime, Utc};
-use hmac::{Hmac, Mac};
-use serde::{Deserialize, Serialize};
-use sha2::Sha256;
-use utoipa::ToSchema;
 
 use defer_replication::DeferRaft;
 use defer_shared_kernel::{AttemptSettlement, DispatchLease, NackOutcome, SettlementOutcome};
+
+use super::report::{DispatchDisposition, DispatchReport};
+use super::signing::TargetSigningKey;
 
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 const ATTEMPT_HEADER: &str = "x-defer-attempt-id";
@@ -22,63 +20,6 @@ const EPOCH_HEADER: &str = "x-defer-fence-epoch";
 const TIMESTAMP_HEADER: &str = "x-defer-timestamp-ms";
 const KEY_ID_HEADER: &str = "x-defer-key-id";
 const SIGNATURE_HEADER: &str = "x-defer-signature";
-
-#[derive(Clone)]
-pub struct TargetSigningKey {
-    pub key_id: String,
-    secret: Vec<u8>,
-}
-
-impl TargetSigningKey {
-    pub fn new(key_id: impl Into<String>, secret: impl Into<Vec<u8>>) -> Result<Self> {
-        let key_id = key_id.into();
-        let secret = secret.into();
-        anyhow::ensure!(!key_id.trim().is_empty(), "target signing key id is empty");
-        anyhow::ensure!(
-            secret.len() >= 32,
-            "target signing secret must be at least 32 bytes"
-        );
-        Ok(Self { key_id, secret })
-    }
-
-    /// `v1` HMAC over the immutable delivery identity and exact JSON bytes.
-    pub fn signature(&self, lease: &DispatchLease, timestamp_ms: i64, body: &[u8]) -> String {
-        let mut mac =
-            Hmac::<Sha256>::new_from_slice(&self.secret).expect("HMAC accepts arbitrary-size keys");
-        let timestamp = timestamp_ms.to_string();
-        for field in [
-            lease.idempotency_key.as_bytes(),
-            lease.attempt_id.as_bytes(),
-            lease.target.url.as_bytes(),
-            timestamp.as_bytes(),
-            body,
-        ] {
-            mac.update(&(field.len() as u64).to_be_bytes());
-            mac.update(field);
-        }
-        format!(
-            "v1={}",
-            base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
-        )
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-pub enum DispatchDisposition {
-    Acked,
-    Retried { next_at: DateTime<Utc> },
-    DeadLettered,
-    LostOwnership,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-pub struct DispatchReport {
-    pub task_id: String,
-    pub attempt_id: String,
-    pub target_status: Option<u16>,
-    pub transport_error: Option<String>,
-    pub disposition: DispatchDisposition,
-}
 
 pub struct HttpDispatcher {
     client: reqwest::Client,
