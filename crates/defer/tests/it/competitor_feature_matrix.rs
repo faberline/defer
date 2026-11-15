@@ -15,7 +15,14 @@ const HTTP_API_SRCS: [&str; 6] = [
     include_str!("http_api/tasks.rs"),
 ];
 const RATE_LIMITS_SRC: &str = include_str!("rate_limits.rs");
-const RAFT_SCHEDULER_SRC: &str = include_str!("raft_scheduler.rs");
+const RAFT_SCHEDULER_SRCS: [&str; 6] = [
+    include_str!("raft_scheduler/declared.rs"),
+    include_str!("raft_scheduler/diagnostics.rs"),
+    include_str!("raft_scheduler/failover.rs"),
+    include_str!("raft_scheduler/lifecycle.rs"),
+    include_str!("raft_scheduler/queue_limits.rs"),
+    include_str!("raft_scheduler/restart.rs"),
+];
 
 fn scan_test_functions(sources: &[&str]) -> BTreeSet<String> {
     let mut fns = BTreeSet::new();
@@ -241,7 +248,12 @@ fn claimed_matrix_rows_map_to_existing_tests_and_relay_ratio_matches_contract() 
         HTTP_API_SRCS[4],
         HTTP_API_SRCS[5],
         RATE_LIMITS_SRC,
-        RAFT_SCHEDULER_SRC,
+        RAFT_SCHEDULER_SRCS[0],
+        RAFT_SCHEDULER_SRCS[1],
+        RAFT_SCHEDULER_SRCS[2],
+        RAFT_SCHEDULER_SRCS[3],
+        RAFT_SCHEDULER_SRCS[4],
+        RAFT_SCHEDULER_SRCS[5],
     ]);
 
     for (capability, test_fn) in &mapping {
