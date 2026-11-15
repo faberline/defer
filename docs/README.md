@@ -13,6 +13,7 @@ future outcomes are [`ROADMAP.md`](../ROADMAP.md), and contributor rules live in
 | [operations/](operations/README.md) | How to install, run, configure, and test defer. Version compatibility and upgrades: [operations/upgrades.md](operations/upgrades.md). |
 | [product/](product/README.md) | What defer promises per capability area, one section per shipped capability or ROADMAP outcome. |
 | [adr/](adr/) | Architecture decisions and the reasons behind them. |
+| [security/threat-model.md](security/threat-model.md) | What defer protects, where the trust boundaries are, and the open risks. |
 
 ## Architecture decisions
 

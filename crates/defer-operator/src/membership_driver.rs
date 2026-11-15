@@ -13,7 +13,7 @@ use std::time::Duration;
 pub enum ActuatorError {
     /// The learner has not caught up yet. The step may be retried. The string is the server's answer.
     NotCaughtUp(String),
-    /// No pod accepted the step as the leader (election or leadership transfer in flight). The step may be retried.
+    /// No pod accepted the step as the leader (election or leadership transfer in flight), or no pod could be reached. The step may be retried.
     NotLeader(String),
     /// Any other failure. The driver stops at once.
     Hard(String),

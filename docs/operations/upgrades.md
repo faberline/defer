@@ -49,7 +49,7 @@ is written as "not promised".
   PodDisruptionBudget with `maxUnavailable: 1`, in
   `crates/defer-operator/src/render.rs`. The PDB is asserted in
   `production_render_composes_shared_stateful_primitives` in
-  `crates/defer/tests/operator.rs`. The readiness probe is `/readyz`, every
+  `crates/defer/tests/it/operator.rs`. The readiness probe is `/readyz`, every
   5 seconds, asserted in `crates/defer/tests/it/e2e/operator_recovery.rs`.
 - With `RollingUpdate`, Kubernetes replaces pods one at a time and waits for
   each readiness probe. This is Kubernetes behavior. defer has no test of the

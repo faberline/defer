@@ -2,4 +2,15 @@
 # Docs: https://rustsec.org/advisories/
 
 [advisories]
-ignore = []
+ignore = [
+    # reason: backoff is unmaintained; it is locked by a dependency and replacing it changes product code, out of scope for this issue; expires: 2027-02-12
+    "RUSTSEC-2025-0012",
+    # reason: instant is unmaintained; it is locked by a dependency and has no replacement in this change; expires: 2027-02-12
+    "RUSTSEC-2024-0384",
+    # reason: proc-macro-error is unmaintained; it is build-time only and locked by a dependency; expires: 2027-02-12
+    "RUSTSEC-2024-0370",
+    # reason: rustls-pemfile is unmaintained; it is locked by a dependency; expires: 2027-02-12
+    "RUSTSEC-2025-0134",
+    # reason: unsafe-libyaml is unmaintained; it is locked by a dependency; expires: 2027-02-12
+    "RUSTSEC-2024-0449",
+]
