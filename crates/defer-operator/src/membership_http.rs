@@ -405,7 +405,11 @@ mod tests {
     fn discover(urls: Vec<String>) -> HttpMembershipActuator {
         let pods = urls.len() as u32;
         HttpMembershipActuator::with_leader_discovery(
-            reqwest::Client::new(),
+            reqwest::Client::builder()
+                .no_proxy()
+                .pool_max_idle_per_host(0)
+                .build()
+                .unwrap(),
             move |n| urls[n as usize].clone(),
             pods,
             "t0k",
@@ -459,7 +463,11 @@ mod tests {
 
         assert_eq!(actuator.promote(2).await, Ok(()));
 
-        assert_eq!(seen0.lock().unwrap().len(), 1);
+        assert_eq!(
+            seen0.lock().unwrap().len(),
+            1,
+            "pod0 got a second request: the request to pod1 failed with a connection error"
+        );
         assert_eq!(seen1.lock().unwrap().len(), 1);
     }
 
@@ -481,12 +489,11 @@ mod tests {
         assert_eq!(total, 4);
     }
 
-    /// A base URL where nothing listens: bind a port, read it, drop the listener.
+    /// A base URL where nothing listens. Port 1 is outside the ephemeral range
+    /// that `bind("127.0.0.1:0")` hands to the other tests, so no parallel test
+    /// can bind it, and a connection to it is refused.
     async fn closed_url() -> String {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
-        format!("http://{addr}")
+        "http://127.0.0.1:1".to_string()
     }
 
     #[tokio::test]
