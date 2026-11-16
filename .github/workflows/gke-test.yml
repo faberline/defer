@@ -12,6 +12,7 @@
 # at a time, each on a fresh deploy:
 #   operator_recovery  k8s/gke-test-job/operator_recovery  operator topology (3 replicas) and pod loss recovery
 #   capacity_policy    k8s/gke-test-job/capacity_policy    capacity controller scales out on a low CPU threshold (manual only, not in all)
+#   backup_restore     k8s/gke-test-job/backup_restore     backup and restore into a new group through a ConfigMap seed (manual only, not in all)
 #   deploy_smoke       k8s/gke-test-job/deploy_smoke       dispatch journey and metrics diagnostics
 # Manual only: a dispatch picks one suite or all. ci.yml runs the same jobs as its e2e stage.
 #
@@ -31,7 +32,7 @@ on:
       suite:
         description: Suite to run; all runs every suite, one at a time.
         type: choice
-        options: [all, operator_recovery, deploy_smoke, capacity_policy]
+        options: [all, operator_recovery, deploy_smoke, capacity_policy, backup_restore]
         default: all
 
 permissions:
@@ -180,8 +181,9 @@ jobs:
           case "$INPUT_SUITE" in
             all) suites='["operator_recovery", "deploy_smoke"]' ;;
             capacity_policy) suites='["capacity_policy"]' ;;
+            backup_restore) suites='["backup_restore"]' ;;
             operator_recovery | deploy_smoke) suites="[\"${INPUT_SUITE}\"]" ;;
-            *) die "suite must be all, operator_recovery, deploy_smoke, or capacity_policy, got: $INPUT_SUITE" ;;
+            *) die "suite must be all, operator_recovery, deploy_smoke, capacity_policy, or backup_restore, got: $INPUT_SUITE" ;;
           esac
 
           {
