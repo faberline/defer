@@ -1,0 +1,281 @@
+# Release acceptance of one verified defer candidate on Faberline's shared GKE
+# test cluster (faberline-test). The run deploys the candidate image by digest
+# (it never rebuilds the server image), runs the two acceptance suites one
+# after the other, and uploads the evidence bundle that
+# scripts/release/make-gke-release-receipt.py --backend gke-acceptance reads.
+#
+# Dispatch by hand, on the head of main at the candidate commit:
+#   gh workflow run gke-acceptance.yml --repo faberline/defer --ref main \
+#     -f commit=<candidate commit> -f image=ghcr.io/faberline/defer@<candidate root digest>
+#
+# This file is one job on purpose: the receipt refuses a run with any other
+# job that ran. Serialization with gke-test.yml runs of this repository is the
+# job-level concurrency group, which is the same group the aw reusable workflow
+# uses. Never cancel in progress: a cancelled runner may skip its teardown.
+#
+# Runs cost money. The pull request that adds this file starts no run.
+name: gke-acceptance
+run-name: gke-acceptance defer @ ${{ inputs.commit }} image=${{ inputs.image }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Candidate commit, 40 lowercase hex. The dispatched ref must be its head.
+        required: true
+        type: string
+      image:
+        description: Candidate root digest, ghcr.io/faberline/defer@sha256:<64 hex>.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    name: deploy + verify on GKE
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    concurrency:
+      group: gke-test-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
+    steps:
+      - name: Check out the dispatched ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to ghcr
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Verify prebuilt image input
+        shell: bash
+        env:
+          COMMIT: ${{ inputs.commit }}
+          IMAGE: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          die() { echo "::error::$*" >&2; exit 1; }
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || die "commit must be 40 lowercase hex, got: $COMMIT"
+          [[ "$IMAGE" =~ ^ghcr\.io/faberline/defer@sha256:[0-9a-f]{64}$ ]] \
+            || die "image must be ghcr.io/faberline/defer@sha256:<64 hex>, got: $IMAGE"
+          [[ "$GITHUB_SHA" == "$COMMIT" ]] \
+            || die "dispatched ref is at $GITHUB_SHA, not the candidate commit $COMMIT"
+
+          raw="$(docker buildx imagetools inspect --raw "$IMAGE")" \
+            || die "cannot read the candidate image manifest: $IMAGE"
+          # Same runtime digest rule as the resolve job of gke-test.yml.
+          if jq -e '.manifests? | type == "array"' <<<"$raw" >/dev/null; then
+            runtime_digest="$(jq -r '
+              [.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest] |
+              if length == 1 then .[0] else empty end' <<<"$raw")"
+          else
+            runtime_digest="${IMAGE#*@}"
+          fi
+          [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "no single linux/amd64 digest for $IMAGE"
+
+          {
+            echo "RUNTIME_DIGEST=${runtime_digest}"
+            echo "GIT12=${COMMIT:0:12}"
+          } >> "$GITHUB_ENV"
+
+      - name: Install the musl toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: 1.99.1
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: defer-test-client-x86_64-unknown-linux-musl
+
+      # Same test-client build as the test-client job of gke-test.yml. The
+      # candidate server image is not rebuilt here.
+      - name: Build the test binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe="$(cargo test --release --locked --target x86_64-unknown-linux-musl \
+              -p defer --test it --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .target.name == "it") | .executable')"
+          [[ -n "$exe" && -x "$exe" ]] || { echo "::error::no test binary for it"; exit 1; }
+          mkdir -p dist/linux/amd64
+          cp "$exe" dist/linux/amd64/defer-it
+
+      - name: Log in to ghcr for the test-client push
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Resolve the test-client image tag
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "tag=ghcr.io/faberline/defer-test-client:sha-${GIT12}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push the test-client image
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.test
+          target: test-client
+          platforms: linux/amd64
+          push: true
+          # NEVER add `latest` or a semver tag here: dev/test line only.
+          tags: ${{ steps.ver.outputs.tag }}
+
+      - name: Record the pushed test-client digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad digest: $DIGEST"; exit 1; }
+          echo "TEST_IMAGE=ghcr.io/faberline/defer-test-client@${DIGEST}" >> "$GITHUB_ENV"
+
+      # The aw checkout supplies the suite scripts. Its pin is the same as
+      # the aw reusable workflow that gke-test.yml calls.
+      - name: Check out faberline/aw scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # pinned as in faberline/aw gke-test.yml@6eb7ebc (no version comment there)
+        with:
+          repository: faberline/aw
+          ref: 6eb7ebcdf38343e0d4c77f8674b6bc30976d86bb
+          path: .gke-test-aw
+          # run.sh reads pools.yaml to check which pools this repository owns.
+          sparse-checkout: |
+            scripts/gke-test
+            infra/gke-test
+
+      - name: Prepare run folders
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "KUBECONFIG=${RUNNER_TEMP}/gke-test-kubeconfig" >> "$GITHUB_ENV"
+
+      # Values from `terraform -chdir=infra/gke-test output` in faberline/aw.
+      - name: Sign in to GCP (Workload Identity Federation)
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # pinned as in faberline/aw gke-test.yml@6eb7ebc (no version comment there)
+        with:
+          workload_identity_provider: projects/406744653021/locations/global/workloadIdentityPools/faberline-github/providers/github-oidc
+          service_account: gke-test-defer@axiom-502607.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # pinned as in faberline/aw gke-test.yml@6eb7ebc (no version comment there)
+        with:
+          install_components: gke-gcloud-auth-plugin
+
+      - name: Get cluster credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud container clusters get-credentials faberline-test \
+            --project=axiom-502607 --zone=asia-east1-a
+
+      - name: Run acceptance harness
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          GHCR_USER: ${{ github.actor }}
+          COMMIT: ${{ inputs.commit }}
+          IMAGE: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          version="$(grep '^version = ' Cargo.toml | head -n1 | cut -d'"' -f2)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || { echo "::error::invalid version: $version"; exit 1; }
+          # Same four expected values as the resolve job of gke-test.yml.
+          TEST_ENV="$(printf 'E2E_EXPECTED_VERSION=%s\nE2E_EXPECTED_GIT_SHA=%s\nE2E_EXPECTED_IMAGE=%s\nE2E_EXPECTED_RUNTIME_DIGEST=%s\n' \
+            "$version" "${COMMIT:0:8}" "$IMAGE" "$RUNTIME_DIGEST")"
+          export TEST_ENV
+
+          suite_root="${RUNNER_TEMP}/gke-acceptance-suite-evidence"
+          bundle="${RUNNER_TEMP}/gke-acceptance-evidence"
+          mkdir -p "$suite_root"
+
+          export REPO=defer OVERLAY=k8s/overlays/gke-test
+          export IMAGE_NAME=ghcr.io/faberline/defer NAMESPACE=defer
+          export TEST_IMAGE_NAME=defer-test-client TTL_MINUTES=90
+          export KUBECONFIG
+
+          # One suite at a time; the first failing suite stops the step.
+          for suite in deploy_smoke operator_recovery; do
+            TEST_JOB="k8s/gke-test-job/${suite}" \
+            EVIDENCE_DIR="${suite_root}/${suite}" \
+            RUN_LABEL="gha-${RUN_ID}-${RUN_ATTEMPT}-${suite}" \
+              .gke-test-aw/scripts/gke-test/run.sh
+          done
+
+          # Written only when both suites passed.
+          mkdir -p "$bundle/defer"
+          printf 'defer PASS\n' > "$bundle/results.txt"
+          printf '[defer] PASS: readyz + round-trip + durability\n' > "$bundle/defer/verdict.txt"
+          cp "${suite_root}/deploy_smoke/rendered.yaml" "$bundle/defer/manifests.yaml"
+          sed -E 's/^[[:space:]]+//' "$bundle/defer/manifests.yaml" | grep -Fxq "image: ${IMAGE}" \
+            || { echo "::error::the rendered manifests do not run the candidate image"; exit 1; }
+
+          # run.sh has torn the namespace down; NotFound is the only proof
+          # that it is gone.
+          out="$(kubectl get namespace defer 2>&1 || true)"
+          grep -q 'NotFound' <<<"$out" || { echo "::error::namespace defer still exists: $out"; exit 1; }
+          printf 'namespace deleted\n' > "$bundle/defer/teardown.log"
+
+      - name: Upload evidence bundle
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gke-acceptance-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gke-acceptance-evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload suite evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gke-acceptance-suite-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gke-acceptance-suite-evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+      # run.sh tears down on every in-process exit. This step covers a killed
+      # process; teardown.sh is safe to run more than once.
+      - name: Tear down (backup)
+        if: always()
+        shell: bash
+        env:
+          NAMESPACE: defer
+          EVIDENCE_DIR: ${{ runner.temp }}/gke-acceptance-suite-evidence/deploy_smoke
+        run: .gke-test-aw/scripts/gke-test/teardown.sh
+
+      # Must stay the last step. A non-zero exit fails the job, which is wanted.
+      # park.sh: exit 0 when a test namespace exists (it logs "not parking");
+      # exit 0 after it resizes system-pool to 0; non-zero when KUBECONFIG is
+      # unset or the resize fails.
+      - name: Park node pool (belt and suspenders)
+        if: always()
+        shell: bash
+        env:
+          KUBECONFIG: ${{ runner.temp }}/gke-test-kubeconfig
+        run: .gke-test-aw/scripts/gke-test/park.sh

@@ -273,6 +273,25 @@ def validate_gcp(
     return run_id, functional, public_cleanup
 
 
+def check_acceptance_workflow(text: str) -> None:
+    # The workflow file must produce the run that validate_gke_acceptance reads:
+    # its run name, its top-level name, its one job, the steps it checks, and
+    # workflow_dispatch as the only trigger.
+    if "run-name: gke-acceptance defer @ ${{ inputs.commit }} image=${{ inputs.image }}" not in text:
+        fail("acceptance workflow: run-name does not match the receipt displayTitle")
+    if not re.search(r"^name: gke-acceptance$", text, re.M):
+        fail("acceptance workflow: top-level name is not gke-acceptance")
+    for required in (f"name: {ACCEPTANCE_JOB}", f"name: {VERIFY_IMAGE_STEP}", f"name: {HARNESS_STEP}", f"name: {PARK_STEP}"):
+        if required not in text:
+            fail(f"acceptance workflow: missing {required}")
+    if "workflow_dispatch" not in text:
+        fail("acceptance workflow: workflow_dispatch trigger is missing")
+    # Trigger keys sit two spaces deep under `on:`; a step input such as
+    # `push: true` in docker/build-push-action sits deeper and is not a trigger.
+    if re.search(r"^  (pull_request|pull_request_target|push|schedule):", text, re.M):
+        fail("acceptance workflow: a trigger other than workflow_dispatch is set")
+
+
 def validate_gke_acceptance(
     app: str,
     candidate: Dict[str, Any],
@@ -706,6 +725,18 @@ def self_test() -> None:
 
         expect_refusal("unknown app", lambda: make_receipt("loom", "gke-acceptance", manifest_path, base / "loom-gke-receipt.json", gh_run=gh_run_path, evidence_dir=evidence))
         negative += 1
+
+        # --- the acceptance workflow file that the receipt names -----------
+        acceptance_text = (Path(__file__).resolve().parents[2] / ".github/workflows/gke-acceptance.yml").read_text(encoding="utf-8")
+        check_acceptance_workflow(acceptance_text)
+        positive += 1
+        for label, mutated in (
+            ("harness step renamed", acceptance_text.replace(HARNESS_STEP, "Run harness")),
+            ("run-name renamed", acceptance_text.replace("run-name: gke-acceptance", "run-name: gke-test")),
+            ("push trigger added", acceptance_text.replace("workflow_dispatch:", "workflow_dispatch:\n  push:")),
+        ):
+            expect_refusal(f"acceptance workflow: {label}", lambda text=mutated: check_acceptance_workflow(text))
+            negative += 1
     print(f"make-gke-release-receipt self-test PASS: {positive} positive, {negative} negative controls refused")
 
 

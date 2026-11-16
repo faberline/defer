@@ -137,6 +137,26 @@ owns four outcomes.
   without a client `PUT`.
 - Outcome: `gke-acceptance-in-repo`. Tracking: not assigned.
 
+## Release GKE acceptance run
+
+The release receipt for a verified candidate comes from one manual
+`gke-acceptance` workflow run on the shared GKE test cluster. Run these
+commands in order, with the candidate commit and its root digest:
+
+```text
+gh workflow run gke-acceptance.yml --repo faberline/defer --ref main -f commit=<candidate commit> -f image=ghcr.io/faberline/defer@<candidate root digest>
+gh run watch <run id> --repo faberline/defer
+gh run view <run id> --repo faberline/defer --json databaseId,attempt,conclusion,status,url,headSha,event,workflowName,displayTitle,jobs > gh-run.json
+gh run download <run id> --repo faberline/defer --name gke-acceptance-evidence-<run id>-<attempt> --dir evidence
+python3 scripts/release/make-gke-release-receipt.py --app defer --backend gke-acceptance --candidate-manifest <final-candidate-manifest.json> --gh-run gh-run.json --evidence-dir evidence --output defer-gke-receipt.json
+```
+
+- The run is paid: about 14 TWD per hour for 4 nodes, two suites, about 60 to
+  90 minutes in all.
+- `--ref main` must be the head of `main` at the candidate commit; the run
+  checks that and never builds the candidate image.
+- `scripts/release/promote.sh` is the step after the receipt is made.
+
 ## Reliable soak gate
 
 - Problem: the soak hard-codes the snapshot cadence and its RSS check is

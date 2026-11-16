@@ -39,6 +39,7 @@ from typing import Callable, Dict, List, NoReturn, Optional, Sequence, Set, Tupl
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
+ACCEPTANCE_WORKFLOW = WORKFLOWS / "gke-acceptance.yml"
 RELEASE_DIR = ROOT / "scripts" / "release"
 APPS_SH = RELEASE_DIR / "apps.sh"
 RECEIPT_MAKER = RELEASE_DIR / "make-gke-release-receipt.py"
@@ -503,6 +504,10 @@ def check_app(app: App) -> None:
         fail(f"{app.name} is not onboarded yet: its release workflows do not exist (flip onboarded when they land)")
     check_candidate(app, read(app.candidate_workflow))
     check_promotion(app, read(app.promotion_workflow))
+    if app.gke_backend == "gke-acceptance":
+        if not ACCEPTANCE_WORKFLOW.exists():
+            fail(f"{app.name}: GKE acceptance workflow is missing: .github/workflows/gke-acceptance.yml")
+        acceptance_workflow_check(read(ACCEPTANCE_WORKFLOW))
 
 
 def check_not_onboarded(app: App) -> None:
@@ -556,6 +561,14 @@ def load_receipt_maker():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def acceptance_workflow_check(text: str) -> None:
+    # The receipt maker refuses with SystemExit; the contract reports ContractError.
+    try:
+        load_receipt_maker().check_acceptance_workflow(text)
+    except SystemExit as exc:
+        fail(str(exc))
 
 
 def check_tables(maker) -> None:
@@ -924,6 +937,7 @@ def standalone_controls(candidate: str, ci: str) -> List[Tuple[str, Callable[[],
         ("ci: push no longer limited to main", gates_with(ci_text=replace_once(ci, "    branches: [main]", "    branches: ['**']", "ci"))),
         ("ci: action unpinned", gates_with(ci_text=unpin_first_action(ci, "ci"))),
         ("ci: write permission granted", gates_with(ci_text=replace_once(ci, "permissions:\n  contents: read", "permissions:\n  contents: write", "ci"))),
+        ("defer acceptance workflow: push trigger added", lambda: acceptance_workflow_check(replace_once(read(ACCEPTANCE_WORKFLOW), "workflow_dispatch:", "workflow_dispatch:\n  push:", "defer acceptance"))),
     ])
     return controls
 
@@ -941,6 +955,8 @@ def self_test() -> str:
     candidate_text = read(APPS["defer"].candidate_workflow)
     ci_text = read(CI_WORKFLOW)
     check_standalone_gates(candidate_text, ci_text)
+    positives += 1
+    acceptance_workflow_check(read(ACCEPTANCE_WORKFLOW))
     positives += 1
     for app in APPS.values():
         if not app.onboarded:
