@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use super::{endpoint, evidence, kubectl, kubectl_json, required_env, wait_for};
+use super::{endpoint, evidence, kubectl, kubectl_json, required_env, try_kubectl, wait_for};
 
 const SUITE: &str = "backup_restore";
 const DEFER: &str = "defer";
@@ -118,7 +118,9 @@ fn wait_for_group_ready(timeout: Duration) {
         &format!("StatefulSet {DEFER} has 3 ready replicas"),
         timeout,
         || {
-            let sts = kubectl_json(&["get", "statefulset", DEFER]);
+            let out = try_kubectl(&["get", "statefulset", DEFER, "-o", "json"])?;
+            let sts: Value =
+                serde_json::from_str(&out).map_err(|err| format!("not JSON: {err}"))?;
             let ready = sts["status"]["readyReplicas"].clone();
             if ready == 3 {
                 Ok(())
@@ -209,6 +211,8 @@ async fn backup_and_restore_keeps_queue_and_tasks() {
     wait_healthy(&http, &base).await;
     let live = kubectl_json(&["get", "defer", DEFER]);
     evidence(SUITE, "group ready", json!({ "replicas": 3 }));
+
+    // 2. The cleanup guard removes the seed ConfigMap on a failed run.
     let _cleanup = Cleanup;
 
     // 3. A queue and its tasks, then the state before the backup.
