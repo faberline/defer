@@ -127,7 +127,7 @@ jobs:
           shared-key: defer-candidate-${{ matrix.target }}
       - name: Build exact release candidate binary
         shell: bash
-        run: cargo build --release --locked -p defer --bin defer --target ${{ matrix.target }}
+        run: cargo build --release --locked -p defer --bin defer --features operator,backup --target ${{ matrix.target }}
       - name: Package archive and checksum sidecar
         shell: bash
         run: |
