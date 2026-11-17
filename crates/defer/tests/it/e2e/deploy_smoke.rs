@@ -38,14 +38,40 @@ fn wait_for_ready_pod(timeout: Duration) -> String {
     })
 }
 
-/// Sends an HTTP request that must succeed and returns its JSON body.
+/// Sends a request until it answers 2xx, and returns its JSON body. A 5xx, a
+/// 3xx or a connection error is retried every `POLL_INTERVAL` until
+/// `API_TIMEOUT`; a 4xx fails at once.
 async fn send(request: reqwest::RequestBuilder) -> Value {
-    let response = request.send().await.expect("request");
-    let status = response.status();
-    let url = response.url().clone();
-    let body = response.text().await.expect("body");
-    assert!(status.is_success(), "{url}: {status}: {body}");
-    serde_json::from_str(&body).unwrap_or_else(|err| panic!("{url}: not JSON: {err}: {body}"))
+    let deadline = tokio::time::Instant::now() + API_TIMEOUT;
+    loop {
+        let attempt = request.try_clone().expect("cloneable request");
+        let last = match attempt.send().await {
+            Ok(response) if response.status().is_success() => {
+                let url = response.url().clone();
+                let body = response.text().await.expect("body");
+                return serde_json::from_str(&body)
+                    .unwrap_or_else(|err| panic!("{url}: not JSON: {err}: {body}"));
+            }
+            Ok(response) if response.status().is_client_error() => {
+                let url = response.url().clone();
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                panic!("{url}: {status}: {body}");
+            }
+            Ok(response) => {
+                let url = response.url().clone();
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                format!("{url}: {status}: {body}")
+            }
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no 2xx within {API_TIMEOUT:?}; last saw: {last}"
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
 }
 
 /// Waits until `GET /healthz` answers 2xx.
@@ -309,4 +335,80 @@ async fn test_3_metrics_and_readyz() {
             "readyz": 200
         }),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::send;
+
+    /// One complete HTTP/1.1 response with a JSON body; the connection closes after it.
+    fn http_response(status: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// Starts a local server that answers one connection per entry of
+    /// `responses`, in order. Returns the URL of its root path.
+    async fn serve(responses: Vec<String>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            for response in responses {
+                let (mut socket, _) = listener.accept().await.expect("accept");
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let n = socket.read(&mut buf).await.expect("read");
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                }
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write response");
+                socket.shutdown().await.ok();
+            }
+        });
+        format!("http://{addr}/v1/queues/q")
+    }
+
+    #[tokio::test]
+    async fn send_retries_a_503_then_returns_the_json_body() {
+        let url = serve(vec![
+            http_response(
+                "503 Service Unavailable",
+                r#"{"error":"internal","message":"raft: no leader elected (cluster not ready)"}"#,
+            ),
+            http_response("200 OK", r#"{"queue":"q"}"#),
+        ])
+        .await;
+
+        let body = send(reqwest::Client::new().get(url)).await;
+
+        assert_eq!(body, json!({ "queue": "q" }));
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "404")]
+    async fn send_fails_at_once_on_a_404() {
+        let url = serve(vec![http_response("404 Not Found", r#"{"error":"nf"}"#)]).await;
+
+        // A 4xx must panic straight away; a retry would not return within 30 s.
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            send(reqwest::Client::new().get(url)),
+        )
+        .await
+        .expect("send returned before API_TIMEOUT");
+    }
 }
