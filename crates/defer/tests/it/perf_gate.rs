@@ -2,6 +2,7 @@
 const BASELINE: &str = include_str!("../../../../benchmarks/baseline.json");
 const README: &str = include_str!("../../../../benchmarks/README.md");
 pub(crate) const MAX_REGRESSION: f64 = 0.20;
+pub(crate) const RUNS: usize = 5;
 
 pub(crate) struct Ratios {
     pub throughput_vs_relay: f64,
@@ -48,6 +49,24 @@ pub(crate) fn compare(baseline: &Ratios, measured: &Ratios) -> Result<(), String
         Ok(())
     } else {
         Err(failures.join("; "))
+    }
+}
+
+fn median(values: &mut [f64]) -> f64 {
+    assert!(!values.is_empty(), "median of no values");
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    values[values.len() / 2]
+}
+
+/// The median of each ratio over the runs. `RUNS` is odd, so the median is one run's value.
+pub(crate) fn median_ratios(runs: &[Ratios]) -> Ratios {
+    let mut throughput: Vec<f64> = runs.iter().map(|r| r.throughput_vs_relay).collect();
+    let mut p50: Vec<f64> = runs.iter().map(|r| r.p50_vs_relay).collect();
+    let mut p99: Vec<f64> = runs.iter().map(|r| r.p99_vs_relay).collect();
+    Ratios {
+        throughput_vs_relay: median(&mut throughput),
+        p50_vs_relay: median(&mut p50),
+        p99_vs_relay: median(&mut p99),
     }
 }
 
@@ -187,26 +206,81 @@ fn readme_publishes_the_baseline() {
     }
 }
 
+fn run(throughput: f64, p50: f64, p99: f64) -> Ratios {
+    Ratios {
+        throughput_vs_relay: throughput,
+        p50_vs_relay: p50,
+        p99_vs_relay: p99,
+    }
+}
+
+#[test]
+fn median_of_odd_count_is_the_middle_value() {
+    assert_eq!(median(&mut [3.0, 1.0, 2.0, 5.0, 4.0]), 3.0);
+}
+
+#[test]
+fn median_ratios_ignores_one_slow_run() {
+    let runs = vec![
+        run(5.0, 0.15, 0.22),
+        run(5.0, 0.15, 0.22),
+        run(1.0, 0.90, 0.40),
+        run(5.0, 0.15, 0.22),
+        run(5.0, 0.15, 0.22),
+    ];
+    let m = median_ratios(&runs);
+    assert_eq!(m.throughput_vs_relay, 5.0);
+    assert_eq!(m.p50_vs_relay, 0.15);
+    assert_eq!(m.p99_vs_relay, 0.22);
+}
+
+#[test]
+fn median_ratios_passes_gate_when_only_one_run_is_slow() {
+    let baseline = run(5.0, 0.15, 0.2187);
+    let runs = vec![
+        run(5.0, 0.15, 0.22),
+        run(5.0, 0.15, 0.22),
+        run(5.0, 0.15, 0.34),
+        run(5.0, 0.15, 0.22),
+        run(5.0, 0.15, 0.22),
+    ];
+    assert!(compare(&baseline, &median_ratios(&runs)).is_ok());
+    // Negative proof: the single slow run alone fails the gate.
+    let err = compare(&baseline, &runs[2]).unwrap_err();
+    assert!(err.contains("p99"), "one slow run fails on its own: {err}");
+}
+
+#[test]
+fn median_ratios_still_fails_for_a_real_regression() {
+    let baseline = run(5.0, 0.15, 0.2187);
+    let runs: Vec<Ratios> = (0..RUNS).map(|_| run(5.0, 0.15, 0.34)).collect();
+    let err = compare(&baseline, &median_ratios(&runs)).unwrap_err();
+    assert!(err.contains("p99"), "error names p99: {err}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn measured_numbers_stay_within_twenty_percent_of_baseline() {
     if cfg!(debug_assertions) {
         // Debug builds are not comparable with the release baseline.
         return;
     }
-    let measured = crate::relay_performance_ceiling::run_workload().await;
-    let current = ratios(
-        measured.defer_ops,
-        measured.relay_ops,
-        measured.defer_p50_us,
-        measured.relay_p50_us,
-        measured.defer_p99_us,
-        measured.relay_p99_us,
-    );
-    if let Err(text) = compare(&baseline_ratios(), &current) {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&measured.report).unwrap()
-        );
+    // Runs one after another: parallel runs would share the CPU and disturb each other.
+    let mut all = Vec::new();
+    let mut reports = Vec::new();
+    for _ in 0..RUNS {
+        let measured = crate::relay_performance_ceiling::run_workload().await;
+        all.push(ratios(
+            measured.defer_ops,
+            measured.relay_ops,
+            measured.defer_p50_us,
+            measured.relay_p50_us,
+            measured.defer_p99_us,
+            measured.relay_p99_us,
+        ));
+        reports.push(measured.report);
+    }
+    if let Err(text) = compare(&baseline_ratios(), &median_ratios(&all)) {
+        println!("{}", serde_json::to_string_pretty(&reports).unwrap());
         panic!("{text}");
     }
 }
