@@ -267,12 +267,11 @@ async fn queue_state_survives_a_pod_loss_in_a_three_replica_group() {
     )
     .await;
     assert_eq!(paused["control_state"], "Paused", "{paused}");
-    let cancel = http
-        .delete(format!("{base}/v1/queues/{QUEUE}/tasks/{TASK_A}"))
-        .send()
-        .await
-        .expect("DELETE task");
-    assert_eq!(cancel.status().as_u16(), 204, "cancel {TASK_A}");
+    assert_eq!(
+        delete_when_ready(&http, &format!("{base}/v1/queues/{QUEUE}/tasks/{TASK_A}")).await,
+        204,
+        "cancel {TASK_A}"
+    );
     assert_task(&http, &base, TASK_A, "Canceled").await;
     assert_queue(&http, &base, "Paused", 1).await;
     evidence(
@@ -419,14 +418,65 @@ fn task(id: &str, kind: &str, priority: u32) -> Value {
     })
 }
 
-/// Sends a request that must succeed and returns its JSON body.
+/// Sends a request until it answers 2xx, and returns its JSON body. A 5xx, a
+/// 3xx or a connection error is retried every 2 s until `API_TIMEOUT`; a 4xx
+/// fails at once.
 async fn send(request: reqwest::RequestBuilder) -> Value {
-    let response = request.send().await.expect("request");
-    let status = response.status();
-    let url = response.url().clone();
-    let body = response.text().await.expect("body");
-    assert!(status.is_success(), "{url}: {status}: {body}");
-    serde_json::from_str(&body).unwrap_or_else(|err| panic!("{url}: not JSON: {err}: {body}"))
+    let deadline = tokio::time::Instant::now() + API_TIMEOUT;
+    loop {
+        let attempt = request.try_clone().expect("cloneable request");
+        let last = match attempt.send().await {
+            Ok(response) if response.status().is_success() => {
+                let url = response.url().clone();
+                let body = response.text().await.expect("body");
+                return serde_json::from_str(&body)
+                    .unwrap_or_else(|err| panic!("{url}: not JSON: {err}: {body}"));
+            }
+            Ok(response) if response.status().is_client_error() => {
+                let url = response.url().clone();
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                panic!("{url}: {status}: {body}");
+            }
+            Ok(response) => {
+                let url = response.url().clone();
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                format!("{url}: {status}: {body}")
+            }
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no 2xx within {API_TIMEOUT:?}; last saw: {last}"
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+/// Sends `DELETE url` until it answers with a status other than 5xx, and
+/// returns that status code. A 5xx or a connection error is retried every 2 s
+/// until `API_TIMEOUT`; any other status, such as a 404, is returned at once.
+async fn delete_when_ready(http: &reqwest::Client, url: &str) -> u16 {
+    let deadline = tokio::time::Instant::now() + API_TIMEOUT;
+    loop {
+        let last = match http.delete(url).send().await {
+            Ok(response) if !response.status().is_server_error() => {
+                return response.status().as_u16();
+            }
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                format!("{url}: {status}: {body}")
+            }
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no answer other than 5xx within {API_TIMEOUT:?}; last saw: {last}"
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
 }
 
 async fn assert_queue(http: &reqwest::Client, base: &str, state: &str, terminal: u64) {
@@ -815,7 +865,7 @@ mod tests {
     use std::net::TcpListener;
     use std::thread::{self, JoinHandle};
 
-    use super::{put_scale_queue_when_ready, GROWN_REPLICAS, REPLICAS};
+    use super::{delete_when_ready, put_scale_queue_when_ready, send, GROWN_REPLICAS, REPLICAS};
 
     /// Voters that a Raft group of `voters` members tolerates losing (core rule:
     /// `n - (n / 2 + 1)`).
@@ -924,5 +974,50 @@ mod tests {
 
         assert!(panicked, "a 400 must panic");
         assert_eq!(server.join().expect("server thread"), 1);
+    }
+
+    #[tokio::test]
+    async fn send_retries_a_503_then_returns_the_body() {
+        let (base, server) = serve(vec![
+            ("503 Service Unavailable", r#"{"error":"unavailable"}"#),
+            ("200 OK", r#"{"ok":true}"#),
+        ]);
+        let http = reqwest::Client::new();
+
+        let body = send(http.get(format!("{base}/v1/queues/jobs"))).await;
+
+        assert_eq!(body["ok"], true, "{body}");
+        assert_eq!(server.join().expect("server thread"), 2);
+    }
+
+    #[test]
+    fn send_fails_at_once_on_a_4xx() {
+        let (base, server) = serve(vec![("404 Not Found", r#"{"error":"not_found"}"#)]);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let http = reqwest::Client::new();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.block_on(send(http.get(format!("{base}/v1/queues/jobs"))))
+        }))
+        .is_err();
+
+        assert!(panicked, "a 404 must panic");
+        assert_eq!(server.join().expect("server thread"), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_when_ready_retries_a_500_then_returns_204() {
+        let (base, server) = serve(vec![
+            ("500 Internal Server Error", "{}"),
+            ("204 No Content", ""),
+        ]);
+        let http = reqwest::Client::new();
+
+        let status = delete_when_ready(&http, &format!("{base}/x")).await;
+
+        assert_eq!(status, 204);
+        assert_eq!(server.join().expect("server thread"), 2);
     }
 }
