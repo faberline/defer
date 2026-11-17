@@ -13,4 +13,6 @@ ignore = [
     "RUSTSEC-2025-0134",
     # reason: unsafe-libyaml is unmaintained; it is locked by a dependency; expires: 2027-02-12
     "RUSTSEC-2024-0449",
+    # reason: chrono is unmaintained; it is locked by transitive dependencies and no safe upgrade exists; expires: 2027-02-12
+    "RUSTSEC-2026-0543",
 ]
