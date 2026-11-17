@@ -198,8 +198,10 @@ fn replica_bases(namespace: &str) -> Vec<String> {
 
 /// Reads `defer_dispatch_acked_total` and `defer_dispatch_dead_lettered_total`
 /// from `GET /metrics` of every base, and returns the sums. The counters are
-/// per process and only the Raft leader dispatches, so one replica can read 0
-/// while another one dispatched. A failing base fails the whole read.
+/// per process. Every replica runs the dispatcher, and the replica that leases
+/// a task (a follower forwards the lease to the leader) does the HTTP call and
+/// counts it, so one replica can read 0 while another one dispatched. A failing
+/// base fails the whole read.
 async fn read_dispatch_counters(
     http: &reqwest::Client,
     bases: &[String],
@@ -297,8 +299,10 @@ async fn test_2_dispatch_dead_lettered_on_non_2xx() {
 
 /// Test 3: GET /metrics of every replica shows defer_dispatch_acked_total and
 /// defer_dispatch_dead_lettered_total at least 1 in sum, and /readyz answers 200.
-/// Counters are per process and only the leader dispatches, so the test sums
-/// the counters of the three replicas instead of reading one through the Service.
+/// Counters are per process and every replica dispatches the tasks it leases, so
+/// the acked and the dead-lettered task can be counted on different replicas. The
+/// test sums the counters of the three replicas instead of reading one through
+/// the Service.
 /// The test creates its own acked and dead-lettered tasks, so it does not
 /// depend on the other tests or their order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
