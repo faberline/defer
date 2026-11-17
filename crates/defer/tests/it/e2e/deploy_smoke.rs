@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use super::{endpoint, evidence, try_kubectl, wait_for};
+use super::{endpoint, evidence, required_env, try_kubectl, wait_for};
 
 const SUITE: &str = "deploy_smoke";
 const QUEUE: &str = "deploy-smoke";
@@ -13,6 +13,8 @@ const POD: &str = "defer-0";
 const FIRST_POD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const API_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// replicasPerShard of k8s/overlays/gke-test/defer-cr.yaml; the pods are defer-0 .. defer-2.
+const REPLICAS: u32 = 3;
 
 /// Waits until defer-0 exists and is Ready.
 fn wait_for_ready_pod(timeout: Duration) -> String {
@@ -186,22 +188,46 @@ fn parse_counter(metrics: &str, name: &str) -> Option<u64> {
     None
 }
 
+/// The base URL of each replica, read through the headless Service, which
+/// publishes not-ready pods: `defer-<i>.defer-headless.<namespace>`.
+fn replica_bases(namespace: &str) -> Vec<String> {
+    (0..REPLICAS)
+        .map(|i| format!("http://defer-{i}.defer-headless.{namespace}.svc.cluster.local:7141"))
+        .collect()
+}
+
 /// Reads `defer_dispatch_acked_total` and `defer_dispatch_dead_lettered_total`
-/// from `GET /metrics`.
-async fn read_dispatch_counters(http: &reqwest::Client, base: &str) -> Result<(u64, u64), String> {
-    let text = http
-        .get(format!("{base}/metrics"))
-        .send()
-        .await
-        .map_err(|err| err.to_string())?
-        .text()
-        .await
-        .map_err(|err| err.to_string())?;
-    let acked = parse_counter(&text, "defer_dispatch_acked_total")
-        .ok_or_else(|| "missing defer_dispatch_acked_total".to_string())?;
-    let dead_lettered = parse_counter(&text, "defer_dispatch_dead_lettered_total")
-        .ok_or_else(|| "missing defer_dispatch_dead_lettered_total".to_string())?;
-    Ok((acked, dead_lettered))
+/// from `GET /metrics` of every base, and returns the sums. The counters are
+/// per process and only the Raft leader dispatches, so one replica can read 0
+/// while another one dispatched. A failing base fails the whole read.
+async fn read_dispatch_counters(
+    http: &reqwest::Client,
+    bases: &[String],
+) -> Result<(u64, u64), String> {
+    let mut acked_total = 0;
+    let mut dead_lettered_total = 0;
+    for base in bases {
+        let response = http
+            .get(format!("{base}/metrics"))
+            .send()
+            .await
+            .map_err(|err| format!("{base}: {err}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("{base}/metrics: {status}"));
+        }
+        let text = response
+            .text()
+            .await
+            .map_err(|err| format!("{base}: {err}"))?;
+        let acked = parse_counter(&text, "defer_dispatch_acked_total")
+            .ok_or_else(|| format!("{base}: missing defer_dispatch_acked_total"))?;
+        let dead_lettered = parse_counter(&text, "defer_dispatch_dead_lettered_total")
+            .ok_or_else(|| format!("{base}: missing defer_dispatch_dead_lettered_total"))?;
+        acked_total += acked;
+        dead_lettered_total += dead_lettered;
+    }
+    Ok((acked_total, dead_lettered_total))
 }
 
 /// Test 1: PUT /v1/queues/<q> then create a task whose target is
@@ -269,8 +295,10 @@ async fn test_2_dispatch_dead_lettered_on_non_2xx() {
     );
 }
 
-/// Test 3: GET /metrics shows defer_dispatch_acked_total and
-/// defer_dispatch_dead_lettered_total at least 1, and /readyz answers 200.
+/// Test 3: GET /metrics of every replica shows defer_dispatch_acked_total and
+/// defer_dispatch_dead_lettered_total at least 1 in sum, and /readyz answers 200.
+/// Counters are per process and only the leader dispatches, so the test sums
+/// the counters of the three replicas instead of reading one through the Service.
 /// The test creates its own acked and dead-lettered tasks, so it does not
 /// depend on the other tests or their order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -281,6 +309,7 @@ async fn test_3_metrics_and_readyz() {
         .timeout(Duration::from_secs(20))
         .build()
         .unwrap();
+    let bases = replica_bases(&required_env("NAMESPACE"));
 
     wait_healthy(&http, &base).await;
     put_queue(&http, &base).await;
@@ -294,7 +323,7 @@ async fn test_3_metrics_and_readyz() {
 
     let deadline = tokio::time::Instant::now() + API_TIMEOUT;
     let (acked, dead_lettered) = loop {
-        let last = match read_dispatch_counters(&http, &base).await {
+        let last = match read_dispatch_counters(&http, &bases).await {
             Ok((acked, dead_lettered)) if acked >= 1 && dead_lettered >= 1 => {
                 break (acked, dead_lettered);
             }
@@ -345,7 +374,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use super::send;
+    use super::{read_dispatch_counters, replica_bases, send};
 
     /// One complete HTTP/1.1 response with a JSON body; the connection closes after it.
     fn http_response(status: &str, body: &str) -> String {
@@ -396,6 +425,82 @@ mod tests {
         let body = send(reqwest::Client::new().get(url)).await;
 
         assert_eq!(body, json!({ "queue": "q" }));
+    }
+
+    /// `serve` returns `http://{addr}/v1/queues/q`; the base is the part before it.
+    fn base_of(url: &str) -> String {
+        url.trim_end_matches("/v1/queues/q").to_owned()
+    }
+
+    #[test]
+    fn replica_bases_names_each_pod_through_the_headless_service() {
+        assert_eq!(
+            replica_bases("ns"),
+            [
+                "http://defer-0.defer-headless.ns.svc.cluster.local:7141",
+                "http://defer-1.defer-headless.ns.svc.cluster.local:7141",
+                "http://defer-2.defer-headless.ns.svc.cluster.local:7141",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn read_dispatch_counters_sums_all_replicas() {
+        let a = base_of(
+            &serve(vec![http_response(
+                "200 OK",
+                "defer_dispatch_acked_total 1\ndefer_dispatch_dead_lettered_total 0\n",
+            )])
+            .await,
+        );
+        let b = base_of(
+            &serve(vec![http_response(
+                "200 OK",
+                "defer_dispatch_acked_total 0\ndefer_dispatch_dead_lettered_total 1\n",
+            )])
+            .await,
+        );
+        let c = base_of(
+            &serve(vec![http_response(
+                "200 OK",
+                "defer_dispatch_acked_total 0\ndefer_dispatch_dead_lettered_total 0\n",
+            )])
+            .await,
+        );
+
+        let counters = read_dispatch_counters(&reqwest::Client::new(), &[a, b, c]).await;
+
+        assert_eq!(counters, Ok((1, 1)));
+    }
+
+    #[tokio::test]
+    async fn read_dispatch_counters_reports_the_replica_that_fails() {
+        let a = base_of(
+            &serve(vec![http_response(
+                "200 OK",
+                "defer_dispatch_acked_total 1\ndefer_dispatch_dead_lettered_total 0\n",
+            )])
+            .await,
+        );
+        let b = base_of(&serve(vec![http_response("503 Service Unavailable", "no")]).await);
+
+        let err = read_dispatch_counters(&reqwest::Client::new(), &[a, b.clone()])
+            .await
+            .expect_err("a 503 replica must fail the read");
+
+        assert!(err.contains(&b), "{err}");
+        assert!(err.contains("503"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn read_dispatch_counters_fails_when_a_counter_is_missing() {
+        let a = base_of(&serve(vec![http_response("200 OK", "defer_requests_total 3\n")]).await);
+
+        let err = read_dispatch_counters(&reqwest::Client::new(), &[a])
+            .await
+            .expect_err("a missing counter must fail the read");
+
+        assert!(err.contains("missing defer_dispatch_acked_total"), "{err}");
     }
 
     #[tokio::test]
