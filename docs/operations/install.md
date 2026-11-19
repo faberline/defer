@@ -6,12 +6,16 @@ against `clients/openapi.json` or run against a local `defer serve`.
 
 ## Version
 
-The code on `main` is version `0.4.13`. `defer --version` prints it. No release
-tag or image exists yet; the first one is tracked by issue #108. Until then,
-build from source. The images named `defer:0.4.13` in `k8s/` are only local
-tags: build and load them yourself. The from-source image is built with
-`docker build -f Dockerfile -t defer:0.4.13 .`. `Dockerfile.release` needs a
-published release.
+The current release is `0.4.13`. Its git tag is `defer@0.4.13`, and its GitHub
+Release is at https://github.com/faberline/defer/releases/tag/defer%400.4.13.
+The image is `ghcr.io/faberline/defer:0.4.13`; the tag `latest` points to it.
+Pull it with `docker pull ghcr.io/faberline/defer:0.4.13`. `defer --version`
+prints `0.4.13` for a build from `main` at that release.
+
+You can still build from source. The images named `defer:0.4.13` in `k8s/` are
+only local tags: build and load them yourself, or replace them with
+`ghcr.io/faberline/defer:0.4.13`. The from-source image is built with
+`docker build -f Dockerfile -t defer:0.4.13 .`.
 
 ## Build the binary
 
@@ -92,7 +96,8 @@ an operator image.
    target/release/defer k8s crd render | kubectl apply -f -
    ```
 
-2. Set the image in `k8s/operator/deployment.yaml`, then apply the operator:
+2. Set `image:` in `k8s/operator/deployment.yaml` to `ghcr.io/faberline/defer:0.4.13`
+   (or to your own build), then apply the operator:
 
    ```bash
    kubectl apply -k k8s/operator
@@ -107,8 +112,10 @@ an operator image.
    apply it:
 
    ```bash
-   target/release/defer k8s instance render --profile prod --name defer --namespace production --image <your image> --out defer.yaml
+   target/release/defer k8s instance render --profile prod --name defer --namespace production --image ghcr.io/faberline/defer:0.4.13 --out defer.yaml
    ```
+
+   Use your own image name when you build from source.
 
    Edit `backup.destination` in `defer.yaml` (the render prints
    `s3://REPLACE_ME/defer`), then:
