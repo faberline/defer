@@ -1,5 +1,5 @@
 {
-  "openapi": "3.0.3",
+  "openapi": "3.1.0",
   "info": {
     "title": "Defer HTTP API",
     "description": "Raft-backed delayed HTTP push queue over HTTP/1.1 and h2c.",
@@ -7,7 +7,8 @@
       "name": "Faberline contributors"
     },
     "license": {
-      "name": "MIT"
+      "name": "MIT",
+      "identifier": "MIT"
     },
     "version": "snapshot"
   },
@@ -109,7 +110,6 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "nullable": true,
               "minimum": 0
             }
           },
@@ -119,8 +119,7 @@
             "description": "Page token of previous page",
             "required": false,
             "schema": {
-              "type": "string",
-              "nullable": true
+              "type": "string"
             }
           }
         ],
@@ -418,8 +417,7 @@
             "description": "Filter by task state (scheduled, leased, succeeded, dead_lettered, canceled)",
             "required": false,
             "schema": {
-              "type": "string",
-              "nullable": true
+              "type": "string"
             }
           },
           {
@@ -429,7 +427,6 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "nullable": true,
               "minimum": 0
             }
           },
@@ -439,8 +436,7 @@
             "description": "Last task_id of previous page",
             "required": false,
             "schema": {
-              "type": "string",
-              "nullable": true
+              "type": "string"
             }
           }
         ],
@@ -714,9 +710,11 @@
         ],
         "properties": {
           "dispatch_deadline_ms": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
-            "nullable": true,
             "minimum": 0
           },
           "max_attempts": {
@@ -825,17 +823,21 @@
             "$ref": "#/components/schemas/DispatchDisposition"
           },
           "target_status": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
-            "nullable": true,
             "minimum": 0
           },
           "task_id": {
             "type": "string"
           },
           "transport_error": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -880,8 +882,10 @@
             "$ref": "#/components/schemas/MembershipOp"
           },
           "url": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -936,8 +940,10 @@
         ],
         "properties": {
           "next_page_token": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "queues": {
             "type": "array",
@@ -964,9 +970,11 @@
             "minimum": 0
           },
           "max_backoff_ms": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
-            "nullable": true,
             "minimum": 0
           },
           "max_burst_size": {
@@ -983,9 +991,11 @@
             "minimum": 0
           },
           "max_doublings": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
-            "nullable": true,
             "minimum": 0
           },
           "max_in_flight": {
@@ -998,9 +1008,11 @@
             "minimum": 0
           },
           "terminal_retention_ms": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
-            "nullable": true,
             "minimum": 0
           }
         }
@@ -1054,6 +1066,9 @@
             "type": "object",
             "additionalProperties": {
               "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
             }
           },
           "method": {
@@ -1071,8 +1086,10 @@
         ],
         "properties": {
           "next_cursor": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "tasks": {
             "type": "array",

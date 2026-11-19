@@ -20,12 +20,12 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use service_auth::{AuditedRoleMapPrincipal, ReloadableRoleMapVerifier, Role};
-use service_http::{ApiErr, MetricsProvider};
+use service_http::{ApiErr, ErrorEnvelope, MetricsProvider};
 
 use defer_access as auth;
-use defer_dispatch::DispatchDisposition;
+use defer_dispatch::{DispatchDisposition, DispatchReport};
 use defer_replication::ProposeError;
-use defer_shared_kernel::{CreateTask, QueuePolicy, SchedulerError};
+use defer_shared_kernel::{CreateTask, QueuePolicy, QueueSnapshot, SchedulerError};
 use raft_runtime::{
     AdmissionRefused, DemotionRefused, Index, NodeId, PromotionRefused, RemovalRefused,
 };
