@@ -148,8 +148,10 @@ gh workflow run gke-acceptance.yml --repo faberline/defer --ref main -f commit=<
 gh run watch <run id> --repo faberline/defer
 gh run view <run id> --repo faberline/defer --json databaseId,attempt,conclusion,status,url,headSha,event,workflowName,displayTitle,jobs > gh-run.json
 gh run download <run id> --repo faberline/defer --name gke-acceptance-evidence-<run id>-<attempt> --dir evidence
-python3 scripts/release/make-gke-release-receipt.py --app defer --backend gke-acceptance --candidate-manifest <final-candidate-manifest.json> --gh-run gh-run.json --evidence-dir evidence --output defer-gke-receipt.json
+aw release-receipt --app defer --backend gke-acceptance --candidate-manifest <final-candidate-manifest.json> --gh-run gh-run.json --evidence-dir evidence --output defer-gke-receipt.json
 ```
+
+Install aw from the pinned commit of `.github/workflows/ci.yml` (step "Install aw").
 
 - The run is paid: about 14 TWD per hour for 4 nodes, two suites, about 60 to
   90 minutes in all.

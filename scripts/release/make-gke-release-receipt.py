@@ -14,6 +14,10 @@ The gcp backend is the shared twin's sift route; this copy refuses it for
 defer. The evidence bundle carries a kubeconfig; this script never reads,
 hashes, or copies it. `--self-test` exercises the defer backend on synthetic
 evidence, including the negative controls, without any network access.
+
+This file is kept as the fixture builder of verify-release-contract.py and as
+the source of the constants that aw T2 checks. The receipt itself is made by
+`aw release-receipt`.
 """
 
 from __future__ import annotations

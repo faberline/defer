@@ -2,7 +2,7 @@
 # test cluster (faberline-test). The run deploys the candidate image by digest
 # (it never rebuilds the server image), runs the two acceptance suites one
 # after the other, and uploads the evidence bundle that
-# scripts/release/make-gke-release-receipt.py --backend gke-acceptance reads.
+# aw release-receipt --backend gke-acceptance reads.
 #
 # Dispatch by hand, on the head of main at the candidate commit:
 #   gh workflow run gke-acceptance.yml --repo faberline/defer --ref main \
