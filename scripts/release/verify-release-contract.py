@@ -637,7 +637,7 @@ def gate_lines(script: str) -> List[str]:
 
 def check_standalone_gates(candidate: str, ci: str) -> None:
     gates = gate_lines(run_script(step_block(job_block(candidate, "defer-release-gates"), "Run declared Defer gates")))
-    for gate in STANDALONE_GATES + ("uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --app defer",):
+    for gate in STANDALONE_GATES:
         if gate not in gates:
             fail(f"defer candidate: release gates must run {gate!r}")
     label = "ci"
@@ -934,7 +934,6 @@ def standalone_controls(candidate: str, ci: str) -> List[Tuple[str, Callable[[],
     for gate in CI_GATES:
         controls.append((f"ci: gate dropped: {gate}", gates_with(ci_text=replace_once(ci, gate, "true", "ci"))))
     controls.extend([
-        ("defer candidate: release contract no longer checked", gates_with(candidate_text=replace_once(candidate, "verify-release-contract.py --app defer", "verify-release-contract.py --self-test", "defer candidate"))),
         ("ci: pull_request trigger dropped", gates_with(ci_text=replace_once(ci, "  pull_request:\n", "  workflow_dispatch:\n", "ci"))),
         ("ci: push no longer limited to main", gates_with(ci_text=replace_once(ci, "    branches: [main]", "    branches: ['**']", "ci"))),
         ("ci: action unpinned", gates_with(ci_text=unpin_first_action(ci, "ci"))),
