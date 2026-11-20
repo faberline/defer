@@ -66,6 +66,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          aw release-contract --app defer
           python3 -B scripts/release/verify-release-contract.py --app defer
           python3 -B scripts/release/make-gke-release-receipt.py --self-test
 
