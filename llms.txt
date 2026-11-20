@@ -27,4 +27,4 @@
 - Lint: `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - Test: `cargo test --locked --workspace`
 - Operator: `cargo test -p defer --features operator --test it -- operator::`
-- Product docs: `python3 -B scripts/meta/project_docs_contract.py check .`
+- Product docs: `aw metadoc check .`

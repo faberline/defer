@@ -30,7 +30,7 @@ test selection checks, numeric limits and exact-head/base evidence.
 | format | `cargo fmt --all -- --check` |
 | lint | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |
 | operator | `cargo test -p defer --features operator --test it -- operator::` |
-| product documents | `python3 -B scripts/meta/project_docs_contract.py check .` |
+| product documents | `aw metadoc check .` |
 
 ## Adding an HTTP route
 

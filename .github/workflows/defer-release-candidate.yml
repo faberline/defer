@@ -174,6 +174,12 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: defer-candidate-release-gates
+      - name: Install aw
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install --locked --git https://github.com/faberline/aw --rev db865eec66388dd53ec68b0770a44443525daff2 --root "$RUNNER_TEMP/aw" aw
+          echo "$RUNNER_TEMP/aw/bin" >> "$GITHUB_PATH"
       - name: Run declared Defer gates
         shell: bash
         run: |
@@ -183,7 +189,7 @@ jobs:
           cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
           cargo test --locked --workspace
           cargo test --locked -p defer --features operator --test it -- operator::
-          python3 -B scripts/meta/project_docs_contract.py check .
+          aw metadoc check .
           uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --app defer
 
   ghcr-image-and-attest:
