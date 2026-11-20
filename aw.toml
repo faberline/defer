@@ -32,7 +32,6 @@ candidate_gates = [
   "cargo test --locked -p defer --features operator --test it -- operator::",
   "aw metadoc check .",
   "aw release-contract --app defer",
-  "uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --app defer",
 ]
 ci_gates = [
   "cargo fmt --all -- --check",
