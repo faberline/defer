@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex};
 use defer_shared_kernel::{DeferScheduler, QueueControlState};
 use raft_runtime::{Index, OutcomeWindow, ProposalCache, RaftStateMachine, StateMachineError};
 
-use super::command::{DeferCommand, DeferEnvelope, DeferOutcome, ProposalId, SchedulerSnapshot};
+use super::command::{
+    DeferCommand, DeferEnvelope, DeferOutcome, ProposalId, SchedulerSnapshot, FORMAT_VERSION,
+};
 
 pub struct DeferStateMachine {
     scheduler: Arc<Mutex<DeferScheduler>>,
@@ -136,8 +138,7 @@ impl RaftStateMachine for DeferStateMachine {
         if index.get() <= self.applied.load(Ordering::Acquire) && self.skip_replayed {
             return Ok(());
         }
-        let envelope: DeferEnvelope =
-            serde_json::from_slice(command).map_err(StateMachineError::other)?;
+        let envelope = DeferEnvelope::decode(command).map_err(StateMachineError::other)?;
         let cached = self
             .completed
             .lock()
@@ -158,6 +159,7 @@ impl RaftStateMachine for DeferStateMachine {
 
     fn snapshot(&self, writer: &mut dyn std::io::Write) -> Result<(), StateMachineError> {
         let bytes = serde_json::to_vec(&SchedulerSnapshot {
+            format_version: FORMAT_VERSION,
             up_to: self.applied_index(),
             scheduler: self
                 .scheduler
@@ -180,8 +182,7 @@ impl RaftStateMachine for DeferStateMachine {
         reader
             .read_to_end(&mut bytes)
             .map_err(StateMachineError::other)?;
-        let snapshot: SchedulerSnapshot =
-            serde_json::from_slice(&bytes).map_err(StateMachineError::other)?;
+        let snapshot = SchedulerSnapshot::decode(&bytes).map_err(StateMachineError::other)?;
         *self.scheduler.lock().expect("scheduler mutex poisoned") = snapshot.scheduler;
         self.completed
             .lock()

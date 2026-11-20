@@ -20,7 +20,7 @@ use raft_runtime::{
     PeerTransport, PromotionRefused, RaftHost, RaftStateMachine, RemovalRefused, SnapshotPolicy,
 };
 
-use super::command::{DeferCommand, DeferEnvelope, DeferOutcome, ProposalId};
+use super::command::{DeferCommand, DeferEnvelope, DeferOutcome, ProposalId, FORMAT_VERSION};
 use super::error::{ProposeError, ProposeResult};
 use super::state_machine::DeferStateMachine;
 
@@ -163,6 +163,7 @@ impl DeferRaft {
 
     async fn propose(&self, command: DeferCommand) -> Result<DeferOutcome> {
         let envelope = DeferEnvelope {
+            format_version: FORMAT_VERSION,
             proposal_id: ProposalId {
                 node: self.node_id,
                 session: self.session,
