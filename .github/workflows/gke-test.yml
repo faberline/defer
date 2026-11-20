@@ -13,6 +13,7 @@
 #   operator_recovery  k8s/gke-test-job/operator_recovery  operator topology (3 replicas) and pod loss recovery
 #   capacity_policy    k8s/gke-test-job/capacity_policy    capacity controller scales out on a low CPU threshold (manual only, not in all)
 #   backup_restore     k8s/gke-test-job/backup_restore     backup and restore into a new group through a ConfigMap seed (manual only, not in all)
+#   rolling_upgrade    k8s/gke-test-job/rolling_upgrade    roll a 3-replica group from a previous image to the current one (manual only, not in all)
 #   deploy_smoke       k8s/gke-test-job/deploy_smoke       dispatch journey and metrics diagnostics
 # Manual only: a dispatch picks one suite or all. ci.yml runs the same jobs as its e2e stage.
 #
@@ -32,8 +33,12 @@ on:
       suite:
         description: Suite to run; all runs every suite, one at a time.
         type: choice
-        options: [all, operator_recovery, deploy_smoke, capacity_policy, backup_restore]
+        options: [all, operator_recovery, deploy_smoke, capacity_policy, backup_restore, rolling_upgrade]
         default: all
+      previous_image:
+        description: Image of the previous release for suite rolling_upgrade, as ghcr.io/faberline/defer@sha256:<64 hex>; empty for every other suite.
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -153,6 +158,7 @@ jobs:
           RAW_IMAGE: ${{ needs.image.outputs.image }}
           # A pull request has no inputs, so it runs all suites.
           INPUT_SUITE: ${{ inputs.suite || 'all' }}
+          INPUT_PREVIOUS_IMAGE: ${{ inputs.previous_image || '' }}
         run: |
           set -euo pipefail
           die() { echo "::error::$*" >&2; exit 1; }
@@ -178,12 +184,21 @@ jobs:
           fi
           [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "no single linux/amd64 digest for $image"
 
+          if [[ "$INPUT_SUITE" == rolling_upgrade ]]; then
+            [[ "$INPUT_PREVIOUS_IMAGE" =~ ^ghcr\.io/faberline/defer@sha256:[0-9a-f]{64}$ ]] \
+              || die "suite rolling_upgrade needs previous_image as ghcr.io/faberline/defer@sha256:<64 hex>, got: $INPUT_PREVIOUS_IMAGE"
+            [[ "$INPUT_PREVIOUS_IMAGE" != "$image" ]] || die "previous_image must differ from the image under test"
+          elif [[ -n "$INPUT_PREVIOUS_IMAGE" ]]; then
+            die "previous_image is only for suite rolling_upgrade"
+          fi
+
           case "$INPUT_SUITE" in
             all) suites='["operator_recovery", "deploy_smoke"]' ;;
             capacity_policy) suites='["capacity_policy"]' ;;
             backup_restore) suites='["backup_restore"]' ;;
+            rolling_upgrade) suites='["rolling_upgrade"]' ;;
             operator_recovery | deploy_smoke) suites="[\"${INPUT_SUITE}\"]" ;;
-            *) die "suite must be all, operator_recovery, deploy_smoke, capacity_policy, or backup_restore, got: $INPUT_SUITE" ;;
+            *) die "suite must be all, operator_recovery, deploy_smoke, capacity_policy, backup_restore, or rolling_upgrade, got: $INPUT_SUITE" ;;
           esac
 
           {
@@ -194,6 +209,7 @@ jobs:
             echo "E2E_EXPECTED_GIT_SHA=${git_sha}"
             echo "E2E_EXPECTED_IMAGE=${image}"
             echo "E2E_EXPECTED_RUNTIME_DIGEST=${runtime_digest}"
+            if [[ -n "$INPUT_PREVIOUS_IMAGE" ]]; then echo "E2E_PREVIOUS_IMAGE=${INPUT_PREVIOUS_IMAGE}"; fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           {
@@ -205,6 +221,7 @@ jobs:
             echo "git_sha:        ${git_sha}"
             echo "runtime_digest: ${runtime_digest}"
             echo "suites:         ${suites}"
+            echo "previous_image: ${INPUT_PREVIOUS_IMAGE:-none}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
