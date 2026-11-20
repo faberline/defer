@@ -1,0 +1,27 @@
+{
+  "format_version": 1,
+  "proposal_id": {
+    "node": 1,
+    "session": 9,
+    "sequence": 2
+  },
+  "command": {
+    "op": "create_task",
+    "queue": "jobs",
+    "task": {
+      "task_id": "one",
+      "target": {
+        "url": "http://example.test/dispatch",
+        "method": "POST",
+        "headers": {}
+      },
+      "payload": {
+        "id": "one"
+      },
+      "schedule_at": "1970-01-01T00:00:01Z",
+      "priority": 10,
+      "max_attempts": 3,
+      "dispatch_deadline_ms": null
+    }
+  }
+}

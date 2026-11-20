@@ -106,15 +106,72 @@ pub(super) struct ProposalId {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct DeferEnvelope {
+    #[serde(default)]
+    pub(super) format_version: u32,
     pub(super) proposal_id: ProposalId,
     pub(super) command: DeferCommand,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct SchedulerSnapshot {
+    #[serde(default)]
+    pub(super) format_version: u32,
     pub(super) up_to: Index,
     pub(super) scheduler: DeferScheduler,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) completed_proposals: Vec<(ProposalId, DeferOutcome)>,
+}
+
+/// Version of the JSON shape of `DeferEnvelope` (raft log entries) and
+/// `SchedulerSnapshot`. 0 means data written before the field existed; its
+/// shape equals version 1. Raise it only when a new binary can no longer read
+/// what an older one wrote, or the reverse, and say so in
+/// docs/operations/compatibility.md.
+pub(super) const FORMAT_VERSION: u32 = 1;
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum FormatError {
+    #[error("malformed {what}: {source}")]
+    Malformed {
+        what: &'static str,
+        source: serde_json::Error,
+    },
+    #[error(
+        "{what} has format_version {found}, but this binary reads up to {}; run a newer defer",
+        FORMAT_VERSION
+    )]
+    Newer { what: &'static str, found: u32 },
+}
+
+fn check_format_version(what: &'static str, found: u32) -> Result<(), FormatError> {
+    if found > FORMAT_VERSION {
+        Err(FormatError::Newer { what, found })
+    } else {
+        Ok(())
+    }
+}
+
+impl SchedulerSnapshot {
+    pub(super) fn decode(bytes: &[u8]) -> Result<Self, FormatError> {
+        let snapshot: Self =
+            serde_json::from_slice(bytes).map_err(|source| FormatError::Malformed {
+                what: "snapshot",
+                source,
+            })?;
+        check_format_version("snapshot", snapshot.format_version)?;
+        Ok(snapshot)
+    }
+}
+
+impl DeferEnvelope {
+    pub(super) fn decode(bytes: &[u8]) -> Result<Self, FormatError> {
+        let envelope: Self =
+            serde_json::from_slice(bytes).map_err(|source| FormatError::Malformed {
+                what: "log entry",
+                source,
+            })?;
+        check_format_version("log entry", envelope.format_version)?;
+        Ok(envelope)
+    }
 }
 // HANDWRITE-END
