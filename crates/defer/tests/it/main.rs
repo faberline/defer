@@ -21,6 +21,7 @@ mod perf_gate;
 mod process_journey;
 mod process_security;
 mod product_docs_gate;
+mod quickstart_doc;
 mod raft_peer_mtls;
 mod raft_scheduler;
 mod rate_limits;
