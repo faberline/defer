@@ -3,6 +3,7 @@
 This page states what defer promises across versions, and what it does not.
 Each statement names the code or test behind it. A statement with no backing
 is written as "not promised".
+The policy for 0.x is in [compatibility.md](compatibility.md).
 
 ## HTTP API
 
@@ -13,11 +14,7 @@ is written as "not promised".
   `crates/defer-queue/src/openapi.rs`, which fails on any route or schema
   drift, and by `offline_spec_and_typed_client_generation_use_one_contract` in
   `crates/defer/tests/it/cli_contract.rs`.
-- Not promised: that a change keeps old clients working. The snapshot test
-  catches a change; it does not classify it. `info.version` is the fixed
-  string `snapshot`, so the file carries no API version. defer has no API
-  version and no deprecation policy; read the diff of `clients/openapi.json`
-  between releases.
+- The snapshot test catches a change; it does not classify it. `info.version` is the fixed string `snapshot`. What stays compatible inside 0.x, and how a break is announced, is in [compatibility.md](compatibility.md).
 
 ## Snapshot and Raft log format
 
@@ -29,19 +26,15 @@ is written as "not promised".
   completed_proposals }`, defined in `crates/defer-replication/src/raft/command.rs`.
   `snapshot` writes it and `restore` reads it, both in
   `crates/defer-replication/src/raft/state_machine.rs`.
-- Neither format has a version field. The one compatibility device in code is
-  `#[serde(default)]` on newer fields, such as `completed_proposals` in
-  `SchedulerSnapshot`.
+- Both formats carry `format_version` (current 1; absent reads as 0). A binary refuses a higher version; see `snapshot_from_a_newer_version_is_refused` and `log_entry_from_a_newer_version_is_refused` in `crates/defer-replication/src/raft/tests.rs`. `#[serde(default)]` on newer fields, such as `completed_proposals`, stays the device for adding fields.
 - An unknown command variant (`DeferCommand` uses `#[serde(tag = "op")]`) or a
   malformed snapshot makes `apply` or `restore` return an error. So an older
   node can fail on a log entry that a newer leader committed.
 - Not promised:
-  - a newer binary reading an older log or snapshot;
   - an older binary reading a log or snapshot written by a newer one;
   - two versions in one group at the same time.
 
-  No test in the repository proves any of these. The rolling upgrade test is
-  issue #110 and is not merged.
+  No test proves these two. The rolling-upgrade suite is tracked in #259 and #110.
 
 ## Rolling upgrade order
 
@@ -76,6 +69,4 @@ is written as "not promised".
 - To restore, start an empty data directory with `DEFER_BOOTSTRAP_SEED_URI`
   (listed in [README.md](README.md)). The seed is read once, and only into an
   empty directory ([ADR 0008](../adr/0008-cold-seed-into-empty-data-dir.md)).
-- The snapshot format has no version. A snapshot written by a newer binary may
-  fail to restore on an older one. Restore it only into a binary you have
-  tested.
+- A snapshot written by a newer binary carries a `format_version`. An older binary that reads a higher version refuses to restore it, with an error that names both versions. Restore it only into a binary that you have tested.
