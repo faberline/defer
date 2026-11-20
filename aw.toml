@@ -18,3 +18,33 @@ codegen.profile = "rust/score-crate"
 [standards.coverage]
 line = 83.28   # the measured value when it was last raised
 target = 100     # fixed
+
+[release.apps.defer]
+targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]
+compatibility_line = "- Compatibility: no HTTP, CLI, wire format, on-disk format, or Kubernetes manifest shape changed in this release."
+gates_step = "Run declared Defer gates"
+acceptance_run_name = "run-name: gke-acceptance {app} @ ${{ inputs.commit }} image=${{ inputs.image }}"
+acceptance_names = ["deploy + verify on GKE", "Verify prebuilt image input", "Run acceptance harness", "Park node pool (belt and suspenders)"]
+candidate_gates = [
+  "cargo fmt --all -- --check",
+  "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
+  "cargo test --locked --workspace",
+  "cargo test --locked -p defer --features operator --test it -- operator::",
+  "aw metadoc check .",
+  "aw release-contract --app defer",
+  "uv run --python 3.13 --no-project scripts/release/verify-release-contract.py --app defer",
+]
+ci_gates = [
+  "cargo fmt --all -- --check",
+  "cargo clippy --workspace --all-targets --locked -- -D warnings",
+  "cargo test --locked --workspace",
+  "cargo test --locked -p defer --features operator --test it -- operator::",
+  "aw metadoc check .",
+  "aw release-contract --app defer",
+]
+
+[release.apps.defer.maker_constants]
+ACCEPTANCE_JOB = "deploy + verify on GKE"
+VERIFY_IMAGE_STEP = "Verify prebuilt image input"
+HARNESS_STEP = "Run acceptance harness"
+PARK_STEP = "Park node pool (belt and suspenders)"

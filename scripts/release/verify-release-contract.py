@@ -128,6 +128,7 @@ STANDALONE_GATES = (
     "cargo test --locked --workspace",
     "cargo test --locked -p defer --features operator --test it -- operator::",
     "aw metadoc check .",
+    "aw release-contract --app defer",
 )
 # The gates ci.yml runs. Its lint stage is fixed by aw docs/standards/ci.md, so its clippy line has no --all-features; the candidate keeps the stronger line in STANDALONE_GATES.
 CI_GATES = (
@@ -136,6 +137,7 @@ CI_GATES = (
     "cargo test --locked --workspace",
     "cargo test --locked -p defer --features operator --test it -- operator::",
     "aw metadoc check .",
+    "aw release-contract --app defer",
 )
 
 
