@@ -34,6 +34,7 @@ This model covers the current source of defer. A claim here is backed only by th
 | T7 | A seed is restored into a live data directory. | The cold seed refuses a non-empty data directory. | `cargo test -p defer --test it -- http_api::` |
 | T8 | A stale executor settles a lease. | Fencing epoch on every lease; a stale settlement is refused. | `cargo test -p defer --test it -- raft_scheduler:: http_dispatch::` |
 | T9 | A vulnerable or unlicensed dependency enters the build. | `cargo deny check` and `cargo audit` in the `test: security` CI job. | `crates/defer/tests/it/security_gates.rs` |
+| T10 | A write or a login failure leaves no record of who did it. | Each mutating request and each 401 writes one `defer.audit` log event (time, principal, operation, queue, result); no payload and no secret. | `crates/defer/tests/it/request_audit.rs` |
 
 ## Open risks
 

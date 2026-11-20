@@ -5,6 +5,7 @@
 //! operation's default tag from it (`crate::server`), which is part of the
 //! published OpenAPI contract.
 
+mod audit;
 pub mod metrics;
 pub mod openapi;
 pub mod server;
