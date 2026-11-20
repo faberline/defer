@@ -83,9 +83,13 @@ fn router_inner(
         .route("/v1/queues/{queue}/dispatch", post(dispatch_one))
         .route("/admin/backup", get(admin_backup))
         .route("/v1/admin/membership", post(admin_membership))
+        .route_layer(axum::middleware::from_fn(crate::audit::audit_authenticated))
         .route_layer(from_fn_with_state(
             verifier,
             service_auth::auth_middleware::<ReloadableRoleMapVerifier>,
+        ))
+        .route_layer(axum::middleware::from_fn(
+            crate::audit::audit_unauthenticated,
         ))
         .with_state(state.clone())
         // Data-plane-only request body cap (#2556); probes stay
