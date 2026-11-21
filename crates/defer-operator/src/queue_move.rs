@@ -6,8 +6,16 @@
 //! the import returned success. A failed import leaves the queue on the old
 //! shard; the next reconcile retries it.
 
+use crate::crd::QueueMoveStatus;
+use defer_queue::placement::QueuePlacement;
 use serde_json::Value;
-use shard_routing::BucketMove;
+use shard_routing::{BucketMove, VirtualBucketShardMap, DEFAULT_VIRTUAL_BUCKET_COUNT};
+use std::collections::HashSet;
+
+/// A queue move step: recorded, running, or done (#285).
+pub const MOVE_PENDING: &str = "pending";
+pub const MOVE_MOVING: &str = "moving";
+pub const MOVE_DONE: &str = "done";
 
 /// One step of a queue move.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,6 +31,7 @@ pub enum MoveError {
     Export(String),
     Import(String),
     Remove(String),
+    List(String),
 }
 
 impl std::fmt::Display for MoveError {
@@ -31,6 +40,7 @@ impl std::fmt::Display for MoveError {
             Self::Export(reason) => write!(f, "export failed: {reason}"),
             Self::Import(reason) => write!(f, "import failed: {reason}"),
             Self::Remove(reason) => write!(f, "remove failed: {reason}"),
+            Self::List(reason) => write!(f, "list failed: {reason}"),
         }
     }
 }
@@ -218,14 +228,175 @@ impl QueueMoveActuator for HttpQueueMoveActuator {
     }
 }
 
+/// Lists the queues of one shard (the old shards and the new ones of a raise).
+#[allow(async_fn_in_trait)]
+pub trait QueueLister {
+    async fn list_queues(&self, shard: u32) -> Result<Vec<String>, MoveError>;
+}
+
+impl QueueLister for HttpQueueMoveActuator {
+    /// Follows `next_page_token` of `GET /v1/queues` until the last page.
+    async fn list_queues(&self, shard: u32) -> Result<Vec<String>, MoveError> {
+        let base = (self.shard_url)(shard);
+        let mut names = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let mut url = reqwest::Url::parse(&base)
+                .map_err(|error| MoveError::List(format!("{base}: {error}")))?;
+            url.path_segments_mut()
+                .map_err(|()| MoveError::List(format!("{base} is not a base URL")))?
+                .extend(["v1", "queues"]);
+            url.query_pairs_mut().append_pair("page_size", "1000");
+            if let Some(token) = &page_token {
+                url.query_pairs_mut().append_pair("page_token", token);
+            }
+            let mut request = self.client.get(url);
+            if !self.token.is_empty() {
+                request = request.bearer_auth(&self.token);
+            }
+            let response = request
+                .send()
+                .await
+                .map_err(|error| MoveError::List(error.to_string()))?;
+            let status = response.status();
+            if !status.is_success() {
+                let text = response.text().await.unwrap_or_default();
+                return Err(MoveError::List(format!("{status}: {text}")));
+            }
+            let page: Value = response
+                .json()
+                .await
+                .map_err(|error| MoveError::List(error.to_string()))?;
+            let queues = page["queues"]
+                .as_array()
+                .ok_or_else(|| MoveError::List("no queues array".to_string()))?;
+            for item in queues {
+                let name = item["queue"]
+                    .as_str()
+                    .ok_or_else(|| MoveError::List("queue without a name".to_string()))?;
+                names.push(name.to_string());
+            }
+            match page["next_page_token"].as_str().filter(|t| !t.is_empty()) {
+                Some(token) => page_token = Some(token.to_string()),
+                None => return Ok(names),
+            }
+        }
+    }
+}
+
+/// The virtual bucket map of a Defer with `shards` shards: one shard, then one
+/// single split for each further shard (the convention of `split_one_shard`).
+pub fn shard_map(shards: u32) -> anyhow::Result<VirtualBucketShardMap> {
+    anyhow::ensure!(shards >= 1, "shards must be at least 1");
+    let mut map = VirtualBucketShardMap::balanced(1, DEFAULT_VIRTUAL_BUCKET_COUNT, 1)?;
+    for version in 2..=shards {
+        map = map.split_one_shard(u64::from(version))?;
+    }
+    Ok(map)
+}
+
+/// What one reconcile knows about a shard count change (#285).
+pub struct QueueMoveInput<'a> {
+    /// The queue move recorded in the status, if any.
+    pub recorded: Option<&'a QueueMoveStatus>,
+    /// Shards that the StatefulSet has now, before this reconcile's growth.
+    pub live_shards: u32,
+    /// `spec.cluster.shardCount`.
+    pub desired_shards: u32,
+    /// Settled voters of each shard after this reconcile's decision.
+    pub settled_shards: &'a [u32],
+    pub replicas_per_shard: u32,
+    pub live_replicas: u32,
+    pub ready_replicas: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum QueueMoveDecision {
+    Nothing,
+    Record(QueueMoveStatus),
+    Run { from_shards: u32, to_shards: u32 },
+}
+
+/// Decides what a reconcile does about a queue move. Pure: no I/O.
+pub fn plan_queue_move_step(input: &QueueMoveInput<'_>) -> QueueMoveDecision {
+    if let Some(recorded) = input.recorded.filter(|r| r.step != MOVE_DONE) {
+        let from = u32::try_from(recorded.from_shards).unwrap_or(0);
+        let to = u32::try_from(recorded.to_shards).unwrap_or(0);
+        let settled = input.settled_shards.len() == to as usize
+            && input
+                .settled_shards
+                .iter()
+                .all(|&voters| voters == input.replicas_per_shard);
+        let sized = input.live_replicas == to * input.replicas_per_shard;
+        if settled && input.ready_replicas == input.live_replicas && sized {
+            return QueueMoveDecision::Run {
+                from_shards: from,
+                to_shards: to,
+            };
+        }
+        return QueueMoveDecision::Nothing;
+    }
+    if input.live_shards >= 1 && input.live_shards < input.desired_shards {
+        return QueueMoveDecision::Record(QueueMoveStatus {
+            from_shards: input.live_shards as i32,
+            to_shards: input.desired_shards as i32,
+            step: MOVE_PENDING.to_string(),
+        });
+    }
+    QueueMoveDecision::Nothing
+}
+
+/// Moves the queues of a raise from `from_shards` to `to_shards` (#285). Lists
+/// the queues of the old shards and the new ones first, so a list error moves
+/// nothing. A queue that already sits on a new shard (an earlier run imported
+/// it and stopped) gets only the remove step.
+pub async fn drive_queue_move<A: QueueMoveActuator + QueueLister>(
+    actuator: &A,
+    from_shards: u32,
+    to_shards: u32,
+) -> Result<MoveReport, MoveError> {
+    let old = shard_map(from_shards).map_err(|error| MoveError::List(error.to_string()))?;
+    let new = shard_map(to_shards).map_err(|error| MoveError::List(error.to_string()))?;
+    let mut names = Vec::new();
+    for shard in 0..from_shards {
+        names.extend(actuator.list_queues(shard).await?);
+    }
+    names.sort();
+    names.dedup();
+    let mut on_target: HashSet<String> = HashSet::new();
+    for shard in from_shards..to_shards {
+        on_target.extend(actuator.list_queues(shard).await?);
+    }
+    let moves = QueuePlacement::new(old, 0)
+        .queues_to_move(&new, &names)
+        .map_err(|error| MoveError::List(error.to_string()))?;
+    let mut steps = Vec::new();
+    for (queue, bucket_move) in &moves {
+        if on_target.contains(queue) {
+            steps.push(MoveStep::Remove {
+                queue: queue.clone(),
+                from_shard: bucket_move.from_shard,
+            });
+        } else {
+            steps.extend(plan_queue_moves(std::slice::from_ref(&(
+                queue.clone(),
+                *bucket_move,
+            ))));
+        }
+    }
+    Ok(run_queue_moves(actuator, &steps).await)
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::crd::QueueMoveStatus;
     use crate::queue_move::{
-        plan_queue_moves, run_queue_moves, HttpQueueMoveActuator, MoveError, MoveReport, MoveStep,
-        QueueMoveActuator,
+        drive_queue_move, plan_queue_move_step, plan_queue_moves, run_queue_moves, shard_map,
+        HttpQueueMoveActuator, MoveError, MoveReport, MoveStep, QueueLister, QueueMoveActuator,
+        QueueMoveDecision, QueueMoveInput, MOVE_DONE, MOVE_MOVING, MOVE_PENDING,
     };
     use axum::{
-        extract::State,
+        extract::{Query, State},
         http::{HeaderMap, Method, StatusCode, Uri},
         routing::{get, put},
         Router,
@@ -233,7 +404,7 @@ mod tests {
     use defer_queue::placement::QueuePlacement;
     use serde_json::{json, Value};
     use shard_routing::{BucketMove, VirtualBucketShardMap, DEFAULT_VIRTUAL_BUCKET_COUNT};
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, HashSet, VecDeque};
     use std::sync::{Arc, Mutex};
 
     /// The moves of a split from one shard to two, for 100 queues `q0..q99`.
@@ -679,6 +850,426 @@ mod tests {
         let seen1 = seen1.lock().unwrap();
         assert_eq!(seen1.len(), 1);
         assert_eq!(seen1[0].method, "PUT");
+    }
+
+    // ---- shard map, list, planner and driver (#285) ----
+
+    /// Queues per shard (index = shard number) with the calls made on them.
+    struct Shards {
+        queues: Mutex<Vec<Vec<String>>>,
+        calls: Mutex<Vec<String>>,
+        /// Queues whose next import fails once (the failure is used up).
+        fail_import: Mutex<HashSet<String>>,
+        fail_list: bool,
+    }
+
+    impl Shards {
+        fn new(queues: Vec<Vec<String>>) -> Self {
+            Self {
+                queues: Mutex::new(queues),
+                calls: Mutex::default(),
+                fail_import: Mutex::default(),
+                fail_list: false,
+            }
+        }
+
+        fn record(&self, call: String) {
+            self.calls.lock().unwrap().push(call);
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+
+        /// The shards that hold the queue.
+        fn holder(&self, queue: &str) -> Vec<u32> {
+            self.queues
+                .lock()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .filter(|(_, names)| names.iter().any(|q| q == queue))
+                .map(|(shard, _)| shard as u32)
+                .collect()
+        }
+    }
+
+    impl QueueLister for Shards {
+        async fn list_queues(&self, shard: u32) -> Result<Vec<String>, MoveError> {
+            if self.fail_list {
+                return Err(MoveError::List("down".to_string()));
+            }
+            Ok(self
+                .queues
+                .lock()
+                .unwrap()
+                .get(shard as usize)
+                .cloned()
+                .unwrap_or_default())
+        }
+    }
+
+    impl QueueMoveActuator for Shards {
+        async fn export(&self, queue: &str, from_shard: u32) -> Result<Value, MoveError> {
+            self.record(format!("export({queue},{from_shard})"));
+            if self.holder(queue).contains(&from_shard) {
+                Ok(json!({"queue": queue}))
+            } else {
+                Err(MoveError::Export("not on this shard".to_string()))
+            }
+        }
+
+        async fn import(
+            &self,
+            queue: &str,
+            to_shard: u32,
+            _export: &Value,
+        ) -> Result<(), MoveError> {
+            self.record(format!("import({queue},{to_shard})"));
+            if self.fail_import.lock().unwrap().remove(queue) {
+                return Err(MoveError::Import("boom".to_string()));
+            }
+            let mut queues = self.queues.lock().unwrap();
+            while queues.len() <= to_shard as usize {
+                queues.push(Vec::new());
+            }
+            let target = &mut queues[to_shard as usize];
+            if !target.iter().any(|q| q == queue) {
+                target.push(queue.to_string());
+            }
+            Ok(())
+        }
+
+        async fn remove(&self, queue: &str, from_shard: u32) -> Result<(), MoveError> {
+            self.record(format!("remove({queue},{from_shard})"));
+            if let Some(names) = self.queues.lock().unwrap().get_mut(from_shard as usize) {
+                names.retain(|q| q != queue);
+            }
+            Ok(())
+        }
+    }
+
+    /// 100 queues `q0..q99`, all on shard 0.
+    fn hundred_on_shard_zero() -> Vec<Vec<String>> {
+        vec![(0..100).map(|i| format!("q{i}")).collect()]
+    }
+
+    /// The first of `q0..q99` that moves from shard 0 to shard 1 in a split to two shards.
+    fn first_queue_moving_to_one() -> String {
+        let two = shard_map(2).unwrap();
+        (0..100)
+            .map(|i| format!("q{i}"))
+            .find(|q| two.route_key("queue", q.as_str()).shard == 1)
+            .unwrap()
+    }
+
+    fn status(from: i32, to: i32, step: &str) -> QueueMoveStatus {
+        QueueMoveStatus {
+            from_shards: from,
+            to_shards: to,
+            step: step.to_string(),
+        }
+    }
+
+    #[test]
+    fn shard_map_one_is_single_and_each_step_is_one_split() {
+        assert_eq!(shard_map(1).unwrap().physical_shard_count(), 1);
+        assert_eq!(shard_map(3).unwrap().physical_shard_count(), 3);
+        let stepped = shard_map(2).unwrap().split_one_shard(3).unwrap();
+        for i in 0..100 {
+            let q = format!("q{i}");
+            assert_eq!(
+                shard_map(3).unwrap().route_key("queue", &q).shard,
+                stepped.route_key("queue", &q).shard,
+                "{q}"
+            );
+        }
+        assert!(shard_map(0).is_err());
+    }
+
+    #[tokio::test]
+    async fn raise_moves_only_the_listed_queues() {
+        let shards = Shards::new(hundred_on_shard_zero());
+
+        let report = drive_queue_move(&shards, 1, 2).await.unwrap();
+
+        assert!(report.failed.is_empty());
+        let two = shard_map(2).unwrap();
+        let expected: Vec<String> = (0..100)
+            .map(|i| format!("q{i}"))
+            .filter(|q| two.route_key("queue", q.as_str()).shard == 1)
+            .collect();
+        assert!(!expected.is_empty() && expected.len() < 100);
+        for i in 0..100 {
+            let q = format!("q{i}");
+            let want = two.route_key("queue", &q).shard;
+            assert_eq!(shards.holder(&q), vec![want], "{q}");
+        }
+        let exported = shards
+            .calls()
+            .into_iter()
+            .filter(|c| c.starts_with("export("))
+            .count();
+        assert_eq!(exported, expected.len());
+        assert_eq!(report.moved.len(), expected.len());
+    }
+
+    #[tokio::test]
+    async fn failed_import_keeps_the_queue_on_the_old_shard_and_the_next_run_retries() {
+        let moved = first_queue_moving_to_one();
+        let shards = Shards::new(hundred_on_shard_zero());
+        shards.fail_import.lock().unwrap().insert(moved.clone());
+
+        let first = drive_queue_move(&shards, 1, 2).await.unwrap();
+
+        assert_eq!(first.failed.len(), 1);
+        assert_eq!(first.failed[0].0, moved);
+        assert!(matches!(first.failed[0].1, MoveError::Import(_)));
+        assert_eq!(shards.holder(&moved), vec![0]);
+        assert!(!shards.calls().contains(&format!("remove({moved},0)")));
+
+        let second = drive_queue_move(&shards, 1, 2).await.unwrap();
+
+        assert!(second.failed.is_empty());
+        assert_eq!(shards.holder(&moved), vec![1]);
+    }
+
+    #[tokio::test]
+    async fn restart_after_import_before_remove_only_removes() {
+        let moved = first_queue_moving_to_one();
+        // A past run imported the queue to shard 1 and stopped before the remove.
+        let mut queues = hundred_on_shard_zero();
+        queues.push(vec![moved.clone()]);
+        let shards = Shards::new(queues);
+
+        let report = drive_queue_move(&shards, 1, 2).await.unwrap();
+
+        assert!(report.failed.is_empty());
+        let calls = shards.calls();
+        let export_prefix = format!("export({moved},");
+        let import_prefix = format!("import({moved},");
+        assert!(calls.contains(&format!("remove({moved},0)")), "{calls:?}");
+        assert!(!calls.iter().any(|c| c.starts_with(export_prefix.as_str())));
+        assert!(!calls.iter().any(|c| c.starts_with(import_prefix.as_str())));
+        assert_eq!(shards.holder(&moved), vec![1]);
+    }
+
+    #[tokio::test]
+    async fn list_failure_moves_nothing() {
+        let shards = Shards {
+            fail_list: true,
+            ..Shards::new(hundred_on_shard_zero())
+        };
+
+        let result = drive_queue_move(&shards, 1, 2).await;
+
+        assert!(matches!(result, Err(MoveError::List(_))));
+        assert!(shards.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn raise_by_two_lists_every_old_and_new_shard() {
+        let old = shard_map(2).unwrap();
+        let mut by_shard: Vec<Vec<String>> = vec![Vec::new(), Vec::new()];
+        for i in 0..100 {
+            let q = format!("q{i}");
+            by_shard[old.route_key("queue", &q).shard as usize].push(q);
+        }
+        let shards = Shards::new(by_shard);
+
+        let report = drive_queue_move(&shards, 2, 4).await.unwrap();
+
+        assert!(report.failed.is_empty());
+        let four = shard_map(4).unwrap();
+        for i in 0..100 {
+            let q = format!("q{i}");
+            let want = four.route_key("queue", &q).shard;
+            assert_eq!(shards.holder(&q), vec![want], "{q}");
+        }
+    }
+
+    /// Answers `GET /v1/queues`: the first page is `a` and `b`, the page after `b` is `c`.
+    async fn list_page(
+        State(server): State<Server>,
+        Query(query): Query<HashMap<String, String>>,
+        headers: HeaderMap,
+    ) -> (StatusCode, String) {
+        let auth = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        server.seen.lock().unwrap().push(Call {
+            method: "GET".to_string(),
+            path: "/v1/queues".to_string(),
+            auth,
+            body: json!({
+                "page_size": query.get("page_size"),
+                "page_token": query.get("page_token"),
+            }),
+        });
+        if !server.status.is_success() {
+            return (server.status, server.body.clone());
+        }
+        let body = match query.get("page_token").map(String::as_str) {
+            None => r#"{"queues":[{"queue":"a"},{"queue":"b"}],"next_page_token":"b"}"#,
+            Some("b") => r#"{"queues":[{"queue":"c"}]}"#,
+            Some(_) => r#"{"queues":[]}"#,
+        };
+        (server.status, body.to_string())
+    }
+
+    async fn spawn_list(status: u16, body: &str) -> (String, Seen) {
+        let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/v1/queues", get(list_page))
+            .with_state(Server {
+                seen: seen.clone(),
+                status: StatusCode::from_u16(status).unwrap(),
+                body: body.to_string(),
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    #[tokio::test]
+    async fn http_list_queues_follows_the_page_token() {
+        let (url, seen) = spawn_list(200, "").await;
+
+        let result = actuator(url, "tok").list_queues(0).await;
+
+        assert_eq!(
+            result,
+            Ok(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(
+            seen[0].body,
+            json!({"page_size": "1000", "page_token": null})
+        );
+        assert_eq!(
+            seen[1].body,
+            json!({"page_size": "1000", "page_token": "b"})
+        );
+        assert!(seen.iter().all(|c| c.auth.as_deref() == Some("Bearer tok")));
+    }
+
+    #[tokio::test]
+    async fn http_list_queues_failure_status_is_an_error() {
+        let (url, _seen) = spawn_list(500, "boom").await;
+
+        let result = actuator(url, "tok").list_queues(0).await;
+
+        assert!(matches!(result, Err(MoveError::List(_))));
+    }
+
+    #[test]
+    fn queue_move_step_records_a_raise() {
+        let decision = plan_queue_move_step(&QueueMoveInput {
+            recorded: None,
+            live_shards: 1,
+            desired_shards: 2,
+            settled_shards: &[],
+            replicas_per_shard: 3,
+            live_replicas: 3,
+            ready_replicas: 3,
+        });
+        assert_eq!(
+            decision,
+            QueueMoveDecision::Record(status(1, 2, MOVE_PENDING))
+        );
+    }
+
+    #[test]
+    fn queue_move_step_does_nothing_without_a_raise() {
+        let done = status(1, 2, MOVE_DONE);
+        let base = QueueMoveInput {
+            recorded: None,
+            live_shards: 2,
+            desired_shards: 2,
+            settled_shards: &[3, 3],
+            replicas_per_shard: 3,
+            live_replicas: 6,
+            ready_replicas: 6,
+        };
+        assert_eq!(plan_queue_move_step(&base), QueueMoveDecision::Nothing);
+        let after_done = QueueMoveInput {
+            recorded: Some(&done),
+            ..base
+        };
+        assert_eq!(
+            plan_queue_move_step(&after_done),
+            QueueMoveDecision::Nothing
+        );
+    }
+
+    #[test]
+    fn queue_move_step_waits_until_every_shard_is_settled() {
+        let pending = status(1, 2, MOVE_PENDING);
+        let input = |settled: &'static [u32], ready: u32| QueueMoveInput {
+            recorded: Some(&pending),
+            live_shards: 2,
+            desired_shards: 2,
+            settled_shards: settled,
+            replicas_per_shard: 3,
+            live_replicas: 6,
+            ready_replicas: ready,
+        };
+        assert_eq!(
+            plan_queue_move_step(&input(&[3, 1], 6)),
+            QueueMoveDecision::Nothing
+        );
+        assert_eq!(
+            plan_queue_move_step(&input(&[3, 3], 5)),
+            QueueMoveDecision::Nothing
+        );
+        assert_eq!(
+            plan_queue_move_step(&input(&[3, 3], 6)),
+            QueueMoveDecision::Run {
+                from_shards: 1,
+                to_shards: 2
+            }
+        );
+    }
+
+    #[test]
+    fn queue_move_step_resumes_a_moving_record_and_starts_a_new_raise_after_done() {
+        let moving = status(1, 2, MOVE_MOVING);
+        let resumed = QueueMoveInput {
+            recorded: Some(&moving),
+            live_shards: 2,
+            desired_shards: 2,
+            settled_shards: &[3, 3],
+            replicas_per_shard: 3,
+            live_replicas: 6,
+            ready_replicas: 6,
+        };
+        assert_eq!(
+            plan_queue_move_step(&resumed),
+            QueueMoveDecision::Run {
+                from_shards: 1,
+                to_shards: 2
+            }
+        );
+
+        let done = status(1, 2, MOVE_DONE);
+        let next_raise = QueueMoveInput {
+            recorded: Some(&done),
+            live_shards: 2,
+            desired_shards: 3,
+            settled_shards: &[3, 3],
+            replicas_per_shard: 3,
+            live_replicas: 6,
+            ready_replicas: 6,
+        };
+        assert_eq!(
+            plan_queue_move_step(&next_raise),
+            QueueMoveDecision::Record(status(2, 3, MOVE_PENDING))
+        );
     }
 }
 

@@ -289,6 +289,18 @@ impl std::ops::Deref for DeferBackupSpec {
     }
 }
 
+/// The queue move that follows a shardCount raise (#285).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueMoveStatus {
+    /// Shard count before the raise.
+    pub from_shards: i32,
+    /// Shard count the raise asked for.
+    pub to_shards: i32,
+    /// `pending` (recorded, waits for settled shards), `moving` (a run left failures) or `done`.
+    pub step: String,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeferStatus {
@@ -308,6 +320,9 @@ pub struct DeferStatus {
     /// Settled replica count of each shard, by shard number (#270). Missing means every live shard is settled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settled_shards: Option<Vec<i32>>,
+    /// The queue move of the last shardCount raise (#285). Missing means no move was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_move: Option<QueueMoveStatus>,
 }
 
 fn default_storage() -> String {
@@ -524,6 +539,27 @@ mod shard_count_tests {
         };
         let value = serde_json::to_value(shards).unwrap();
         assert_eq!(value["settledShards"], json!([3, 1]));
+    }
+
+    #[test]
+    fn status_queue_move_is_optional() {
+        // Negative test: without the new field, queueMove is absent from the output.
+        let value = serde_json::to_value(DeferStatus::default()).unwrap();
+        assert!(value.get("queueMove").is_none());
+
+        let moving = DeferStatus {
+            queue_move: Some(super::QueueMoveStatus {
+                from_shards: 1,
+                to_shards: 2,
+                step: "pending".to_string(),
+            }),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(moving).unwrap();
+        assert_eq!(
+            value["queueMove"],
+            json!({"fromShards": 1, "toShards": 2, "step": "pending"})
+        );
     }
 }
 // HANDWRITE-END
