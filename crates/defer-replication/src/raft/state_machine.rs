@@ -129,6 +129,12 @@ impl DeferStateMachine {
             DeferCommand::DeleteQueue { queue } => {
                 DeferOutcome::QueueDeleted(scheduler.delete_queue(&queue))
             }
+            DeferCommand::ImportQueue { export } => {
+                DeferOutcome::QueueImported(scheduler.import_queue(export))
+            }
+            DeferCommand::RemoveExportedQueue { queue } => {
+                DeferOutcome::QueueDeleted(scheduler.remove_exported_queue(&queue))
+            }
         }
     }
 }
