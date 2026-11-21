@@ -847,3 +847,27 @@ fn bootstrap_seed_uri_and_config_map_together_are_refused() {
     .unwrap();
     assert!(map_only.spec.validate().is_ok());
 }
+
+#[test]
+fn render_without_shard_count_pins_one_shard() {
+    // Negative test: fails if the default shard count is not 1.
+    let objects = operator::render::render(&production()).unwrap();
+    let stateful = &object(&objects, "StatefulSet", "jobs")["spec"];
+    assert_eq!(stateful["replicas"], 3);
+    let env = &stateful["template"]["spec"]["containers"][0]["env"];
+    assert_eq!(named(env, "SHARD_COUNT")["value"], "1");
+}
+
+#[test]
+fn render_with_shard_count_two_renders_six_pods() {
+    // Negative test: fails with the old pin of one shard (3 pods).
+    let mut value = serde_json::to_value(production()).unwrap();
+    value["spec"]["shardCount"] = json!(2);
+    let defer: Defer = serde_json::from_value(value).unwrap();
+    let objects = operator::render::render(&defer).unwrap();
+    let stateful = &object(&objects, "StatefulSet", "jobs")["spec"];
+    assert_eq!(stateful["replicas"], 6);
+    let env = &stateful["template"]["spec"]["containers"][0]["env"];
+    assert_eq!(named(env, "SHARD_COUNT")["value"], "2");
+    assert_eq!(named(env, "REPLICAS_PER_SHARD")["value"], "3");
+}

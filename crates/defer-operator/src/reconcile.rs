@@ -9,7 +9,10 @@ use super::crd::Defer;
 use crate::membership_driver::RetryPolicy;
 use crate::membership_http::HttpMembershipActuator;
 use crate::replica_controller::{pod_http_url, pod_peer_url};
-use crate::replica_reconcile::{decide_replicas_for_reconcile, ReconcileDecision, ReplicaInput};
+use crate::replica_reconcile::{
+    decide_replicas_for_reconcile, decide_shards_for_reconcile, ReconcileDecision, ReplicaInput,
+    ShardsDecision, ShardsInput,
+};
 
 /// The shard's live facts for the replica planner. `None` when there is no
 /// StatefulSet yet or no admin token is configured: the plain render stays.
@@ -26,6 +29,112 @@ fn replica_input(defer: &Defer, live: Option<(u32, u32)>) -> Option<ReplicaInput
             .and_then(|v| u32::try_from(v).ok()),
         desired: defer.spec.cluster.replicas_per_shard,
     })
+}
+
+/// True when the shard path plans this Defer: more than one shard is asked
+/// for, or the status already records two or more shards (#270).
+fn use_shard_path(defer: &Defer) -> bool {
+    defer.spec.cluster.shard_count > 1
+        || defer
+            .status
+            .as_ref()
+            .and_then(|s| s.settled_shards.as_ref())
+            .is_some_and(|shards| shards.len() >= 2)
+}
+
+/// The live facts of all shards: settled counts from the status (or the
+/// one-shard `settledReplicas`), the desired shard count from the spec.
+fn shards_input(defer: &Defer, input: &ReplicaInput) -> ShardsInput {
+    let settled_shards = defer
+        .status
+        .as_ref()
+        .and_then(|s| s.settled_shards.as_ref())
+        .map(|shards| {
+            shards
+                .iter()
+                .filter_map(|v| u32::try_from(*v).ok())
+                .collect::<Vec<u32>>()
+        })
+        .or_else(|| input.settled.map(|v| vec![v]));
+    ShardsInput {
+        live_replicas: input.live_replicas,
+        ready_replicas: input.ready_replicas,
+        settled_shards,
+        desired_shards: defer.spec.cluster.shard_count,
+        replicas_per_shard: defer.spec.cluster.replicas_per_shard,
+    }
+}
+
+/// The decision when the admin token cannot be read: no replica change.
+fn shards_token_error(input: &ShardsInput, text: String) -> ShardsDecision {
+    let r = input.replicas_per_shard.max(1);
+    let shards = input.live_replicas / r;
+    let settled = input
+        .settled_shards
+        .clone()
+        .unwrap_or_else(|| vec![r; shards as usize]);
+    ShardsDecision {
+        statefulset_replicas: input.live_replicas,
+        settled_shards: settled.into_iter().map(|s| s.min(r)).collect(),
+        message: Some(text),
+    }
+}
+
+/// The shard path of one reconcile: one StatefulSet holds every shard (#270).
+async fn reconcile_shards(
+    defer: &Defer,
+    client: &kube::Client,
+    ns: &str,
+    name: &str,
+    children: Vec<Value>,
+    input: &ReplicaInput,
+) -> anyhow::Result<ReconcilePlan> {
+    let shards = shards_input(defer, input);
+    let secret = defer.spec.admin_token_secret.clone().unwrap_or_default();
+    let token = match read_token(client, ns, &secret).await {
+        Ok(token) => token,
+        Err(text) => {
+            let decision = shards_token_error(&shards, text);
+            return Ok(ReconcilePlan::new(
+                apply_shards_decision(children, &decision),
+                shards_context(&decision),
+            ));
+        }
+    };
+    let token = membership_token(&defer.spec.auth, token);
+    let peer_tls = defer.spec.peer_tls_secret.is_some();
+    let replicas = shards.replicas_per_shard;
+    let actuator_for_shard = |base: u32| {
+        let (name_http, ns_http) = (name.to_string(), ns.to_string());
+        let (name_peer, ns_peer) = (name.to_string(), ns.to_string());
+        HttpMembershipActuator::with_leader_discovery(
+            reqwest::Client::new(),
+            move |ordinal| pod_http_url(&name_http, &ns_http, base + ordinal),
+            replicas,
+            token.clone(),
+            move |ordinal| pod_peer_url(&name_peer, &ns_peer, base + ordinal, peer_tls),
+        )
+    };
+    let decision =
+        decide_shards_for_reconcile(actuator_for_shard, shards, RetryPolicy::default()).await;
+    Ok(ReconcilePlan::new(
+        apply_shards_decision(children, &decision),
+        shards_context(&decision),
+    ))
+}
+
+/// Sets the StatefulSet replicas to the shard decision; other children are unchanged.
+fn apply_shards_decision(mut children: Vec<Value>, decision: &ShardsDecision) -> Vec<Value> {
+    for child in children.iter_mut() {
+        if child["kind"] == "StatefulSet" {
+            child["spec"]["replicas"] = json!(decision.statefulset_replicas);
+        }
+    }
+    children
+}
+
+fn shards_context(decision: &ShardsDecision) -> Value {
+    json!({"settledShards": decision.settled_shards, "message": decision.message})
 }
 
 /// Sets the replicas of the StatefulSet child; every other child is unchanged.
@@ -57,6 +166,9 @@ fn token_error_decision(input: &ReplicaInput, text: String) -> ReconcileDecision
 fn merge_context_into_status(mut patch: Value, context: &Value) -> Value {
     if context["settledReplicas"].is_number() {
         patch["status"]["settledReplicas"] = context["settledReplicas"].clone();
+    }
+    if context["settledShards"].is_array() {
+        patch["status"]["settledShards"] = context["settledShards"].clone();
     }
     if let Some(message) = context["message"].as_str().filter(|m| !m.is_empty()) {
         patch["status"]["message"] = json!(message);
@@ -126,6 +238,9 @@ impl ManagedService for Defer {
         let Some(input) = replica_input(self, live) else {
             return Ok(plain(children));
         };
+        if use_shard_path(self) {
+            return reconcile_shards(self, &client, &ns, &name, children, &input).await;
+        }
         let secret = self.spec.admin_token_secret.clone().unwrap_or_default();
         let token = match read_token(&client, &ns, &secret).await {
             Ok(token) => token,
@@ -163,7 +278,11 @@ impl ManagedService for Defer {
     fn status_patch(&self, ready: &ReadyFacts) -> serde_json::Value {
         let name = self.name_any();
         let ready_replicas = ready.get(&name) as i32;
-        let desired = self.spec.cluster.replicas_per_shard as i32;
+        let desired = self
+            .spec
+            .cluster
+            .shard_count
+            .saturating_mul(self.spec.cluster.replicas_per_shard) as i32;
         let phase = if desired > 0 && ready_replicas >= desired {
             "Ready"
         } else if ready_replicas > 0 {
@@ -410,6 +529,120 @@ mod tests {
     #[test]
     fn membership_token_is_empty_for_any_other_auth_value() {
         assert_eq!(membership_token("", "t0k".to_string()), String::new());
+    }
+}
+#[cfg(test)]
+mod shard_path_tests {
+    use super::{
+        apply_shards_decision, merge_context_into_status, shards_context, shards_input,
+        shards_token_error, use_shard_path, Defer,
+    };
+    use crate::replica_reconcile::{ReplicaInput, ShardsDecision, ShardsInput};
+    use serde_json::{json, Value};
+
+    fn defer(shards: u32, status: Value) -> Defer {
+        serde_json::from_value(json!({
+            "apiVersion": "defer.dev/v1alpha1",
+            "kind": "Defer",
+            "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+            "spec": {
+                "image": "registry/defer:1",
+                "shardCount": shards,
+                "replicasPerShard": 3,
+                "voterCount": 3
+            },
+            "status": status
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn shard_path_only_for_many_shards_or_recorded_shards() {
+        // Negative test: without the new rule, a plain one-shard Defer takes the shard path.
+        assert!(!use_shard_path(&defer(1, json!({}))));
+        assert!(use_shard_path(&defer(2, json!({}))));
+        assert!(use_shard_path(&defer(1, json!({"settledShards": [3, 1]}))));
+        assert!(!use_shard_path(&defer(1, json!({"settledShards": [3]}))));
+    }
+
+    #[test]
+    fn shards_input_reads_settled_shards_or_the_one_shard_count() {
+        // A negative value cannot be a replica count and is dropped.
+        let input = ReplicaInput {
+            live_replicas: 6,
+            ready_replicas: 6,
+            settled: Some(3),
+            desired: 3,
+        };
+        let shards = shards_input(&defer(2, json!({"settledShards": [3, -1, 2]})), &input);
+        assert_eq!(shards.settled_shards, Some(vec![3, 2]));
+        assert_eq!(shards.desired_shards, 2);
+        assert_eq!(shards.replicas_per_shard, 3);
+
+        let shards = shards_input(&defer(2, json!({})), &input);
+        assert_eq!(shards.settled_shards, Some(vec![3]));
+    }
+
+    #[test]
+    fn shards_token_error_keeps_the_live_size_and_clamps() {
+        let input = ShardsInput {
+            live_replicas: 6,
+            ready_replicas: 6,
+            settled_shards: Some(vec![3, 5]),
+            desired_shards: 2,
+            replicas_per_shard: 3,
+        };
+        let decision = shards_token_error(&input, "boom".into());
+        assert_eq!(decision.statefulset_replicas, 6);
+        assert_eq!(decision.settled_shards, vec![3, 3]);
+        assert_eq!(decision.message.as_deref(), Some("boom"));
+
+        let unknown = ShardsInput {
+            settled_shards: None,
+            ..input
+        };
+        assert_eq!(
+            shards_token_error(&unknown, "boom".into()).settled_shards,
+            vec![3, 3]
+        );
+    }
+
+    #[test]
+    fn shards_context_reaches_the_status_patch() {
+        let decision = ShardsDecision {
+            statefulset_replicas: 6,
+            settled_shards: vec![3, 1],
+            message: None,
+        };
+        let patch = merge_context_into_status(json!({"status": {}}), &shards_context(&decision));
+        assert_eq!(patch["status"]["settledShards"], json!([3, 1]));
+        assert!(patch["status"].get("message").is_none());
+
+        let held = ShardsDecision {
+            message: Some("lowering shardCount is not supported yet".into()),
+            ..decision
+        };
+        let patch = merge_context_into_status(json!({"status": {}}), &shards_context(&held));
+        assert_eq!(
+            patch["status"]["message"],
+            "lowering shardCount is not supported yet"
+        );
+    }
+
+    #[test]
+    fn apply_shards_decision_sets_only_the_statefulset() {
+        let children = vec![
+            json!({"kind": "Service", "spec": {}}),
+            json!({"kind": "StatefulSet", "spec": {"replicas": 3}}),
+        ];
+        let decision = ShardsDecision {
+            statefulset_replicas: 6,
+            settled_shards: vec![3, 1],
+            message: None,
+        };
+        let out = apply_shards_decision(children, &decision);
+        assert_eq!(out[1]["spec"]["replicas"], 6);
+        assert!(out[0]["spec"].get("replicas").is_none());
     }
 }
 // HANDWRITE-END

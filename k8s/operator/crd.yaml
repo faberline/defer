@@ -317,6 +317,13 @@ spec:
                 format: int32
                 nullable: true
                 type: integer
+              settledShards:
+                description: Settled replica count of each shard, by shard number (#270). Missing means every live shard is settled.
+                items:
+                  format: int32
+                  type: integer
+                nullable: true
+                type: array
             type: object
         required:
         - spec

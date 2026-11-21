@@ -288,9 +288,8 @@ fn statefulset(
             json!({"name": "raft", "containerPort": RAFT_PORT, "protocol": "TCP"}),
         ],
         headless_service: headless,
-        // Defer currently exposes one Raft group per instance. Replica count
-        // is the HA knob; shard placement becomes a separate router slice.
-        shard_count: 1,
+        // One StatefulSet holds every shard: replicas = shardCount * replicasPerShard.
+        shard_count: spec.cluster.shard_count,
         replicas_per_shard: spec.cluster.replicas_per_shard,
         voter_count: spec.cluster.voter_count,
         headless_env_key: "DEFER_PEER_SERVICE",
