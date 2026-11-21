@@ -31,10 +31,9 @@ pub struct CapacityPatch {
 
 /// Build the CR patch for one change, or `None` when no patch is produced.
 ///
-/// A `Change::Replicas` becomes `{"spec": {"replicasPerShard": to}}`, guarded
-/// by `generation`. Shard-count patches are not produced while `shardCount` is
-/// pinned to 1 in `render.rs`: `ShardSplit` and `ShardMerge` return `None`, and
-/// the decision stays in the policy result. #83 wires them.
+/// A `Change::Replicas` becomes `{"spec": {"replicasPerShard": to}}`, and a
+/// `ShardSplit` or `ShardMerge` becomes `{"spec": {"shardCount": to}}`. Both are
+/// guarded by `generation`.
 ///
 /// The evidence's `generation` is always set to `generation`, so the two cannot
 /// disagree.
@@ -48,7 +47,14 @@ pub fn build_patch(change: &Change, generation: i64, evidence: Evidence) -> Opti
                 ..evidence
             },
         }),
-        Change::ShardSplit { .. } | Change::ShardMerge { .. } => None,
+        Change::ShardSplit { to, .. } | Change::ShardMerge { to, .. } => Some(CapacityPatch {
+            merge_patch: serde_json::json!({"spec": {"shardCount": *to}}),
+            resource_version_guard: generation,
+            evidence: Evidence {
+                generation,
+                ..evidence
+            },
+        }),
     }
 }
 
@@ -102,11 +108,32 @@ mod tests {
     }
 
     #[test]
-    fn shard_change_has_no_patch() {
-        let split = Change::ShardSplit { from: 1, to: 2 };
-        let merge = Change::ShardMerge { from: 2, to: 1 };
-        assert!(build_patch(&split, 7, ev(7)).is_none());
-        assert!(build_patch(&merge, 7, ev(7)).is_none());
+    fn shard_split_patch_shape() {
+        let change = Change::ShardSplit { from: 1, to: 2 };
+        let patch = build_patch(&change, 7, ev(7)).expect("shard split gives a patch");
+        assert_eq!(
+            patch.merge_patch,
+            serde_json::json!({"spec": {"shardCount": 2}})
+        );
+        assert_eq!(patch.resource_version_guard, 7);
+    }
+
+    #[test]
+    fn shard_merge_patch_shape() {
+        let change = Change::ShardMerge { from: 2, to: 1 };
+        let patch = build_patch(&change, 9, ev(9)).expect("shard merge gives a patch");
+        assert_eq!(
+            patch.merge_patch,
+            serde_json::json!({"spec": {"shardCount": 1}})
+        );
+        assert_eq!(patch.resource_version_guard, 9);
+    }
+
+    #[test]
+    fn shard_patch_evidence_follows_argument() {
+        let change = Change::ShardSplit { from: 1, to: 2 };
+        let patch = build_patch(&change, 7, ev(99)).expect("shard split gives a patch");
+        assert_eq!(patch.evidence.generation, 7);
     }
 
     #[test]
