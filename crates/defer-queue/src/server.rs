@@ -17,15 +17,16 @@ use axum::extract::{Extension, Path, Query, State};
 use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use service_auth::{AuditedRoleMapPrincipal, ReloadableRoleMapVerifier, Role};
 use service_http::{ApiErr, ErrorEnvelope, MetricsProvider};
 
 use defer_access as auth;
 use defer_dispatch::{DispatchDisposition, DispatchReport};
+use defer_replication::raft::ImportQueueError;
 use defer_replication::ProposeError;
-use defer_shared_kernel::{CreateTask, QueuePolicy, QueueSnapshot, SchedulerError};
+use defer_shared_kernel::{CreateTask, QueueExport, QueuePolicy, QueueSnapshot, SchedulerError};
 use raft_runtime::{
     AdmissionRefused, DemotionRefused, Index, NodeId, PromotionRefused, RemovalRefused,
 };
@@ -83,6 +84,11 @@ fn router_inner(
         .route("/v1/queues/{queue}/dispatch", post(dispatch_one))
         .route("/admin/backup", get(admin_backup))
         .route("/v1/admin/membership", post(admin_membership))
+        .route(
+            "/v1/admin/queues/{queue}/export",
+            get(admin_queue_export).delete(admin_queue_remove),
+        )
+        .route("/v1/admin/queues/{queue}/import", put(admin_queue_import))
         .route_layer(axum::middleware::from_fn(crate::audit::audit_authenticated))
         .route_layer(from_fn_with_state(
             verifier,
@@ -713,6 +719,102 @@ pub async fn admin_membership(
                 response
             }
         }
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/admin/queues/{queue}/export",
+    params(("queue" = String, Path, description = "Queue name")),
+    responses(
+        (status = 200, description = "One whole queue as JSON, the value that the import route accepts"),
+        (status = 403, body = ErrorEnvelope),
+        (status = 404, body = ErrorEnvelope)
+    )
+)]
+pub async fn admin_queue_export(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Path(queue): Path<String>,
+) -> Response {
+    if let Err(error) = authorize(&principal, "*", Role::Admin) {
+        return error.into_response();
+    }
+    state.metrics.requests.incr();
+    match state.raft.export_queue(&queue) {
+        Ok(export) => Json(export).into_response(),
+        Err(error) => scheduler_error(error),
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/v1/admin/queues/{queue}/import",
+    params(("queue" = String, Path, description = "Queue name")),
+    request_body(
+        content = Object,
+        content_type = "application/json",
+        description = "A queue export from the export route"
+    ),
+    responses(
+        (status = 204),
+        (status = 400, body = ErrorEnvelope),
+        (status = 403, body = ErrorEnvelope),
+        (status = 409, body = ErrorEnvelope)
+    )
+)]
+pub async fn admin_queue_import(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Path(queue): Path<String>,
+    Json(export): Json<QueueExport>,
+) -> Response {
+    if let Err(error) = authorize(&principal, "*", Role::Admin) {
+        return error.into_response();
+    }
+    state.metrics.requests.incr();
+    if export.queue() != queue {
+        return ApiErr::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_argument",
+            format!(
+                "path queue `{queue}` does not match export queue `{}`",
+                export.queue()
+            ),
+        )
+        .into_response();
+    }
+    match state.raft.import_queue(export).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(ImportQueueError::Refused(error)) => {
+            ApiErr::new(StatusCode::CONFLICT, "conflict", error.to_string()).into_response()
+        }
+        Err(ImportQueueError::Infra(error)) => internal(error),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/admin/queues/{queue}/export",
+    params(("queue" = String, Path, description = "Queue name")),
+    responses(
+        (status = 204),
+        (status = 403, body = ErrorEnvelope),
+        (status = 404, body = ErrorEnvelope)
+    )
+)]
+pub async fn admin_queue_remove(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuditedRoleMapPrincipal>,
+    Path(queue): Path<String>,
+) -> Response {
+    if let Err(error) = authorize(&principal, "*", Role::Admin) {
+        return error.into_response();
+    }
+    state.metrics.requests.incr();
+    match state.raft.remove_exported_queue(queue).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => propose_error(error),
     }
 }
 

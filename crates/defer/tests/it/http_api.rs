@@ -3,6 +3,7 @@ mod body_limit;
 mod common;
 mod membership;
 mod metrics;
+mod queue_move;
 mod queues;
 mod routes;
 mod tasks;
