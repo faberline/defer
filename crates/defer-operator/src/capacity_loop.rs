@@ -7,10 +7,13 @@ use std::future::Future;
 
 use crate::capacity_patch::{build_patch, CapacityPatch, Evidence};
 use crate::capacity_policy::{
-    decide_replicas, Change, Direction, PolicyState, Sample, SCALE_IN_MS, SCALE_OUT_MS,
+    arbitrate, decide_disk, decide_replicas, Change, Direction, DiskMarks, DiskSample, PolicyState,
+    Sample, DISK_MERGE_MS, DISK_SPLIT_MS, SCALE_IN_MS, SCALE_OUT_MS,
 };
-use crate::capacity_sample::{parse_cpu_quantity, parse_memory_quantity, population_sample};
-use crate::crd::Defer;
+use crate::capacity_sample::{
+    disk_sample, parse_cpu_quantity, parse_memory_quantity, population_sample,
+};
+use crate::crd::{Defer, MAX_SHARD_COUNT};
 
 /// Error of one capacity patch.
 #[derive(Debug)]
@@ -35,6 +38,7 @@ pub trait CapacityIo {
 #[derive(Default)]
 struct PerDefer {
     samples: Vec<Sample>,
+    disk_samples: Vec<DiskSample>,
     state: PolicyState,
     awaiting: Option<i64>,
 }
@@ -108,49 +112,93 @@ impl CapacityLoop {
                 .samples
                 .retain(|s| s.at_ms + SCALE_IN_MS + 60_000 >= now_ms);
 
+            let current_shards = defer.spec.cluster.shard_count;
+            let used = io.disk_used_bytes(defer).await;
+            if let Some(sample) = disk_sample(now_ms, &used, current_shards) {
+                entry.disk_samples.push(sample);
+            }
+            entry
+                .disk_samples
+                .retain(|s| s.at_ms + DISK_MERGE_MS + 60_000 >= now_ms);
+
             let current = defer.spec.cluster.replicas_per_shard;
             let marks = policy.watermarks();
             let bounds = policy.bounds(current);
-            let Some(decision) = decide_replicas(
+            let replica = decide_replicas(
                 &entry.samples,
                 now_ms,
                 current,
                 &marks,
                 &bounds,
                 &entry.state,
-            ) else {
-                continue;
-            };
-            let Some(newest) = entry.samples.last().copied() else {
+            );
+            let disk_marks = DiskMarks::default();
+            let disk = decide_disk(
+                &entry.disk_samples,
+                now_ms,
+                current_shards,
+                &disk_marks,
+                MAX_SHARD_COUNT,
+                &entry.state,
+            );
+            let Some(change) = arbitrate(replica, disk) else {
                 continue;
             };
 
-            let (direction, window_ms, watermark) = match decision.direction {
-                Direction::Up => {
-                    let mark = if decision.reason == "cpu" {
-                        marks.cpu_high
-                    } else {
-                        marks.mem_high
+            let population = pods.len() as u32;
+            let evidence = match change {
+                Change::Replicas(decision) => {
+                    let Some(newest) = entry.samples.last().copied() else {
+                        continue;
                     };
-                    ("up", SCALE_OUT_MS, mark)
+                    let (direction, window_ms, watermark) = match decision.direction {
+                        Direction::Up => {
+                            let mark = if decision.reason == "cpu" {
+                                marks.cpu_high
+                            } else {
+                                marks.mem_high
+                            };
+                            ("up", SCALE_OUT_MS, mark)
+                        }
+                        Direction::Down => ("down", SCALE_IN_MS, marks.cpu_low),
+                    };
+                    let observed = if decision.reason == "cpu" {
+                        newest.cpu
+                    } else {
+                        newest.memory
+                    };
+                    Evidence {
+                        direction,
+                        reason: decision.reason,
+                        population,
+                        window_ms,
+                        watermark,
+                        observed,
+                        generation,
+                    }
                 }
-                Direction::Down => ("down", SCALE_IN_MS, marks.cpu_low),
+                Change::ShardSplit { .. } | Change::ShardMerge { .. } => {
+                    let Some(newest) = entry.disk_samples.last().copied() else {
+                        continue;
+                    };
+                    let (direction, window_ms, watermark) =
+                        if matches!(change, Change::ShardSplit { .. }) {
+                            ("split", DISK_SPLIT_MS, disk_marks.split_bytes)
+                        } else {
+                            ("merge", DISK_MERGE_MS, disk_marks.merge_bytes)
+                        };
+                    Evidence {
+                        direction,
+                        reason: "disk",
+                        population,
+                        window_ms,
+                        watermark: watermark as f64,
+                        observed: newest.bytes_per_shard as f64,
+                        generation,
+                    }
+                }
             };
-            let observed = if decision.reason == "cpu" {
-                newest.cpu
-            } else {
-                newest.memory
-            };
-            let evidence = Evidence {
-                direction,
-                reason: decision.reason,
-                population: pods.len() as u32,
-                window_ms,
-                watermark,
-                observed,
-                generation,
-            };
-            let Some(patch) = build_patch(&Change::Replicas(decision), generation, evidence) else {
+            let Some(patch) = build_patch(&change, generation, evidence) else {
                 continue;
             };
 
@@ -579,6 +627,112 @@ mod tests {
             );
         let io = mock_kube(router);
         assert_eq!(io.disk_used_bytes(&defer(2, 3, true)).await, vec![9]);
+    }
+
+    /// `defer(replicas, generation, true)` with `spec.cluster.shard_count` set.
+    fn defer_shards(replicas: u32, shards: u32, generation: i64) -> Defer {
+        let mut d = defer(replicas, generation, true);
+        d.spec.cluster.shard_count = shards;
+        d
+    }
+
+    #[tokio::test]
+    async fn disk_above_split_mark_patches_shard_count_once() {
+        let fake = fake(defer_shards(2, 1, 3), "500m");
+        *fake.disk_bytes.lock().unwrap() = vec![2_000_000_000, 2_000_000_000];
+        let mut lp = CapacityLoop::new();
+        run_window(&mut lp, &fake).await;
+        let got = patches(&fake);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0], json!({"spec": {"shardCount": 2}}));
+        // While the generation is pending, later ticks add no patch.
+        lp.tick(&fake, 140_000).await;
+        lp.tick(&fake, 150_000).await;
+        assert_eq!(patches(&fake).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn disk_split_waits_for_convergence_and_cooldown() {
+        let fake = fake(defer_shards(2, 1, 3), "500m");
+        *fake.disk_bytes.lock().unwrap() = vec![2_000_000_000, 2_000_000_000];
+        let mut lp = CapacityLoop::new();
+        run_window(&mut lp, &fake).await;
+        assert_eq!(patches(&fake).len(), 1);
+
+        let mut converged = defer_shards(2, 2, 4);
+        converged.status = Some(
+            serde_json::from_value::<DeferStatus>(
+                json!({"observedGeneration": 4, "readyReplicas": 4, "desiredReplicas": 4}),
+            )
+            .unwrap(),
+        );
+        *fake.defers.lock().unwrap() = vec![converged];
+
+        // Convergence is recorded at 140 s; the cooldown ends at 440 s.
+        lp.tick(&fake, 140_000).await;
+        for t in (150_000..=430_000u64).step_by(10_000) {
+            lp.tick(&fake, t).await;
+            assert_eq!(patches(&fake).len(), 1, "patch during cooldown at {t}");
+        }
+        for t in (440_000..=480_000u64).step_by(10_000) {
+            lp.tick(&fake, t).await;
+        }
+        let got = patches(&fake);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[1], json!({"spec": {"shardCount": 3}}));
+    }
+
+    #[tokio::test]
+    async fn disk_merge_patches_only_when_below_merge_mark() {
+        // Below the merge mark: one merge back to 1 shard.
+        let below = fake(defer_shards(1, 2, 3), "500m");
+        *below.disk_bytes.lock().unwrap() = vec![100_000_000, 100_000_000];
+        let mut lp = CapacityLoop::new();
+        for t in (0..=1_800_000u64).step_by(10_000) {
+            lp.tick(&below, t).await;
+        }
+        let got = patches(&below);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0], json!({"spec": {"shardCount": 1}}));
+
+        // At or above the merge mark: no patch.
+        let above = fake(defer_shards(1, 2, 3), "500m");
+        *above.disk_bytes.lock().unwrap() = vec![300_000_000, 300_000_000];
+        let mut lp = CapacityLoop::new();
+        for t in (0..=1_800_000u64).step_by(10_000) {
+            lp.tick(&above, t).await;
+        }
+        assert_eq!(patches(&above).len(), 0);
+    }
+
+    #[tokio::test]
+    async fn split_holds_at_max_shard_count() {
+        let fake = fake(defer_shards(2, 8, 3), "500m");
+        *fake.disk_bytes.lock().unwrap() = vec![2_000_000_000, 2_000_000_000];
+        let mut lp = CapacityLoop::new();
+        run_window(&mut lp, &fake).await;
+        assert_eq!(patches(&fake).len(), 0);
+    }
+
+    #[tokio::test]
+    async fn stale_generation_does_not_patch_shard_count() {
+        let fake = fake(defer_shards(2, 1, 3), "500m");
+        *fake.disk_bytes.lock().unwrap() = vec![2_000_000_000, 2_000_000_000];
+        *fake.fresh.lock().unwrap() = Some(4);
+        let mut lp = CapacityLoop::new();
+        run_window(&mut lp, &fake).await;
+        assert_eq!(patches(&fake).len(), 0);
+    }
+
+    #[tokio::test]
+    async fn split_beats_a_replica_change() {
+        let fake = fake(defer_shards(2, 1, 3), "900m");
+        *fake.disk_bytes.lock().unwrap() = vec![2_000_000_000, 2_000_000_000];
+        let mut lp = CapacityLoop::new();
+        run_window(&mut lp, &fake).await;
+        let got = patches(&fake);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0], json!({"spec": {"shardCount": 2}}));
     }
 }
 // HANDWRITE-END
