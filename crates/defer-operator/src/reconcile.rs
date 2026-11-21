@@ -5,9 +5,13 @@ use serde_json::{json, Value};
 use service_k8s::service::ReconcilePlan;
 use service_k8s::{ManagedService, ReadinessTarget, ReadyFacts};
 
-use super::crd::Defer;
+use super::crd::{Defer, QueueMoveStatus};
 use crate::membership_driver::RetryPolicy;
 use crate::membership_http::HttpMembershipActuator;
+use crate::queue_move::{
+    drive_queue_move, plan_queue_move_step, HttpQueueMoveActuator, QueueMoveDecision,
+    QueueMoveInput, MOVE_DONE, MOVE_MOVING,
+};
 use crate::replica_controller::{pod_http_url, pod_peer_url};
 use crate::replica_reconcile::{
     decide_replicas_for_reconcile, decide_shards_for_reconcile, ReconcileDecision, ReplicaInput,
@@ -115,12 +119,62 @@ async fn plan_shards(
             move |ordinal| pod_peer_url(&name_peer, &ns_peer, base + ordinal, peer_tls),
         )
     };
+    let desired_shards = shards.desired_shards;
     let decision =
         decide_shards_for_reconcile(actuator_for_shard, shards, RetryPolicy::default()).await;
-    ReconcilePlan::new(
-        apply_shards_decision(children, &decision),
-        shards_context(&decision),
-    )
+    let mut context = shards_context(&decision);
+    let step = plan_queue_move_step(&QueueMoveInput {
+        recorded: defer.status.as_ref().and_then(|s| s.queue_move.as_ref()),
+        live_shards: input.live_replicas / replicas.max(1),
+        desired_shards,
+        settled_shards: &decision.settled_shards,
+        replicas_per_shard: replicas,
+        live_replicas: input.live_replicas,
+        ready_replicas: input.ready_replicas,
+    });
+    match step {
+        QueueMoveDecision::Nothing => {}
+        QueueMoveDecision::Record(status) => {
+            context["queueMove"] = queue_move_context(&status);
+        }
+        QueueMoveDecision::Run {
+            from_shards,
+            to_shards,
+        } => {
+            let (name_http, ns_http) = (name.to_string(), ns.to_string());
+            let mover = HttpQueueMoveActuator::new(
+                reqwest::Client::new(),
+                move |shard| pod_http_url(&name_http, &ns_http, shard * replicas),
+                token.clone(),
+            );
+            let (outcome, message) = match drive_queue_move(&mover, from_shards, to_shards).await {
+                Ok(report) if report.failed.is_empty() => (MOVE_DONE, None),
+                Ok(report) => {
+                    let first = report.failed[0].1.to_string();
+                    (
+                        MOVE_MOVING,
+                        Some(format!(
+                            "queue move to {to_shards} shards: {} failed, first: {first}",
+                            report.failed.len()
+                        )),
+                    )
+                }
+                Err(error) => (
+                    MOVE_MOVING,
+                    Some(format!("queue move to {to_shards} shards: {error}")),
+                ),
+            };
+            context["queueMove"] = queue_move_context(&QueueMoveStatus {
+                from_shards: from_shards as i32,
+                to_shards: to_shards as i32,
+                step: outcome.to_string(),
+            });
+            if let Some(message) = message {
+                context["message"] = json!(message);
+            }
+        }
+    }
+    ReconcilePlan::new(apply_shards_decision(children, &decision), context)
 }
 
 /// Sets the StatefulSet replicas to the shard decision; other children are unchanged.
@@ -135,6 +189,15 @@ fn apply_shards_decision(mut children: Vec<Value>, decision: &ShardsDecision) ->
 
 fn shards_context(decision: &ShardsDecision) -> Value {
     json!({"settledShards": decision.settled_shards, "message": decision.message})
+}
+
+/// The queue move of the status, as the status patch reads it (#285).
+fn queue_move_context(status: &QueueMoveStatus) -> Value {
+    json!({
+        "fromShards": status.from_shards,
+        "toShards": status.to_shards,
+        "step": status.step,
+    })
 }
 
 /// Sets the replicas of the StatefulSet child; every other child is unchanged.
@@ -169,6 +232,9 @@ fn merge_context_into_status(mut patch: Value, context: &Value) -> Value {
     }
     if context["settledShards"].is_array() {
         patch["status"]["settledShards"] = context["settledShards"].clone();
+    }
+    if context["queueMove"].is_object() {
+        patch["status"]["queueMove"] = context["queueMove"].clone();
     }
     if let Some(message) = context["message"].as_str().filter(|m| !m.is_empty()) {
         patch["status"]["message"] = json!(message);
@@ -645,6 +711,27 @@ mod shard_path_tests {
         let out = apply_shards_decision(children, &decision);
         assert_eq!(out[1]["spec"]["replicas"], 6);
         assert!(out[0]["spec"].get("replicas").is_none());
+    }
+
+    #[test]
+    fn status_patch_records_the_queue_move() {
+        use crate::crd::QueueMoveStatus;
+        let moving = QueueMoveStatus {
+            from_shards: 1,
+            to_shards: 2,
+            step: "moving".to_string(),
+        };
+        let context = json!({"queueMove": super::queue_move_context(&moving)});
+
+        let patch = merge_context_into_status(json!({"status": {}}), &context);
+
+        assert_eq!(patch["status"]["queueMove"]["step"], "moving");
+        assert_eq!(patch["status"]["queueMove"]["fromShards"], 1);
+        assert_eq!(patch["status"]["queueMove"]["toShards"], 2);
+
+        // Negative test: a context without a queue move adds no queueMove key.
+        let plain = merge_context_into_status(json!({"status": {}}), &json!({"message": "x"}));
+        assert!(plain["status"].get("queueMove").is_none());
     }
 }
 #[cfg(test)]

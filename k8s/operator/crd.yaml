@@ -308,6 +308,26 @@ spec:
               phase:
                 default: ''
                 type: string
+              queueMove:
+                description: The queue move of the last shardCount raise (#285). Missing means no move was recorded.
+                nullable: true
+                properties:
+                  fromShards:
+                    description: Shard count before the raise.
+                    format: int32
+                    type: integer
+                  step:
+                    description: '`pending` (recorded, waits for settled shards), `moving` (a run left failures) or `done`.'
+                    type: string
+                  toShards:
+                    description: Shard count the raise asked for.
+                    format: int32
+                    type: integer
+                required:
+                - fromShards
+                - step
+                - toShards
+                type: object
               readyReplicas:
                 default: 0
                 format: int32
