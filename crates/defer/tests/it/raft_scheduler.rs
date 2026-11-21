@@ -4,5 +4,6 @@ mod declared;
 mod diagnostics;
 mod failover;
 mod lifecycle;
+mod move_queue;
 mod queue_limits;
 mod restart;

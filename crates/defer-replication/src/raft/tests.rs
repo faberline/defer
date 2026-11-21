@@ -261,3 +261,248 @@ fn snapshot_round_trip_preserves_fenced_attempt_and_dedupe() {
         1
     );
 }
+
+// HANDWRITE-BEGIN gap="missing-generator:unit-test" tracker="#282" reason="Whole-queue move through the raft log (#282)."
+mod queue_move {
+    use std::sync::{Arc, Mutex};
+
+    use chrono::{DateTime, TimeZone, Utc};
+    use defer_shared_kernel::{
+        CreateTask, DeferScheduler, QueueImportError, QueuePolicy, SchedulerError, Target,
+    };
+    use raft_runtime::{Index, NodeId, RaftStateMachine};
+
+    use super::super::command::{DeferEnvelope, ProposalId, FORMAT_VERSION};
+    use super::super::{DeferCommand, DeferOutcome, DeferStateMachine};
+
+    fn now() -> DateTime<Utc> {
+        Utc.timestamp_millis_opt(1_000).unwrap()
+    }
+
+    fn task(id: &str, at: DateTime<Utc>) -> CreateTask {
+        CreateTask {
+            task_id: id.into(),
+            target: Target {
+                url: "http://example.test/dispatch".into(),
+                method: "POST".into(),
+                headers: Default::default(),
+            },
+            payload: serde_json::json!({ "id": id }),
+            schedule_at: at,
+            priority: 10,
+            max_attempts: 3,
+            dispatch_deadline_ms: None,
+        }
+    }
+
+    fn envelope(sequence: u64, command: DeferCommand) -> Vec<u8> {
+        serde_json::to_vec(&DeferEnvelope {
+            format_version: FORMAT_VERSION,
+            proposal_id: ProposalId {
+                node: NodeId::new(1),
+                session: 9,
+                sequence,
+            },
+            command,
+        })
+        .unwrap()
+    }
+
+    fn empty_machine() -> Arc<DeferStateMachine> {
+        DeferStateMachine::new(Arc::new(Mutex::new(DeferScheduler::new())), false)
+    }
+
+    /// A machine with queue `jobs` (policy default) and one task `one`.
+    fn jobs_machine() -> Arc<DeferStateMachine> {
+        let sm = empty_machine();
+        sm.apply(
+            Index::new(1),
+            &envelope(
+                1,
+                DeferCommand::ConfigureQueue {
+                    queue: "jobs".into(),
+                    policy: QueuePolicy::default(),
+                },
+            ),
+        )
+        .unwrap();
+        sm.apply(
+            Index::new(2),
+            &envelope(
+                2,
+                DeferCommand::CreateTask {
+                    queue: "jobs".into(),
+                    task: task("one", now()),
+                },
+            ),
+        )
+        .unwrap();
+        sm
+    }
+
+    fn export_of(sm: &DeferStateMachine, queue: &str) -> defer_shared_kernel::QueueExport {
+        sm.scheduler().lock().unwrap().export_queue(queue).unwrap()
+    }
+
+    #[test]
+    fn export_leaves_the_source_queue() {
+        let a = jobs_machine();
+        let export = export_of(&a, "jobs");
+        assert_eq!(export.queue(), "jobs");
+        assert_eq!(
+            a.scheduler()
+                .lock()
+                .unwrap()
+                .queue_snapshot("jobs")
+                .unwrap()
+                .task_count,
+            1
+        );
+        assert!(matches!(
+            a.scheduler().lock().unwrap().export_queue("nope"),
+            Err(SchedulerError::QueueMissing(name)) if name == "nope"
+        ));
+    }
+
+    #[test]
+    fn import_queue_command_creates_the_queue_on_a_second_machine() {
+        let a = jobs_machine();
+        let export = export_of(&a, "jobs");
+        let b = empty_machine();
+        b.apply(
+            Index::new(1),
+            &envelope(1, DeferCommand::ImportQueue { export }),
+        )
+        .unwrap();
+        assert!(matches!(
+            b.claim_outcome(Index::new(1)),
+            Some(DeferOutcome::QueueImported(Ok(())))
+        ));
+        assert_eq!(
+            b.scheduler()
+                .lock()
+                .unwrap()
+                .queue_snapshot("jobs")
+                .unwrap(),
+            a.scheduler()
+                .lock()
+                .unwrap()
+                .queue_snapshot("jobs")
+                .unwrap()
+        );
+        assert_eq!(
+            b.scheduler().lock().unwrap().status("jobs", "one").unwrap(),
+            a.scheduler().lock().unwrap().status("jobs", "one").unwrap()
+        );
+    }
+
+    #[test]
+    fn import_of_an_existing_queue_is_refused() {
+        let a = jobs_machine();
+        let export = export_of(&a, "jobs");
+        a.apply(
+            Index::new(3),
+            &envelope(3, DeferCommand::ImportQueue { export }),
+        )
+        .unwrap();
+        match a.claim_outcome(Index::new(3)) {
+            Some(DeferOutcome::QueueImported(Err(QueueImportError::QueueExists(name)))) => {
+                assert_eq!(name, "jobs");
+            }
+            other => panic!("expected QueueExists refusal, got {other:?}"),
+        }
+        assert_eq!(
+            a.scheduler()
+                .lock()
+                .unwrap()
+                .queue_snapshot("jobs")
+                .unwrap()
+                .task_count,
+            1
+        );
+    }
+
+    #[test]
+    fn remove_exported_queue_after_import_keeps_the_target() {
+        let a = jobs_machine();
+        let export = export_of(&a, "jobs");
+        let b = empty_machine();
+        b.apply(
+            Index::new(1),
+            &envelope(1, DeferCommand::ImportQueue { export }),
+        )
+        .unwrap();
+
+        a.apply(
+            Index::new(3),
+            &envelope(
+                3,
+                DeferCommand::RemoveExportedQueue {
+                    queue: "jobs".into(),
+                },
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            a.claim_outcome(Index::new(3)),
+            Some(DeferOutcome::QueueDeleted(Ok(())))
+        ));
+        assert!(matches!(
+            a.scheduler().lock().unwrap().queue_snapshot("jobs"),
+            Err(SchedulerError::QueueMissing(_))
+        ));
+        assert_eq!(
+            b.scheduler()
+                .lock()
+                .unwrap()
+                .queue_snapshot("jobs")
+                .unwrap()
+                .task_count,
+            1
+        );
+
+        a.apply(
+            Index::new(4),
+            &envelope(
+                4,
+                DeferCommand::RemoveExportedQueue {
+                    queue: "jobs".into(),
+                },
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            a.claim_outcome(Index::new(4)),
+            Some(DeferOutcome::QueueDeleted(Err(
+                SchedulerError::QueueMissing(_)
+            )))
+        ));
+    }
+
+    #[test]
+    fn import_command_survives_a_snapshot_round_trip() {
+        let a = jobs_machine();
+        let export = export_of(&a, "jobs");
+        let b = empty_machine();
+        b.apply(
+            Index::new(1),
+            &envelope(1, DeferCommand::ImportQueue { export }),
+        )
+        .unwrap();
+
+        let mut bytes = Vec::new();
+        b.snapshot(&mut bytes).unwrap();
+        let c = empty_machine();
+        c.restore(&mut bytes.as_slice()).unwrap();
+        assert_eq!(
+            c.scheduler()
+                .lock()
+                .unwrap()
+                .queue_snapshot("jobs")
+                .unwrap()
+                .task_count,
+            1
+        );
+    }
+}
+// HANDWRITE-END

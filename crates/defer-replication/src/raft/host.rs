@@ -13,7 +13,7 @@ use axum::Router;
 use chrono::{DateTime, Utc};
 use defer_shared_kernel::{
     AttemptSettlement, CreateTask, DeferScheduler, DispatchLease, NackOutcome, QueueControlState,
-    QueuePolicy, QueueSnapshot, SettlementOutcome,
+    QueueExport, QueuePolicy, QueueSnapshot, SchedulerError, SettlementOutcome,
 };
 use raft_runtime::{
     AdmissionRefused, ClusterTopology, DemotionRefused, HostConfig, Index, Membership, NodeId,
@@ -21,7 +21,7 @@ use raft_runtime::{
 };
 
 use super::command::{DeferCommand, DeferEnvelope, DeferOutcome, ProposalId, FORMAT_VERSION};
-use super::error::{ProposeError, ProposeResult};
+use super::error::{ImportQueueError, ProposeError, ProposeResult};
 use super::state_machine::DeferStateMachine;
 
 pub struct DeferRaft {
@@ -195,6 +195,35 @@ impl DeferRaft {
         match self.propose(DeferCommand::DeleteQueue { queue }).await? {
             DeferOutcome::QueueDeleted(result) => Ok(result?),
             other => Err(mismatch("delete queue", other)),
+        }
+    }
+
+    /// Copy one whole queue out of this replica's scheduler. Not proposed: a
+    /// read. Call it on the leader. The source keeps its queue.
+    pub fn export_queue(&self, queue: &str) -> Result<QueueExport, SchedulerError> {
+        self.sm
+            .scheduler()
+            .lock()
+            .expect("scheduler mutex poisoned")
+            .export_queue(queue)
+    }
+
+    pub async fn import_queue(&self, export: QueueExport) -> Result<(), ImportQueueError> {
+        match self.propose(DeferCommand::ImportQueue { export }).await? {
+            DeferOutcome::QueueImported(result) => Ok(result?),
+            other => Err(ImportQueueError::Infra(anyhow::anyhow!(
+                "import queue outcome mismatch: {other:?}"
+            ))),
+        }
+    }
+
+    pub async fn remove_exported_queue(&self, queue: String) -> ProposeResult<()> {
+        match self
+            .propose(DeferCommand::RemoveExportedQueue { queue })
+            .await?
+        {
+            DeferOutcome::QueueDeleted(result) => Ok(result?),
+            other => Err(mismatch("remove exported queue", other)),
         }
     }
 

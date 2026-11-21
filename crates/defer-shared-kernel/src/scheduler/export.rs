@@ -22,7 +22,7 @@ impl QueueExport {
 }
 
 /// Why an import was refused. The target scheduler is unchanged on refusal.
-#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error, PartialEq, Eq)]
 pub enum QueueImportError {
     #[error("queue `{0}` already exists")]
     QueueExists(String),

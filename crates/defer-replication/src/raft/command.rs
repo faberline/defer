@@ -5,7 +5,7 @@
 use chrono::{DateTime, Utc};
 use defer_shared_kernel::{
     AttemptSettlement, CreateTask, DeferScheduler, DispatchLease, NackOutcome, QueueControlState,
-    QueuePolicy, QueueSnapshot, SchedulerError, SettlementOutcome,
+    QueueExport, QueueImportError, QueuePolicy, QueueSnapshot, SchedulerError, SettlementOutcome,
 };
 use raft_runtime::{Index, NodeId};
 use serde::{Deserialize, Serialize};
@@ -78,6 +78,12 @@ pub enum DeferCommand {
     DeleteQueue {
         queue: String,
     },
+    ImportQueue {
+        export: QueueExport,
+    },
+    RemoveExportedQueue {
+        queue: String,
+    },
 }
 
 /// Read-your-write outcome retained by proposal id across snapshots.
@@ -85,6 +91,7 @@ pub enum DeferCommand {
 pub enum DeferOutcome {
     Queue(Result<QueueSnapshot, SchedulerError>),
     QueueDeleted(Result<(), SchedulerError>),
+    QueueImported(Result<(), QueueImportError>),
     Created(Result<(), SchedulerError>),
     CreatedBatch(Result<usize, SchedulerError>),
     Leased(Result<Vec<DispatchLease>, SchedulerError>),

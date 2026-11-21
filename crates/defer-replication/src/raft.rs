@@ -19,7 +19,7 @@ mod tests;
 
 pub use bootstrap::prepare_bootstrap_seed;
 pub use command::{DeferCommand, DeferOutcome};
-pub use error::{ProposeError, ProposeResult};
+pub use error::{ImportQueueError, ProposeError, ProposeResult};
 pub use host::DeferRaft;
 pub use state_machine::DeferStateMachine;
 
