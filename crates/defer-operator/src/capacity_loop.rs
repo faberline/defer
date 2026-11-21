@@ -494,5 +494,91 @@ mod tests {
         assert_eq!(got.len(), 2);
         assert_eq!(got[1], json!({"spec": {"replicasPerShard": 4}}));
     }
+
+    /// A kube client whose API server is a fixed axum router.
+    fn mock_kube(router: axum::Router) -> KubeCapacityIo {
+        KubeCapacityIo {
+            client: kube::Client::new(router, "payments"),
+        }
+    }
+
+    fn pod_list(pods: &[(&str, Option<&str>)]) -> serde_json::Value {
+        let items: Vec<serde_json::Value> = pods
+            .iter()
+            .map(|(name, node)| {
+                let spec = match node {
+                    Some(n) => json!({"nodeName": n, "containers": []}),
+                    None => json!({"containers": []}),
+                };
+                json!({"metadata": {"name": name, "namespace": "payments"}, "spec": spec})
+            })
+            .collect();
+        json!({"apiVersion": "v1", "kind": "PodList", "metadata": {}, "items": items})
+    }
+
+    fn summary(pod: &str, used: u64) -> serde_json::Value {
+        json!({"pods": [{"podRef": {"name": pod}, "volume": [{"name": "data", "usedBytes": used}]}]})
+    }
+
+    #[tokio::test]
+    async fn disk_used_bytes_reads_data_volume_of_each_node() {
+        use axum::routing::get;
+        use axum::Json;
+        let pods = pod_list(&[
+            ("jobs-0", Some("n1")),
+            ("jobs-1", Some("n2")),
+            ("other", None),
+        ]);
+        let router = axum::Router::new()
+            .route(
+                "/api/v1/namespaces/payments/pods",
+                get(move || {
+                    let pods = pods.clone();
+                    async move { Json(pods) }
+                }),
+            )
+            .route(
+                "/api/v1/nodes/n1/proxy/stats/summary",
+                get(|| async { Json(summary("jobs-0", 500)) }),
+            )
+            .route(
+                "/api/v1/nodes/n2/proxy/stats/summary",
+                get(|| async { Json(summary("jobs-1", 700)) }),
+            );
+        let io = mock_kube(router);
+        assert_eq!(io.disk_used_bytes(&defer(2, 3, true)).await, vec![500, 700]);
+    }
+
+    #[tokio::test]
+    async fn disk_used_bytes_empty_when_pod_list_fails() {
+        // No route for the pod list: the API answers 404 and the loop sees no volumes.
+        let io = mock_kube(axum::Router::new());
+        assert!(io.disk_used_bytes(&defer(2, 3, true)).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn disk_used_bytes_skips_a_node_whose_summary_fails() {
+        use axum::routing::get;
+        use axum::Json;
+        let pods = pod_list(&[("jobs-0", Some("bad")), ("jobs-1", Some("n2"))]);
+        let router = axum::Router::new()
+            .route(
+                "/api/v1/namespaces/payments/pods",
+                get(move || {
+                    let pods = pods.clone();
+                    async move { Json(pods) }
+                }),
+            )
+            .route(
+                "/api/v1/nodes/bad/proxy/stats/summary",
+                get(|| async { "not json" }),
+            )
+            .route(
+                "/api/v1/nodes/n2/proxy/stats/summary",
+                get(|| async { Json(summary("jobs-1", 9)) }),
+            );
+        let io = mock_kube(router);
+        assert_eq!(io.disk_used_bytes(&defer(2, 3, true)).await, vec![9]);
+    }
 }
 // HANDWRITE-END
