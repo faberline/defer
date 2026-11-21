@@ -1381,6 +1381,7 @@ version = "0.4.13"
 dependencies = [
  "anyhow",
  "axum",
+ "defer-queue",
  "k8s-openapi",
  "kube",
  "reqwest",
@@ -1390,6 +1391,7 @@ dependencies = [
  "serde_yaml",
  "service-backup 0.1.0 (git+https://github.com/faberline/core?tag=v0.5.2)",
  "service-k8s",
+ "shard-routing",
  "tokio",
  "tracing",
 ]

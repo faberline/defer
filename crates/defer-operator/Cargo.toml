@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+defer-queue.workspace = true
 k8s-openapi.workspace = true
 reqwest.workspace = true
 kube.workspace = true
@@ -19,6 +20,7 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 service-backup.workspace = true
 service-k8s.workspace = true
+shard-routing.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
