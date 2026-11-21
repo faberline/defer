@@ -580,5 +580,111 @@ mod tests {
         let io = mock_kube(router);
         assert_eq!(io.disk_used_bytes(&defer(2, 3, true)).await, vec![9]);
     }
+
+    /// `defer(replicas, generation, true)` with `spec.cluster.shard_count` set.
+    fn defer_shards(replicas: u32, shards: u32, generation: i64) -> Defer {
+        let mut d = defer(replicas, generation, true);
+        d.spec.cluster.shard_count = shards;
+        d
+    }
+
+    #[tokio::test]
+    async fn disk_above_split_mark_patches_shard_count_once() {
+        let fake = fake(defer_shards(2, 1, 3), "500m");
+        *fake.disk_bytes.lock().unwrap() = vec![2_000_000_000, 2_000_000_000];
+        let mut lp = CapacityLoop::new();
+        run_window(&mut lp, &fake).await;
+        let got = patches(&fake);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0], json!({"spec": {"shardCount": 2}}));
+        // While the generation is pending, later ticks add no patch.
+        lp.tick(&fake, 140_000).await;
+        lp.tick(&fake, 150_000).await;
+        assert_eq!(patches(&fake).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn disk_split_waits_for_convergence_and_cooldown() {
+        let fake = fake(defer_shards(2, 1, 3), "500m");
+        *fake.disk_bytes.lock().unwrap() = vec![2_000_000_000, 2_000_000_000];
+        let mut lp = CapacityLoop::new();
+        run_window(&mut lp, &fake).await;
+        assert_eq!(patches(&fake).len(), 1);
+
+        let mut converged = defer_shards(2, 2, 4);
+        converged.status = Some(
+            serde_json::from_value::<DeferStatus>(
+                json!({"observedGeneration": 4, "readyReplicas": 4, "desiredReplicas": 4}),
+            )
+            .unwrap(),
+        );
+        *fake.defers.lock().unwrap() = vec![converged];
+
+        // Convergence is recorded at 140 s; the cooldown ends at 440 s.
+        lp.tick(&fake, 140_000).await;
+        for t in (150_000..=430_000u64).step_by(10_000) {
+            lp.tick(&fake, t).await;
+            assert_eq!(patches(&fake).len(), 1, "patch during cooldown at {t}");
+        }
+        for t in (440_000..=480_000u64).step_by(10_000) {
+            lp.tick(&fake, t).await;
+        }
+        let got = patches(&fake);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[1], json!({"spec": {"shardCount": 3}}));
+    }
+
+    #[tokio::test]
+    async fn disk_merge_patches_only_when_below_merge_mark() {
+        // Below the merge mark: one merge back to 1 shard.
+        let fake = fake(defer_shards(1, 2, 3), "500m");
+        *fake.disk_bytes.lock().unwrap() = vec![100_000_000, 100_000_000];
+        let mut lp = CapacityLoop::new();
+        for t in (0..=1_800_000u64).step_by(10_000) {
+            lp.tick(&fake, t).await;
+        }
+        let got = patches(&fake);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0], json!({"spec": {"shardCount": 1}}));
+
+        // At or above the merge mark: no patch.
+        let fake = fake(defer_shards(1, 2, 3), "500m");
+        *fake.disk_bytes.lock().unwrap() = vec![300_000_000, 300_000_000];
+        let mut lp = CapacityLoop::new();
+        for t in (0..=1_800_000u64).step_by(10_000) {
+            lp.tick(&fake, t).await;
+        }
+        assert_eq!(patches(&fake).len(), 0);
+    }
+
+    #[tokio::test]
+    async fn split_holds_at_max_shard_count() {
+        let fake = fake(defer_shards(2, 8, 3), "500m");
+        *fake.disk_bytes.lock().unwrap() = vec![2_000_000_000, 2_000_000_000];
+        let mut lp = CapacityLoop::new();
+        run_window(&mut lp, &fake).await;
+        assert_eq!(patches(&fake).len(), 0);
+    }
+
+    #[tokio::test]
+    async fn stale_generation_does_not_patch_shard_count() {
+        let fake = fake(defer_shards(2, 1, 3), "500m");
+        *fake.disk_bytes.lock().unwrap() = vec![2_000_000_000, 2_000_000_000];
+        *fake.fresh.lock().unwrap() = Some(4);
+        let mut lp = CapacityLoop::new();
+        run_window(&mut lp, &fake).await;
+        assert_eq!(patches(&fake).len(), 0);
+    }
+
+    #[tokio::test]
+    async fn split_beats_a_replica_change() {
+        let fake = fake(defer_shards(2, 1, 3), "900m");
+        *fake.disk_bytes.lock().unwrap() = vec![2_000_000_000, 2_000_000_000];
+        let mut lp = CapacityLoop::new();
+        run_window(&mut lp, &fake).await;
+        let got = patches(&fake);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0], json!({"spec": {"shardCount": 2}}));
+    }
 }
 // HANDWRITE-END
