@@ -9,8 +9,8 @@ use super::crd::{Defer, QueueMoveStatus};
 use crate::membership_driver::RetryPolicy;
 use crate::membership_http::HttpMembershipActuator;
 use crate::queue_move::{
-    drive_queue_move, plan_queue_move_step, HttpQueueMoveActuator, QueueMoveDecision,
-    QueueMoveInput, MOVE_DONE, MOVE_MOVING,
+    drive_queue_merge, drive_queue_move, lowering_move_done, plan_queue_move_step,
+    HttpQueueMoveActuator, QueueMoveDecision, QueueMoveInput, MOVE_DONE, MOVE_MOVING,
 };
 use crate::replica_controller::{pod_http_url, pod_peer_url};
 use crate::replica_reconcile::{
@@ -60,12 +60,18 @@ fn shards_input(defer: &Defer, input: &ReplicaInput) -> ShardsInput {
                 .collect::<Vec<u32>>()
         })
         .or_else(|| input.settled.map(|v| vec![v]));
+    let replicas = defer.spec.cluster.replicas_per_shard;
+    let live_shards = input.live_replicas / replicas.max(1);
     ShardsInput {
         live_replicas: input.live_replicas,
         ready_replicas: input.ready_replicas,
         settled_shards,
         desired_shards: defer.spec.cluster.shard_count,
-        replicas_per_shard: defer.spec.cluster.replicas_per_shard,
+        replicas_per_shard: replicas,
+        lowering_moved: lowering_move_done(
+            defer.status.as_ref().and_then(|s| s.queue_move.as_ref()),
+            live_shards,
+        ),
     }
 }
 
@@ -147,7 +153,12 @@ async fn plan_shards(
                 move |shard| pod_http_url(&name_http, &ns_http, shard * replicas),
                 token.clone(),
             );
-            let (outcome, message) = match drive_queue_move(&mover, from_shards, to_shards).await {
+            let driven = if from_shards > to_shards {
+                drive_queue_merge(&mover, from_shards, to_shards).await
+            } else {
+                drive_queue_move(&mover, from_shards, to_shards).await
+            };
+            let (outcome, message) = match driven {
                 Ok(report) if report.failed.is_empty() => (MOVE_DONE, None),
                 Ok(report) => {
                     let first = report.failed[0].1.to_string();
@@ -652,6 +663,25 @@ mod shard_path_tests {
     }
 
     #[test]
+    fn shards_input_reads_the_lowering_move() {
+        let input = ReplicaInput {
+            live_replicas: 9,
+            ready_replicas: 9,
+            settled: Some(3),
+            desired: 3,
+        };
+        let with_step = |step: &str| {
+            defer(
+                1,
+                json!({"queueMove": {"fromShards": 3, "toShards": 2, "step": step}}),
+            )
+        };
+        assert!(shards_input(&with_step("done"), &input).lowering_moved);
+        assert!(!shards_input(&with_step("moving"), &input).lowering_moved);
+        assert!(!shards_input(&defer(1, json!({})), &input).lowering_moved);
+    }
+
+    #[test]
     fn shards_token_error_keeps_the_live_size_and_clamps() {
         let input = ShardsInput {
             live_replicas: 6,
@@ -659,6 +689,7 @@ mod shard_path_tests {
             settled_shards: Some(vec![3, 5]),
             desired_shards: 2,
             replicas_per_shard: 3,
+            lowering_moved: false,
         };
         let decision = shards_token_error(&input, "boom".into());
         assert_eq!(decision.statefulset_replicas, 6);
