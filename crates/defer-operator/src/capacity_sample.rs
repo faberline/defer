@@ -2,7 +2,7 @@
 //! Pure conversion of `metrics.k8s.io` `PodMetrics` JSON into one population
 //! `Sample` for the capacity policy. No I/O, no clock.
 
-use crate::capacity_policy::Sample;
+use crate::capacity_policy::{DiskSample, Sample};
 
 /// Parse a CPU quantity to cores: `n` (nano), `u` (micro), `m` (milli) or plain cores.
 pub fn parse_cpu_quantity(s: &str) -> Option<f64> {
@@ -82,6 +82,49 @@ pub fn population_sample(
     Some(Sample { at_ms, cpu, memory })
 }
 
+/// Mean used bytes per shard. `None` for no volumes or zero shards.
+pub fn disk_sample(at_ms: u64, used_bytes: &[u64], shard_count: u32) -> Option<DiskSample> {
+    if used_bytes.is_empty() || shard_count == 0 {
+        return None;
+    }
+    let sum: u128 = used_bytes.iter().map(|b| *b as u128).sum();
+    let bytes_per_shard = (sum / used_bytes.len() as u128) as u64;
+    Some(DiskSample {
+        at_ms,
+        bytes_per_shard,
+        shard_count,
+    })
+}
+
+/// Used bytes of the `data` volume of each named pod in a kubelet `stats/summary`.
+pub fn volume_used_bytes(summary: &serde_json::Value, pod_names: &[String]) -> Vec<u64> {
+    let Some(pods) = summary.get("pods").and_then(|p| p.as_array()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for pod in pods {
+        let name = pod
+            .get("podRef")
+            .and_then(|r| r.get("name"))
+            .and_then(|n| n.as_str());
+        if !name.is_some_and(|n| pod_names.iter().any(|p| p == n)) {
+            continue;
+        }
+        let Some(volumes) = pod.get("volume").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for volume in volumes {
+            if volume.get("name").and_then(|n| n.as_str()) != Some("data") {
+                continue;
+            }
+            if let Some(used) = volume.get("usedBytes").and_then(|u| u.as_u64()) {
+                out.push(used);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +199,41 @@ mod tests {
         assert!(close(s.cpu, 0.5));
         assert!(close(s.memory, 0.5));
         assert!(population_sample(1, &[bad], Some(1.0), Some(2147483648.0)).is_none());
+    }
+
+    #[test]
+    fn disk_sample_is_mean() {
+        let s = disk_sample(5, &[100, 300], 2).unwrap();
+        assert_eq!(s.at_ms, 5);
+        assert_eq!(s.bytes_per_shard, 200);
+        assert_eq!(s.shard_count, 2);
+    }
+
+    #[test]
+    fn disk_sample_none_when_empty_or_zero_shards() {
+        assert!(disk_sample(1, &[], 1).is_none());
+        assert!(disk_sample(1, &[10], 0).is_none());
+    }
+
+    #[test]
+    fn volume_used_bytes_picks_data_volume_of_named_pods() {
+        let summary = json!({"pods": [
+            {"podRef": {"name": "jobs-0"}, "volume": [{"name": "data", "usedBytes": 500}, {"name": "tmp", "usedBytes": 9}]},
+            {"podRef": {"name": "other-0"}, "volume": [{"name": "data", "usedBytes": 7}]}
+        ]});
+        assert_eq!(
+            volume_used_bytes(&summary, &["jobs-0".to_string()]),
+            vec![500]
+        );
+    }
+
+    #[test]
+    fn volume_used_bytes_skips_missing_and_bad_values() {
+        let summary = json!({"pods": [
+            {"podRef": {"name": "jobs-0"}, "volume": [{"name": "data"}, {"name": "data", "usedBytes": "x"}]}
+        ]});
+        assert!(volume_used_bytes(&summary, &["jobs-0".to_string()]).is_empty());
+        assert!(volume_used_bytes(&json!({}), &["jobs-0".to_string()]).is_empty());
     }
 }
 // HANDWRITE-END

@@ -23,6 +23,7 @@ pub enum PatchError {
 pub trait CapacityIo {
     fn defers(&self) -> impl Future<Output = Vec<Defer>> + Send;
     fn pod_metrics(&self, defer: &Defer) -> impl Future<Output = Vec<serde_json::Value>> + Send;
+    fn disk_used_bytes(&self, defer: &Defer) -> impl Future<Output = Vec<u64>> + Send;
     fn fresh_generation(&self, defer: &Defer) -> impl Future<Output = Option<i64>> + Send;
     fn patch(
         &self,
@@ -193,6 +194,16 @@ struct KubeCapacityIo {
     client: kube::Client,
 }
 
+impl KubeCapacityIo {
+    /// The kubelet `stats/summary` of one node, through the API server proxy.
+    async fn node_summary(&self, node: &str) -> anyhow::Result<serde_json::Value> {
+        let req = kube::core::Request::new("/api/v1/nodes")
+            .get_subresource("proxy/stats/summary", node)?;
+        let text = self.client.request_text(req).await?;
+        Ok(serde_json::from_str::<serde_json::Value>(&text)?)
+    }
+}
+
 impl CapacityIo for KubeCapacityIo {
     async fn defers(&self) -> Vec<Defer> {
         let api = kube::Api::<Defer>::all(self.client.clone());
@@ -225,6 +236,44 @@ impl CapacityIo for KubeCapacityIo {
                 Vec::new()
             }
         }
+    }
+
+    async fn disk_used_bytes(&self, defer: &Defer) -> Vec<u64> {
+        let ns = defer.metadata.namespace.clone().unwrap_or_default();
+        let name = defer.metadata.name.clone().unwrap_or_default();
+        let selector = format!("app.kubernetes.io/name=defer,app.kubernetes.io/instance={name}");
+        let pods =
+            kube::Api::<k8s_openapi::api::core::v1::Pod>::namespaced(self.client.clone(), &ns)
+                .list(&kube::api::ListParams::default().labels(&selector))
+                .await;
+        let pods = match pods {
+            Ok(list) => list,
+            Err(e) => {
+                tracing::warn!(%name, error = %e, "capacity loop: disk usage unavailable");
+                return Vec::new();
+            }
+        };
+        let mut by_node: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        for pod in &pods.items {
+            let node = pod.spec.as_ref().and_then(|s| s.node_name.clone());
+            let pod_name = pod.metadata.name.clone();
+            if let (Some(node), Some(pod_name)) = (node, pod_name) {
+                by_node.entry(node).or_default().push(pod_name);
+            }
+        }
+        let mut out = Vec::new();
+        for (node, names) in &by_node {
+            match self.node_summary(node).await {
+                Ok(summary) => {
+                    out.extend(crate::capacity_sample::volume_used_bytes(&summary, names));
+                }
+                Err(e) => {
+                    tracing::warn!(%name, %node, error = %e, "capacity loop: disk usage unavailable");
+                }
+            }
+        }
+        out
     }
 
     async fn fresh_generation(&self, defer: &Defer) -> Option<i64> {
@@ -267,6 +316,7 @@ mod tests {
         patch_result: Mutex<Result<(), ()>>,
         patches: Mutex<Vec<serde_json::Value>>,
         metrics_calls: Mutex<usize>,
+        disk_bytes: Mutex<Vec<u64>>,
     }
 
     impl Default for Fake {
@@ -278,6 +328,7 @@ mod tests {
                 patch_result: Mutex::new(Ok(())),
                 patches: Mutex::new(Vec::new()),
                 metrics_calls: Mutex::new(0),
+                disk_bytes: Mutex::new(Vec::new()),
             }
         }
     }
@@ -292,6 +343,10 @@ mod tests {
             let cpu = self.cpu_per_pod.lock().unwrap().clone();
             let pod = json!({"containers": [{"name": "defer", "usage": {"cpu": cpu, "memory": "100Mi"}}]});
             vec![pod.clone(), pod]
+        }
+
+        async fn disk_used_bytes(&self, _defer: &Defer) -> Vec<u64> {
+            self.disk_bytes.lock().unwrap().clone()
         }
 
         async fn fresh_generation(&self, defer: &Defer) -> Option<i64> {
