@@ -10,6 +10,7 @@ use crate::types::{
     SchedulerError, SchedulerResult, TaskId, TaskStateFilter, TaskStatus,
 };
 
+pub mod export;
 mod lease;
 
 const PRIORITY_BANDS: usize = u8::MAX as usize + 1;

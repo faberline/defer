@@ -23,6 +23,7 @@ serde_json.workspace = true
 server-lifecycle.workspace = true
 service-auth.workspace = true
 service-http.workspace = true
+shard-routing.workspace = true
 tracing.workspace = true
 utoipa.workspace = true
 

@@ -8,7 +8,10 @@
 pub mod scheduler;
 pub mod types;
 
-pub use scheduler::DeferScheduler;
+pub use scheduler::{
+    export::{QueueExport, QueueImportError},
+    DeferScheduler,
+};
 pub use types::{
     AttemptSettlement, CreateTask, DispatchLease, NackOutcome, QueueControlState, QueuePolicy,
     QueueSnapshot, SchedulerError, SchedulerResult, SettlementOutcome, Target, TaskStateFilter,
