@@ -6,6 +6,7 @@ pub mod capacity_sample;
 pub mod crd;
 pub mod membership_driver;
 pub mod membership_http;
+pub mod queue_move;
 pub mod reconcile;
 pub mod render;
 pub mod replica_controller;
@@ -27,6 +28,10 @@ pub use crd::{
 };
 pub use membership_driver::{run_steps, ActuatorError, MembershipActuator, RetryPolicy};
 pub use membership_http::HttpMembershipActuator;
+pub use queue_move::{
+    plan_queue_moves, run_queue_moves, HttpQueueMoveActuator, MoveError, MoveReport, MoveStep,
+    QueueMoveActuator,
+};
 pub use reconcile::run;
 pub use replica_controller::{
     leader_ordinal_from_hint, next_replica_layer, pod_http_url, pod_peer_url, LayerOutcome,
