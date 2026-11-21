@@ -23,7 +23,7 @@ pub use capacity_sample::{parse_cpu_quantity, parse_memory_quantity, population_
 pub use crd::{
     crd_yaml, DeclaredQueueControl, DeclaredQueuePolicySpec, DeclaredQueueSpec, Defer,
     DeferBackupSpec, DeferCapacityPolicySpec, DeferPlacement, DeferResourceLimits, DeferSpec,
-    DeferStatus, LocalObjectReference, Toleration,
+    DeferStatus, LocalObjectReference, Toleration, MAX_SHARD_COUNT,
 };
 pub use membership_driver::{run_steps, ActuatorError, MembershipActuator, RetryPolicy};
 pub use membership_http::HttpMembershipActuator;

@@ -100,6 +100,9 @@ pub struct DeferSpec {
     pub capacity_policy: Option<DeferCapacityPolicySpec>,
 }
 
+/// The most shards a Defer can run (#270).
+pub const MAX_SHARD_COUNT: u32 = 8;
+
 impl DeferSpec {
     /// Rejects specs that set both seed sources.
     pub fn validate(&self) -> Result<(), String> {
@@ -107,6 +110,11 @@ impl DeferSpec {
             return Err(
                 "bootstrapSeedUri and bootstrapSeedConfigMap are mutually exclusive".to_string(),
             );
+        }
+        if self.cluster.shard_count == 0 || self.cluster.shard_count > MAX_SHARD_COUNT {
+            return Err(format!(
+                "shardCount must be between 1 and {MAX_SHARD_COUNT}"
+            ));
         }
         Ok(())
     }
@@ -297,6 +305,9 @@ pub struct DeferStatus {
     /// Replica count whose members are all Raft voters (#140). Missing means the live size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settled_replicas: Option<i32>,
+    /// Settled replica count of each shard, by shard number (#270). Missing means every live shard is settled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_shards: Option<Vec<i32>>,
 }
 
 fn default_storage() -> String {
@@ -465,6 +476,54 @@ mod seed_validate_tests {
             .validate()
             .is_ok());
         assert!(defer_with(json!({})).spec.validate().is_ok());
+    }
+}
+#[cfg(test)]
+mod shard_count_tests {
+    use super::{Defer, DeferSpec, DeferStatus};
+    use serde_json::json;
+
+    fn spec_with(mut spec: serde_json::Value) -> DeferSpec {
+        spec["image"] = json!("registry/defer:1");
+        let defer: Defer = serde_json::from_value(json!({
+            "apiVersion": "defer.dev/v1alpha1",
+            "kind": "Defer",
+            "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+            "spec": spec
+        }))
+        .unwrap();
+        defer.spec
+    }
+
+    #[test]
+    fn validate_rejects_zero_and_more_than_eight_shards() {
+        // Negative test: without the new check, shardCount 0 and 9 are accepted.
+        let zero = spec_with(json!({"shardCount": 0}));
+        assert_eq!(
+            zero.validate().unwrap_err(),
+            "shardCount must be between 1 and 8"
+        );
+        let nine = spec_with(json!({"shardCount": 9}));
+        assert_eq!(
+            nine.validate().unwrap_err(),
+            "shardCount must be between 1 and 8"
+        );
+        assert!(spec_with(json!({"shardCount": 1})).validate().is_ok());
+        assert!(spec_with(json!({"shardCount": 8})).validate().is_ok());
+    }
+
+    #[test]
+    fn status_settled_shards_is_optional() {
+        // Negative test: without the new field, settledShards is absent from the output.
+        let value = serde_json::to_value(DeferStatus::default()).unwrap();
+        assert!(value.get("settledShards").is_none());
+
+        let shards = DeferStatus {
+            settled_shards: Some(vec![3, 1]),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(shards).unwrap();
+        assert_eq!(value["settledShards"], json!([3, 1]));
     }
 }
 // HANDWRITE-END
