@@ -8,6 +8,7 @@
 mod audit;
 pub mod metrics;
 pub mod openapi;
+pub mod placement;
 pub mod server;
 
 pub use server::AppState;
