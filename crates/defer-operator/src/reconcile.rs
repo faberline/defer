@@ -645,4 +645,99 @@ mod shard_path_tests {
         assert!(out[0]["spec"].get("replicas").is_none());
     }
 }
+#[cfg(test)]
+mod shard_api_tests {
+    use super::{reconcile_shards, Defer};
+    use crate::replica_reconcile::ReplicaInput;
+    use serde_json::{json, Value};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const NOT_FOUND: &str =
+        r#"{"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","code":404}"#;
+    const SECRET: &str = r#"{"apiVersion":"v1","kind":"Secret","metadata":{"name":"defer-tokens","namespace":"payments"},"data":{"token":"dG9rZW4="}}"#;
+
+    /// A fake Kubernetes API: every request gets the same status and body.
+    async fn fake_api(status: u16, body: &'static str) -> kube::Client {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = [0u8; 8192];
+                let _ = socket.read(&mut buf).await;
+                let reply = format!(
+                    "HTTP/1.1 {status} Reply\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(reply.as_bytes()).await;
+            }
+        });
+        let url = format!("http://{addr}").parse().unwrap();
+        kube::Client::try_from(kube::Config::new(url)).unwrap()
+    }
+
+    fn defer_with_secret(shards: u32, status: Value) -> Defer {
+        serde_json::from_value(json!({
+            "apiVersion": "defer.dev/v1alpha1",
+            "kind": "Defer",
+            "metadata": {"name": "jobs", "namespace": "payments", "uid": "u-1"},
+            "spec": {
+                "image": "registry/defer:1",
+                "shardCount": shards,
+                "replicasPerShard": 3,
+                "voterCount": 3,
+                "adminTokenSecret": "defer-tokens"
+            },
+            "status": status
+        }))
+        .unwrap()
+    }
+
+    fn children(replicas: u32) -> Vec<Value> {
+        vec![
+            json!({"kind": "Service", "spec": {}}),
+            json!({"kind": "StatefulSet", "spec": {"replicas": replicas}}),
+        ]
+    }
+
+    #[tokio::test]
+    async fn shard_reconcile_keeps_the_size_when_the_token_secret_is_missing() {
+        let client = fake_api(404, NOT_FOUND).await;
+        let defer = defer_with_secret(2, json!({"settledShards": [3, 3]}));
+        let input = ReplicaInput {
+            live_replicas: 6,
+            ready_replicas: 6,
+            settled: None,
+            desired: 3,
+        };
+        let plan = reconcile_shards(&defer, &client, "payments", "jobs", children(6), &input)
+            .await
+            .unwrap();
+        let (children, context) = plan.into_parts();
+        assert_eq!(children[1]["spec"]["replicas"], 6);
+        assert_eq!(context["settledShards"], json!([3, 3]));
+        assert!(context["message"]
+            .as_str()
+            .unwrap()
+            .contains("secret defer-tokens not found"));
+    }
+
+    #[tokio::test]
+    async fn shard_reconcile_with_the_token_keeps_settled_shards() {
+        let client = fake_api(200, SECRET).await;
+        let defer = defer_with_secret(2, json!({"settledShards": [3, 3]}));
+        let input = ReplicaInput {
+            live_replicas: 6,
+            ready_replicas: 6,
+            settled: None,
+            desired: 3,
+        };
+        let plan = reconcile_shards(&defer, &client, "payments", "jobs", children(6), &input)
+            .await
+            .unwrap();
+        let (children, context) = plan.into_parts();
+        assert_eq!(children[1]["spec"]["replicas"], 6);
+        assert_eq!(context["settledShards"], json!([3, 3]));
+        assert!(context["message"].is_null());
+    }
+}
 // HANDWRITE-END
