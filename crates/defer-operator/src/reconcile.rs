@@ -81,24 +81,24 @@ fn shards_token_error(input: &ShardsInput, text: String) -> ShardsDecision {
 }
 
 /// The shard path of one reconcile: one StatefulSet holds every shard (#270).
-async fn reconcile_shards(
+/// `token` is the result of reading the admin token Secret (see `read_token`).
+async fn plan_shards(
     defer: &Defer,
-    client: &kube::Client,
     ns: &str,
     name: &str,
+    token: Result<String, String>,
     children: Vec<Value>,
     input: &ReplicaInput,
-) -> anyhow::Result<ReconcilePlan> {
+) -> ReconcilePlan {
     let shards = shards_input(defer, input);
-    let secret = defer.spec.admin_token_secret.clone().unwrap_or_default();
-    let token = match read_token(client, ns, &secret).await {
+    let token = match token {
         Ok(token) => token,
         Err(text) => {
             let decision = shards_token_error(&shards, text);
-            return Ok(ReconcilePlan::new(
+            return ReconcilePlan::new(
                 apply_shards_decision(children, &decision),
                 shards_context(&decision),
-            ));
+            );
         }
     };
     let token = membership_token(&defer.spec.auth, token);
@@ -117,10 +117,10 @@ async fn reconcile_shards(
     };
     let decision =
         decide_shards_for_reconcile(actuator_for_shard, shards, RetryPolicy::default()).await;
-    Ok(ReconcilePlan::new(
+    ReconcilePlan::new(
         apply_shards_decision(children, &decision),
         shards_context(&decision),
-    ))
+    )
 }
 
 /// Sets the StatefulSet replicas to the shard decision; other children are unchanged.
@@ -239,7 +239,9 @@ impl ManagedService for Defer {
             return Ok(plain(children));
         };
         if use_shard_path(self) {
-            return reconcile_shards(self, &client, &ns, &name, children, &input).await;
+            let secret = self.spec.admin_token_secret.clone().unwrap_or_default();
+            let token = read_token(&client, &ns, &secret).await;
+            return Ok(plan_shards(self, &ns, &name, token, children, &input).await);
         }
         let secret = self.spec.admin_token_secret.clone().unwrap_or_default();
         let token = match read_token(&client, &ns, &secret).await {
@@ -647,33 +649,9 @@ mod shard_path_tests {
 }
 #[cfg(test)]
 mod shard_api_tests {
-    use super::{reconcile_shards, Defer};
+    use super::{plan_shards, Defer};
     use crate::replica_reconcile::ReplicaInput;
     use serde_json::{json, Value};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    const NOT_FOUND: &str =
-        r#"{"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","code":404}"#;
-    const SECRET: &str = r#"{"apiVersion":"v1","kind":"Secret","metadata":{"name":"defer-tokens","namespace":"payments"},"data":{"token":"dG9rZW4="}}"#;
-
-    /// A fake Kubernetes API: every request gets the same status and body.
-    async fn fake_api(status: u16, body: &'static str) -> kube::Client {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            while let Ok((mut socket, _)) = listener.accept().await {
-                let mut buf = [0u8; 8192];
-                let _ = socket.read(&mut buf).await;
-                let reply = format!(
-                    "HTTP/1.1 {status} Reply\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = socket.write_all(reply.as_bytes()).await;
-            }
-        });
-        let url = format!("http://{addr}").parse().unwrap();
-        kube::Client::try_from(kube::Config::new(url)).unwrap()
-    }
 
     fn defer_with_secret(shards: u32, status: Value) -> Defer {
         serde_json::from_value(json!({
@@ -700,8 +678,7 @@ mod shard_api_tests {
     }
 
     #[tokio::test]
-    async fn shard_reconcile_keeps_the_size_when_the_token_secret_is_missing() {
-        let client = fake_api(404, NOT_FOUND).await;
+    async fn shard_plan_keeps_the_size_when_the_token_secret_is_missing() {
         let defer = defer_with_secret(2, json!({"settledShards": [3, 3]}));
         let input = ReplicaInput {
             live_replicas: 6,
@@ -709,9 +686,8 @@ mod shard_api_tests {
             settled: None,
             desired: 3,
         };
-        let plan = reconcile_shards(&defer, &client, "payments", "jobs", children(6), &input)
-            .await
-            .unwrap();
+        let token = Err("secret defer-tokens not found".to_string());
+        let plan = plan_shards(&defer, "payments", "jobs", token, children(6), &input).await;
         let (children, context) = plan.into_parts();
         assert_eq!(children[1]["spec"]["replicas"], 6);
         assert_eq!(context["settledShards"], json!([3, 3]));
@@ -722,8 +698,7 @@ mod shard_api_tests {
     }
 
     #[tokio::test]
-    async fn shard_reconcile_with_the_token_keeps_settled_shards() {
-        let client = fake_api(200, SECRET).await;
+    async fn shard_plan_with_the_token_keeps_settled_shards() {
         let defer = defer_with_secret(2, json!({"settledShards": [3, 3]}));
         let input = ReplicaInput {
             live_replicas: 6,
@@ -731,9 +706,8 @@ mod shard_api_tests {
             settled: None,
             desired: 3,
         };
-        let plan = reconcile_shards(&defer, &client, "payments", "jobs", children(6), &input)
-            .await
-            .unwrap();
+        let token = Ok("token".to_string());
+        let plan = plan_shards(&defer, "payments", "jobs", token, children(6), &input).await;
         let (children, context) = plan.into_parts();
         assert_eq!(children[1]["spec"]["replicas"], 6);
         assert_eq!(context["settledShards"], json!([3, 3]));
