@@ -22,6 +22,9 @@ use utoipa::OpenApi;
         crate::server::dispatch_one,
         crate::server::admin_backup,
         crate::server::admin_membership,
+        crate::server::admin_queue_export,
+        crate::server::admin_queue_import,
+        crate::server::admin_queue_remove,
     ),
     components(schemas(
         defer_shared_kernel::Target,
@@ -135,9 +138,11 @@ mod tests {
         sorted.sort();
         assert_eq!(ops, sorted, "operations() must be sorted");
         let expected: Vec<String> = [
+            "DELETE /v1/admin/queues/{queue}/export",
             "DELETE /v1/queues/{queue}",
             "DELETE /v1/queues/{queue}/tasks/{task_id}",
             "GET /admin/backup",
+            "GET /v1/admin/queues/{queue}/export",
             "GET /v1/queues",
             "GET /v1/queues/{queue}",
             "GET /v1/queues/{queue}/tasks",
@@ -148,6 +153,7 @@ mod tests {
             "POST /v1/queues/{queue}/purge",
             "POST /v1/queues/{queue}/tasks",
             "POST /v1/queues/{queue}/tasks:batch",
+            "PUT /v1/admin/queues/{queue}/import",
             "PUT /v1/queues/{queue}",
         ]
         .iter()

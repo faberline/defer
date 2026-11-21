@@ -117,7 +117,8 @@ Two defer-only routes exist for operators: `POST /v1/queues/{queue}/dispatch`
 runs one dispatch tick by hand, and `GET /admin/backup` streams the state
 snapshot. Both require the admin role when auth is on. `POST /v1/admin/membership`
 changes the Raft membership (`add_learner`, `promote`, `demote`, `remove`) and also needs the
-admin role.
+admin role. `GET /v1/admin/queues/{queue}/export`, `PUT /v1/admin/queues/{queue}/import` and
+`DELETE /v1/admin/queues/{queue}/export` move a whole queue between shards and need the admin role.
 
 ## Contract discovery
 
