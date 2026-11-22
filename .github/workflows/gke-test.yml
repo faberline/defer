@@ -14,6 +14,7 @@
 #   capacity_policy    k8s/gke-test-job/capacity_policy    capacity controller scales out on a low CPU threshold (manual only, not in all)
 #   backup_restore     k8s/gke-test-job/backup_restore     backup and restore into a new group through a ConfigMap seed (manual only, not in all)
 #   rolling_upgrade    k8s/gke-test-job/rolling_upgrade    roll a 3-replica group from a previous image to the current one (manual only, not in all)
+#   shard_split        k8s/gke-test-job/shard_split        raise shardCount from 1 to 2 under load (manual only, not in all)
 #   deploy_smoke       k8s/gke-test-job/deploy_smoke       dispatch journey and metrics diagnostics
 # Manual only: a dispatch picks one suite or all. ci.yml runs the same jobs as its e2e stage.
 #
@@ -33,7 +34,7 @@ on:
       suite:
         description: Suite to run; all runs every suite, one at a time.
         type: choice
-        options: [all, operator_recovery, deploy_smoke, capacity_policy, backup_restore, rolling_upgrade]
+        options: [all, operator_recovery, deploy_smoke, capacity_policy, backup_restore, rolling_upgrade, shard_split]
         default: all
       previous_image:
         description: Image of the previous release for suite rolling_upgrade, as ghcr.io/faberline/defer@sha256:<64 hex>; empty for every other suite.
@@ -197,8 +198,9 @@ jobs:
             capacity_policy) suites='["capacity_policy"]' ;;
             backup_restore) suites='["backup_restore"]' ;;
             rolling_upgrade) suites='["rolling_upgrade"]' ;;
+            shard_split) suites='["shard_split"]' ;;
             operator_recovery | deploy_smoke) suites="[\"${INPUT_SUITE}\"]" ;;
-            *) die "suite must be all, operator_recovery, deploy_smoke, capacity_policy, backup_restore, or rolling_upgrade, got: $INPUT_SUITE" ;;
+            *) die "suite must be all, operator_recovery, deploy_smoke, capacity_policy, backup_restore, rolling_upgrade, or shard_split, got: $INPUT_SUITE" ;;
           esac
 
           {

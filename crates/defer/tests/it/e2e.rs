@@ -14,6 +14,7 @@ mod capacity_policy;
 mod deploy_smoke;
 mod operator_recovery;
 mod rolling_upgrade;
+mod shard_split;
 
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -30,6 +31,7 @@ const SUITES: &[&str] = &[
     "deploy_smoke",
     "operator_recovery",
     "rolling_upgrade",
+    "shard_split",
 ];
 
 /// Base URL of the defer under test, without a trailing slash. A missing
