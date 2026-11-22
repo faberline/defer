@@ -3,7 +3,7 @@
 Project-level documentation for defer. Usage starts at the root
 [`README.md`](../README.md); the support contract is [`STATUS.md`](../STATUS.md),
 future outcomes are [`ROADMAP.md`](../ROADMAP.md), and contributor rules live in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md).
+[`CONTRIBUTING.md`](../CONTRIBUTING.md), and the standing instructions for agents in [`AGENTS.md`](../AGENTS.md).
 
 | Document | What it answers |
 |----------|-----------------|
