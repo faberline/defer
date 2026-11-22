@@ -1,6 +1,7 @@
-//! Suite `shard_split`, part 1: start a one-shard group with an admin token
-//! Secret, then create 6 queues with 400 due tasks each. It never dispatches
-//! anything and no split runs here; part 2 raises `shardCount` on this group.
+//! Suite `shard_split`, part 2: start a one-shard group with an admin token
+//! Secret, create 6 queues with 400 due tasks each, then raise `shardCount`
+//! to 2 while a writer keeps creating tasks. It proves every task reaches
+//! `Succeeded` and that no lease settles twice.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -18,6 +19,9 @@ const GROUP_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const DELETE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const API_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const DURING_TASKS_PER_QUEUE: usize = 20;
+const SPLIT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// `split-<q>`, for example `split-0`.
 fn queue_name(q: usize) -> String {
@@ -27,6 +31,12 @@ fn queue_name(q: usize) -> String {
 /// `s<q>-<i padded to 4 digits>`, for example `s0-0007`.
 fn task_id(q: usize, i: usize) -> String {
     format!("s{q}-{i:04}")
+}
+
+/// `d<q>-<i padded to 4 digits>`, for example `d1-0003`. A second id range
+/// for the tasks that the writer creates during the split.
+fn during_task_id(q: usize, i: usize) -> String {
+    format!("d{q}-{i:04}")
 }
 
 /// Body of POST /v1/queues/<queue>/tasks. A due task, so the queue's rate
@@ -202,9 +212,218 @@ fn names_where(list: &Value, keep: impl Fn(&str) -> bool) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Merge patch that raises `shardCount` of the CR from 1 to 2.
+fn split_patch() -> Value {
+    json!({"spec": {"shardCount": 2}})
+}
+
+/// True only when the CR status reports the finished move from 1 shard to 2
+/// (`queueMove.step` is `done`) and both pods of the group are ready.
+fn split_done(status: &Value, pods_ready: u64) -> bool {
+    status["queueMove"] == json!({"fromShards": 1, "toShards": 2, "step": "done"})
+        && pods_ready == 2
+}
+
+/// Where a task stands, read from its `status` text.
+#[derive(Debug, PartialEq, Eq)]
+enum Progress {
+    Done,
+    Waiting,
+    Failed,
+}
+
+/// `Succeeded` is done; `DeadLettered` and `Canceled` can never succeed; any
+/// other text is still in progress.
+fn classify(status: &str) -> Progress {
+    match status {
+        "Succeeded" => Progress::Done,
+        "DeadLettered" | "Canceled" => Progress::Failed,
+        _ => Progress::Waiting,
+    }
+}
+
+/// Checks that every created task settled exactly once: no lease lost its
+/// owner, and the acked count equals the created count.
+fn settled_once(acked: u64, lost: u64, created: u64) -> Result<(), String> {
+    if lost > 0 {
+        return Err(format!("{lost} leases lost ownership, want 0"));
+    }
+    if acked > created {
+        return Err(format!(
+            "acked {acked}, created {created}: a lease settled twice"
+        ));
+    }
+    if acked < created {
+        return Err(format!(
+            "acked {acked}, created {created}: a task never settled"
+        ));
+    }
+    Ok(())
+}
+
+/// The value of one counter in a Prometheus text body, or `None`.
+fn parse_counter(metrics: &str, name: &str) -> Option<u64> {
+    for line in metrics.lines() {
+        let line = line.trim();
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix(name) {
+            if rest.starts_with(' ') || rest.starts_with('\t') || rest.starts_with('{') {
+                let rest = rest.trim();
+                let val_str = if let Some((_, val)) = rest.split_once('}') {
+                    val.trim()
+                } else {
+                    rest
+                };
+                if let Ok(val) = val_str.parse::<u64>() {
+                    return Some(val);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The base URL of each of the 2 replicas, read through the headless Service:
+/// `defer-<i>.defer-headless.<namespace>`.
+fn replica_bases(namespace: &str) -> Vec<String> {
+    (0..2)
+        .map(|i| format!("http://defer-{i}.defer-headless.{namespace}.svc.cluster.local:7141"))
+        .collect()
+}
+
+/// Reads `defer_dispatch_acked_total` and `defer_dispatch_lost_ownership_total`
+/// from `GET /metrics` of every base, and returns the sums. The counters are
+/// per process, so the sums cover the whole group. A failing base fails the
+/// whole read.
+async fn read_settle_counters(
+    http: &reqwest::Client,
+    bases: &[String],
+) -> Result<(u64, u64), String> {
+    let mut acked_total = 0;
+    let mut lost_total = 0;
+    for base in bases {
+        let response = http
+            .get(format!("{base}/metrics"))
+            .send()
+            .await
+            .map_err(|err| format!("{base}: {err}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("{base}/metrics: {status}"));
+        }
+        let text = response
+            .text()
+            .await
+            .map_err(|err| format!("{base}: {err}"))?;
+        let acked = parse_counter(&text, "defer_dispatch_acked_total")
+            .ok_or_else(|| format!("{base}: missing defer_dispatch_acked_total"))?;
+        let lost = parse_counter(&text, "defer_dispatch_lost_ownership_total")
+            .ok_or_else(|| format!("{base}: missing defer_dispatch_lost_ownership_total"))?;
+        acked_total += acked;
+        lost_total += lost;
+    }
+    Ok((acked_total, lost_total))
+}
+
+/// Creates `DURING_TASKS_PER_QUEUE` tasks in each queue while the split runs.
+/// A 201 or a 409 (an id this writer already sent) counts as created. A
+/// connection error or a 5xx is retried every `POLL_INTERVAL` until
+/// `API_TIMEOUT` passes for that task. Returns the ids of all created tasks.
+async fn write_during_tasks(http: reqwest::Client, base: String) -> Vec<String> {
+    let mut created = Vec::new();
+    for q in 0..QUEUES {
+        for i in 0..DURING_TASKS_PER_QUEUE {
+            let id = during_task_id(q, i);
+            let deadline = tokio::time::Instant::now() + API_TIMEOUT;
+            loop {
+                let last = match http
+                    .post(format!("{base}/v1/queues/{}/tasks", queue_name(q)))
+                    .json(&task_body(&id))
+                    .send()
+                    .await
+                {
+                    Ok(response) => {
+                        let status = response.status().as_u16();
+                        match status {
+                            201 | 409 => {
+                                created.push(id.clone());
+                                break;
+                            }
+                            500..=599 => format!("status {status}"),
+                            _ => panic!("create task {id}: status {status}"),
+                        }
+                    }
+                    Err(err) => err.to_string(),
+                };
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "create task {id}: not created within {API_TIMEOUT:?}; last error: {last}"
+                );
+                tokio::time::sleep(POLL_INTERVAL).await;
+            }
+        }
+    }
+    created
+}
+
+/// Polls every `(queue index, task id)` pair until all read `Succeeded`. A
+/// 404, `DeadLettered` or `Canceled` fails at once, with the id. A connection
+/// error or a 5xx is read as still waiting.
+async fn wait_all_succeeded(http: &reqwest::Client, base: &str, ids: &[(usize, String)]) {
+    let deadline = tokio::time::Instant::now() + SETTLE_TIMEOUT;
+    let mut done = vec![false; ids.len()];
+    loop {
+        for (k, (q, id)) in ids.iter().enumerate() {
+            if done[k] {
+                continue;
+            }
+            let response = match http
+                .get(format!("{base}/v1/queues/{}/tasks/{id}", queue_name(*q)))
+                .send()
+                .await
+            {
+                Ok(response) => response,
+                Err(_) => continue,
+            };
+            let status = response.status().as_u16();
+            match status {
+                404 => panic!("task {id}: 404 after the split"),
+                200 => {
+                    let body: Value = response.json().await.unwrap_or(Value::Null);
+                    let text = body["status"].as_str().unwrap_or("");
+                    match classify(text) {
+                        Progress::Failed => panic!("task {id}: {text} after the split"),
+                        Progress::Done => done[k] = true,
+                        Progress::Waiting => {}
+                    }
+                }
+                500..=599 => {}
+                _ => panic!("task {id}: status {status} after the split"),
+            }
+        }
+        let left = done.iter().filter(|d| !**d).count();
+        if left == 0 {
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let first: Vec<&str> = ids
+                .iter()
+                .zip(&done)
+                .filter(|(_, d)| !**d)
+                .take(5)
+                .map(|((_, id), _)| id.as_str())
+                .collect();
+            panic!("{left} tasks not Succeeded within {SETTLE_TIMEOUT:?}; first left: {first:?}");
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "e2e: needs E2E_ENDPOINT"]
-async fn shard_split_group_starts_on_one_shard() {
+async fn shard_split_under_load_settles_every_task_once() {
     let base = endpoint();
     let http = reqwest::Client::builder()
         .timeout(API_TIMEOUT)
@@ -278,12 +497,92 @@ async fn shard_split_group_starts_on_one_shard() {
     let task = send(http.get(format!("{base}/v1/queues/{}/tasks/{first}", queue_name(0)))).await;
     assert_eq!(task["task_id"], first.as_str());
     evidence(SUITE, "task readable", json!({ "task_id": first }));
+
+    // 7. Start the writer, then raise shardCount to 2 while it runs.
+    let writer = tokio::spawn(write_during_tasks(http.clone(), base.clone()));
+    let patch = split_patch().to_string();
+    kubectl(&[
+        "patch",
+        "defer",
+        DEFER,
+        "--type",
+        "merge",
+        "-p",
+        patch.as_str(),
+    ]);
+    evidence(SUITE, "split started", json!({ "shardCount": 2 }));
+
+    // 8. Wait for the queue move to finish and both pods to be ready.
+    wait_for("queue move done and 2 pods ready", SPLIT_TIMEOUT, || {
+        let status = kubectl_json(&["get", "defer", DEFER])["status"].clone();
+        let out = try_kubectl(&["get", "statefulset", DEFER, "-o", "json"])?;
+        let sts: Value = serde_json::from_str(&out).map_err(|err| format!("not JSON: {err}"))?;
+        let ready = sts["status"]["readyReplicas"].as_u64().unwrap_or(0);
+        if split_done(&status, ready) {
+            Ok(())
+        } else {
+            Err(format!("pods ready {ready}; status {status}"))
+        }
+    });
+    wait_healthy(&http, &base).await;
+    evidence(SUITE, "split done", json!({ "toShards": 2 }));
+
+    // 9. The writer created every task it planned.
+    let during = writer.await.expect("writer task");
+    assert_eq!(
+        during.len(),
+        QUEUES * DURING_TASKS_PER_QUEUE,
+        "tasks created during the split"
+    );
+    evidence(
+        SUITE,
+        "during tasks created",
+        json!({ "total": during.len() }),
+    );
+
+    // 10. Every task, before and during the split, reaches Succeeded.
+    let mut pairs: Vec<(usize, String)> = Vec::new();
+    for q in 0..QUEUES {
+        for i in 0..TASKS_PER_QUEUE {
+            pairs.push((q, task_id(q, i)));
+        }
+        for i in 0..DURING_TASKS_PER_QUEUE {
+            pairs.push((q, during_task_id(q, i)));
+        }
+    }
+    wait_all_succeeded(&http, &base, &pairs).await;
+    let created = QUEUES * TASKS_PER_QUEUE + during.len();
+    evidence(SUITE, "all tasks succeeded", json!({ "total": created }));
+
+    // 11. Each lease settled exactly once, on either replica.
+    let bases = replica_bases(&required_env("NAMESPACE"));
+    let deadline = tokio::time::Instant::now() + API_TIMEOUT;
+    let (acked, lost) = loop {
+        match read_settle_counters(&http, &bases).await {
+            Ok(counts) => break counts,
+            Err(err) => {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "read settle counters: {err}"
+                );
+                tokio::time::sleep(POLL_INTERVAL).await;
+            }
+        }
+    };
+    settled_once(acked, lost, created as u64).unwrap_or_else(|err| panic!("{err}"));
+    evidence(
+        SUITE,
+        "each lease settled once",
+        json!({ "acked": acked, "lost_ownership": lost, "created": created }),
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        cr_for_start, is_group_pod, pvc_names, queue_name, queue_policy, task_body, task_id,
+        classify, cr_for_start, during_task_id, is_group_pod, parse_counter, pvc_names, queue_name,
+        queue_policy, replica_bases, settled_once, split_done, split_patch, task_body, task_id,
+        Progress,
     };
     use serde_json::json;
 
@@ -349,5 +648,86 @@ mod tests {
         assert!(is_group_pod("defer-1"));
         assert!(!is_group_pod("defer-operator-5f7d"));
         assert!(!is_group_pod("defer-e2e-abc"));
+    }
+
+    #[test]
+    fn during_task_id_uses_its_own_range() {
+        assert_eq!(during_task_id(1, 3), "d1-0003");
+        assert_eq!(during_task_id(0, 19), "d0-0019");
+    }
+
+    #[test]
+    fn split_patch_raises_shard_count_to_two() {
+        assert_eq!(split_patch(), json!({"spec": {"shardCount": 2}}));
+    }
+
+    #[test]
+    fn split_done_needs_the_done_step_and_two_pods() {
+        let done = json!({"queueMove": {"fromShards": 1, "toShards": 2, "step": "done"}});
+        assert!(split_done(&done, 2));
+        // Negative cases: each one must be false.
+        assert!(!split_done(&done, 1));
+        assert!(!split_done(&done, 3));
+        let moving = json!({"queueMove": {"fromShards": 1, "toShards": 2, "step": "moving"}});
+        assert!(!split_done(&moving, 2));
+        let pending = json!({"queueMove": {"fromShards": 1, "toShards": 2, "step": "pending"}});
+        assert!(!split_done(&pending, 2));
+        let from_two = json!({"queueMove": {"fromShards": 2, "toShards": 2, "step": "done"}});
+        assert!(!split_done(&from_two, 2));
+        let to_three = json!({"queueMove": {"fromShards": 1, "toShards": 3, "step": "done"}});
+        assert!(!split_done(&to_three, 2));
+        assert!(!split_done(&json!({}), 2));
+    }
+
+    #[test]
+    fn classify_reads_task_status() {
+        assert_eq!(classify("Succeeded"), Progress::Done);
+        assert_eq!(classify("DeadLettered"), Progress::Failed);
+        assert_eq!(classify("Canceled"), Progress::Failed);
+        assert_eq!(classify("Pending"), Progress::Waiting);
+        assert_eq!(classify("Running"), Progress::Waiting);
+        assert_eq!(classify("Scheduled"), Progress::Waiting);
+        assert_eq!(classify(""), Progress::Waiting);
+    }
+
+    #[test]
+    fn settled_once_accepts_equal_counts() {
+        assert_eq!(settled_once(2520, 0, 2520), Ok(()));
+    }
+
+    #[test]
+    fn settled_once_rejects_a_double_settle() {
+        let err = settled_once(2521, 0, 2520).expect_err("acked above created");
+        assert!(err.contains("settled twice"), "{err}");
+    }
+
+    #[test]
+    fn settled_once_rejects_lost_ownership() {
+        let err = settled_once(2520, 1, 2520).expect_err("a lost lease");
+        assert!(err.contains("lost ownership"), "{err}");
+    }
+
+    #[test]
+    fn settled_once_rejects_a_missing_settle() {
+        let err = settled_once(2519, 0, 2520).expect_err("acked below created");
+        assert!(err.contains("never settled"), "{err}");
+    }
+
+    #[test]
+    fn parse_counter_reads_plain_and_labelled_lines() {
+        assert_eq!(parse_counter("# HELP x\nx 5\n", "x"), Some(5));
+        assert_eq!(parse_counter("x{a=\"b\"} 7\n", "x"), Some(7));
+        assert_eq!(parse_counter("y 5\n", "x"), None);
+    }
+
+    #[test]
+    fn replica_bases_names_two_pods() {
+        assert_eq!(
+            replica_bases("ns"),
+            [
+                "http://defer-0.defer-headless.ns.svc.cluster.local:7141",
+                "http://defer-1.defer-headless.ns.svc.cluster.local:7141",
+            ]
+        );
     }
 }
