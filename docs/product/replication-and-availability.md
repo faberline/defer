@@ -83,7 +83,7 @@ not carry yet.
   defer's own; a queue-to-shard map in the custom resource.
 - Open: whether a queue that outgrows one shard needs a placement key finer
   than the queue, which would split its permits across shards.
-- Decided: shard split is [#83](https://github.com/faberline/defer/issues/83). The `shardCount: 1` pin stays until it lands.
+- Decided: shard split is [#83](https://github.com/faberline/defer/issues/83). The operator accepts `shardCount` 1 to 8; the `shard_split` suite is written and no paid run has happened.
 - Neighbours: extends Live replica membership; the evidence is a cluster run
   from [operations.md](operations.md) § Kubernetes operator and direct
   install.
