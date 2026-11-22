@@ -10,7 +10,7 @@ use crate::crd::QueueMoveStatus;
 use defer_queue::placement::QueuePlacement;
 use serde_json::Value;
 use shard_routing::{BucketMove, VirtualBucketShardMap, DEFAULT_VIRTUAL_BUCKET_COUNT};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// A queue move step: recorded, running, or done (#285).
 pub const MOVE_PENDING: &str = "pending";
@@ -322,12 +322,14 @@ pub fn plan_queue_move_step(input: &QueueMoveInput<'_>) -> QueueMoveDecision {
     if let Some(recorded) = input.recorded.filter(|r| r.step != MOVE_DONE) {
         let from = u32::try_from(recorded.from_shards).unwrap_or(0);
         let to = u32::try_from(recorded.to_shards).unwrap_or(0);
-        let settled = input.settled_shards.len() == to as usize
+        // A merge waits for all `from` live shards; a raise for the `to` shards.
+        let shards = if from > to { from } else { to };
+        let settled = input.settled_shards.len() == shards as usize
             && input
                 .settled_shards
                 .iter()
                 .all(|&voters| voters == input.replicas_per_shard);
-        let sized = input.live_replicas == to * input.replicas_per_shard;
+        let sized = input.live_replicas == shards * input.replicas_per_shard;
         if settled && input.ready_replicas == input.live_replicas && sized {
             return QueueMoveDecision::Run {
                 from_shards: from,
@@ -343,7 +345,81 @@ pub fn plan_queue_move_step(input: &QueueMoveInput<'_>) -> QueueMoveDecision {
             step: MOVE_PENDING.to_string(),
         });
     }
+    // One lowering step at a time: the last live shard goes once its queues
+    // moved. A record of a finished step must not start the next one (#286).
+    if input.desired_shards >= 1
+        && input.live_shards > input.desired_shards
+        && !lowering_move_done(input.recorded, input.live_shards)
+    {
+        return QueueMoveDecision::Record(QueueMoveStatus {
+            from_shards: input.live_shards as i32,
+            to_shards: input.live_shards as i32 - 1,
+            step: MOVE_PENDING.to_string(),
+        });
+    }
     QueueMoveDecision::Nothing
+}
+
+/// True when the queues of the last shard moved away and the StatefulSet may
+/// drop that shard: the record is `done` for `live_shards` to one fewer (#286).
+pub fn lowering_move_done(recorded: Option<&QueueMoveStatus>, live_shards: u32) -> bool {
+    recorded.is_some_and(|r| {
+        r.step == MOVE_DONE
+            && r.from_shards == live_shards as i32
+            && r.to_shards == live_shards as i32 - 1
+    })
+}
+
+/// Moves the queues of one lowering step from `from_shards` to `from_shards - 1`
+/// (#286). Lists every shard first, so a list error moves nothing. A queue
+/// that an earlier run already imported gets only the remove step; a queue
+/// that is only on its new owner (an earlier run finished it) gets nothing.
+pub async fn drive_queue_merge<A: QueueMoveActuator + QueueLister>(
+    actuator: &A,
+    from_shards: u32,
+    to_shards: u32,
+) -> Result<MoveReport, MoveError> {
+    if from_shards <= to_shards || to_shards < 1 {
+        return Err(MoveError::List(format!(
+            "a merge needs from_shards > to_shards >= 1, got {from_shards} -> {to_shards}"
+        )));
+    }
+    let old = shard_map(from_shards).map_err(|error| MoveError::List(error.to_string()))?;
+    let new = shard_map(to_shards).map_err(|error| MoveError::List(error.to_string()))?;
+    let mut lists: HashMap<u32, HashSet<String>> = HashMap::new();
+    for shard in 0..from_shards {
+        let names: HashSet<String> = actuator.list_queues(shard).await?.into_iter().collect();
+        lists.insert(shard, names);
+    }
+    let mut names: Vec<String> = lists.values().flatten().cloned().collect();
+    names.sort();
+    names.dedup();
+    let moves = QueuePlacement::new(old, 0)
+        .queues_to_move(&new, &names)
+        .map_err(|error| MoveError::List(error.to_string()))?;
+    let mut steps = Vec::new();
+    for (queue, bucket_move) in &moves {
+        let on_target = lists
+            .get(&bucket_move.to_shard)
+            .is_some_and(|set| set.contains(queue));
+        let on_source = lists
+            .get(&bucket_move.from_shard)
+            .is_some_and(|set| set.contains(queue));
+        match (on_target, on_source) {
+            // Imported by an earlier run and not removed yet.
+            (true, true) => steps.push(MoveStep::Remove {
+                queue: queue.clone(),
+                from_shard: bucket_move.from_shard,
+            }),
+            // Already moved by an earlier run: nothing to do.
+            (true, false) => {}
+            _ => steps.extend(plan_queue_moves(std::slice::from_ref(&(
+                queue.clone(),
+                *bucket_move,
+            )))),
+        }
+    }
+    Ok(run_queue_moves(actuator, &steps).await)
 }
 
 /// Moves the queues of a raise from `from_shards` to `to_shards` (#285). Lists
@@ -391,9 +467,10 @@ pub async fn drive_queue_move<A: QueueMoveActuator + QueueLister>(
 mod tests {
     use crate::crd::QueueMoveStatus;
     use crate::queue_move::{
-        drive_queue_move, plan_queue_move_step, plan_queue_moves, run_queue_moves, shard_map,
-        HttpQueueMoveActuator, MoveError, MoveReport, MoveStep, QueueLister, QueueMoveActuator,
-        QueueMoveDecision, QueueMoveInput, MOVE_DONE, MOVE_MOVING, MOVE_PENDING,
+        drive_queue_merge, drive_queue_move, lowering_move_done, plan_queue_move_step,
+        plan_queue_moves, run_queue_moves, shard_map, HttpQueueMoveActuator, MoveError, MoveReport,
+        MoveStep, QueueLister, QueueMoveActuator, QueueMoveDecision, QueueMoveInput, MOVE_DONE,
+        MOVE_MOVING, MOVE_PENDING,
     };
     use axum::{
         extract::{Query, State},
@@ -1269,6 +1346,276 @@ mod tests {
         assert_eq!(
             plan_queue_move_step(&next_raise),
             QueueMoveDecision::Record(status(2, 3, MOVE_PENDING))
+        );
+    }
+
+    // ---- lowering: one shard merge at a time (#286) ----
+
+    /// Queues `q0..q99` grouped by their shard in the map of `shards` shards.
+    fn names_on(shards: u32) -> Vec<Vec<String>> {
+        let map = shard_map(shards).unwrap();
+        let mut by_shard: Vec<Vec<String>> = vec![Vec::new(); shards as usize];
+        for i in 0..100 {
+            let q = format!("q{i}");
+            by_shard[map.route_key("queue", &q).shard as usize].push(q);
+        }
+        by_shard
+    }
+
+    #[tokio::test]
+    async fn merge_moves_only_the_queues_of_the_removed_shard() {
+        let on_two_before = names_on(3)[2].clone();
+        let shards = Shards::new(names_on(3));
+
+        let report = drive_queue_merge(&shards, 3, 2).await.unwrap();
+
+        assert!(report.failed.is_empty());
+        let two = shard_map(2).unwrap();
+        for i in 0..100 {
+            let q = format!("q{i}");
+            let want = two.route_key("queue", &q).shard;
+            assert_eq!(shards.holder(&q), vec![want], "{q}");
+        }
+        let exported: Vec<String> = shards
+            .calls()
+            .into_iter()
+            .filter(|c| c.starts_with("export("))
+            .collect();
+        assert!(!on_two_before.is_empty() && on_two_before.len() < 100);
+        assert_eq!(exported.len(), on_two_before.len(), "{exported:?}");
+        assert!(exported.iter().all(|c| c.ends_with(",2)")), "{exported:?}");
+        assert_eq!(report.moved.len(), on_two_before.len());
+    }
+
+    #[tokio::test]
+    async fn merge_exports_imports_then_removes_each_queue_in_order() {
+        let queue = names_on(3)[2][0].clone();
+        let owner = shard_map(2).unwrap().route_key("queue", &queue).shard;
+        let shards = Shards::new(vec![Vec::new(), Vec::new(), vec![queue.clone()]]);
+
+        let report = drive_queue_merge(&shards, 3, 2).await.unwrap();
+
+        assert!(report.failed.is_empty());
+        assert_eq!(
+            shards.calls(),
+            vec![
+                format!("export({queue},2)"),
+                format!("import({queue},{owner})"),
+                format!("remove({queue},2)"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_failed_import_keeps_the_queue_on_the_removed_shard_and_the_next_run_retries() {
+        let queue = names_on(3)[2][0].clone();
+        let owner = shard_map(2).unwrap().route_key("queue", &queue).shard;
+        let shards = Shards::new(names_on(3));
+        shards.fail_import.lock().unwrap().insert(queue.clone());
+
+        let first = drive_queue_merge(&shards, 3, 2).await.unwrap();
+
+        assert_eq!(first.failed.len(), 1);
+        assert_eq!(first.failed[0].0, queue);
+        assert!(matches!(first.failed[0].1, MoveError::Import(_)));
+        assert_eq!(shards.holder(&queue), vec![2]);
+        assert!(!shards.calls().contains(&format!("remove({queue},2)")));
+
+        let second = drive_queue_merge(&shards, 3, 2).await.unwrap();
+
+        assert!(second.failed.is_empty());
+        assert_eq!(shards.holder(&queue), vec![owner]);
+    }
+
+    #[tokio::test]
+    async fn merge_after_import_before_remove_only_removes() {
+        let queue = names_on(3)[2][0].clone();
+        let owner = shard_map(2).unwrap().route_key("queue", &queue).shard;
+        // A past run imported the queue to its new owner and stopped before the remove.
+        let mut queues = names_on(3);
+        queues[owner as usize].push(queue.clone());
+        let shards = Shards::new(queues);
+
+        let report = drive_queue_merge(&shards, 3, 2).await.unwrap();
+
+        assert!(report.failed.is_empty());
+        let calls = shards.calls();
+        assert!(calls.contains(&format!("remove({queue},2)")), "{calls:?}");
+        let export_prefix = format!("export({queue},");
+        let import_prefix = format!("import({queue},");
+        assert!(!calls.iter().any(|c| c.starts_with(export_prefix.as_str())));
+        assert!(!calls.iter().any(|c| c.starts_with(import_prefix.as_str())));
+        assert_eq!(shards.holder(&queue), vec![owner]);
+    }
+
+    #[tokio::test]
+    async fn merge_does_not_remove_a_queue_that_already_left_the_removed_shard() {
+        // A retry sees a queue that an earlier run fully moved: it is on its owner
+        // only, so the removed shard gets no remove call for it.
+        let queue = names_on(3)[2][0].clone();
+        let owner = shard_map(2).unwrap().route_key("queue", &queue).shard;
+        let mut queues = names_on(3);
+        queues[2].retain(|q| *q != queue);
+        queues[owner as usize].push(queue.clone());
+        let shards = Shards::new(queues);
+
+        let report = drive_queue_merge(&shards, 3, 2).await.unwrap();
+
+        assert!(report.failed.is_empty());
+        assert!(!shards.calls().contains(&format!("remove({queue},2)")));
+        assert_eq!(shards.holder(&queue), vec![owner]);
+    }
+
+    #[tokio::test]
+    async fn merge_list_failure_moves_nothing() {
+        let shards = Shards {
+            fail_list: true,
+            ..Shards::new(names_on(3))
+        };
+
+        let result = drive_queue_merge(&shards, 3, 2).await;
+
+        assert!(matches!(result, Err(MoveError::List(_))));
+        assert!(shards.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn merge_rejects_a_wrong_direction() {
+        let shards = Shards::new(names_on(3));
+        for (from, to) in [(2, 2), (2, 3), (3, 0)] {
+            let result = drive_queue_merge(&shards, from, to).await;
+            assert!(matches!(result, Err(MoveError::List(_))), "{from} -> {to}");
+        }
+        assert!(shards.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn merge_one_step_from_four_to_three_keeps_the_other_queues_in_place() {
+        let on_four = names_on(4);
+        let shards = Shards::new(on_four.clone());
+
+        let report = drive_queue_merge(&shards, 4, 3).await.unwrap();
+
+        assert!(report.failed.is_empty());
+        let three = shard_map(3).unwrap();
+        for i in 0..100 {
+            let q = format!("q{i}");
+            let want = three.route_key("queue", &q).shard;
+            assert_eq!(shards.holder(&q), vec![want], "{q}");
+        }
+        let exported: Vec<String> = shards
+            .calls()
+            .into_iter()
+            .filter(|c| c.starts_with("export("))
+            .collect();
+        assert_eq!(exported.len(), on_four[3].len(), "{exported:?}");
+        assert!(exported.iter().all(|c| c.ends_with(",3)")), "{exported:?}");
+    }
+
+    #[test]
+    fn lowering_move_done_matches_only_the_finished_last_step() {
+        assert!(lowering_move_done(Some(&status(3, 2, MOVE_DONE)), 3));
+        assert!(!lowering_move_done(Some(&status(3, 2, MOVE_MOVING)), 3));
+        assert!(!lowering_move_done(Some(&status(2, 3, MOVE_DONE)), 3));
+        assert!(!lowering_move_done(Some(&status(3, 1, MOVE_DONE)), 3));
+        assert!(!lowering_move_done(None, 3));
+        assert!(!lowering_move_done(Some(&status(3, 2, MOVE_DONE)), 2));
+    }
+
+    #[test]
+    fn queue_move_step_records_a_lowering_one_shard_at_a_time() {
+        let decision = plan_queue_move_step(&QueueMoveInput {
+            recorded: None,
+            live_shards: 3,
+            desired_shards: 1,
+            settled_shards: &[3, 3, 3],
+            replicas_per_shard: 3,
+            live_replicas: 9,
+            ready_replicas: 9,
+        });
+        assert_eq!(
+            decision,
+            QueueMoveDecision::Record(status(3, 2, MOVE_PENDING))
+        );
+    }
+
+    #[test]
+    fn queue_move_step_waits_for_all_shards_before_a_merge() {
+        let pending = status(3, 2, MOVE_PENDING);
+        let input = |settled: &'static [u32], live: u32, ready: u32| QueueMoveInput {
+            recorded: Some(&pending),
+            live_shards: 3,
+            desired_shards: 1,
+            settled_shards: settled,
+            replicas_per_shard: 3,
+            live_replicas: live,
+            ready_replicas: ready,
+        };
+        assert_eq!(
+            plan_queue_move_step(&input(&[3, 3, 1], 9, 9)),
+            QueueMoveDecision::Nothing
+        );
+        assert_eq!(
+            plan_queue_move_step(&input(&[3, 3, 3], 9, 8)),
+            QueueMoveDecision::Nothing
+        );
+        assert_eq!(
+            plan_queue_move_step(&input(&[3, 3], 6, 6)),
+            QueueMoveDecision::Nothing
+        );
+        assert_eq!(
+            plan_queue_move_step(&input(&[3, 3, 3], 9, 9)),
+            QueueMoveDecision::Run {
+                from_shards: 3,
+                to_shards: 2
+            }
+        );
+    }
+
+    #[test]
+    fn queue_move_step_does_not_record_again_while_the_drop_waits() {
+        let done = status(3, 2, MOVE_DONE);
+        let three = QueueMoveInput {
+            recorded: Some(&done),
+            live_shards: 3,
+            desired_shards: 1,
+            settled_shards: &[3, 3, 3],
+            replicas_per_shard: 3,
+            live_replicas: 9,
+            ready_replicas: 9,
+        };
+        assert_eq!(plan_queue_move_step(&three), QueueMoveDecision::Nothing);
+        let two = QueueMoveInput {
+            live_shards: 2,
+            settled_shards: &[3, 3],
+            live_replicas: 6,
+            ready_replicas: 6,
+            ..three
+        };
+        assert_eq!(
+            plan_queue_move_step(&two),
+            QueueMoveDecision::Record(status(2, 1, MOVE_PENDING))
+        );
+    }
+
+    #[test]
+    fn queue_move_step_resumes_a_moving_merge() {
+        let moving = status(3, 2, MOVE_MOVING);
+        let input = QueueMoveInput {
+            recorded: Some(&moving),
+            live_shards: 3,
+            desired_shards: 1,
+            settled_shards: &[3, 3, 3],
+            replicas_per_shard: 3,
+            live_replicas: 9,
+            ready_replicas: 9,
+        };
+        assert_eq!(
+            plan_queue_move_step(&input),
+            QueueMoveDecision::Run {
+                from_shards: 3,
+                to_shards: 2
+            }
         );
     }
 }

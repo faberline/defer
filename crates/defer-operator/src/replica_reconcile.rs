@@ -84,6 +84,8 @@ pub struct ShardsInput {
     pub settled_shards: Option<Vec<u32>>,
     pub desired_shards: u32,
     pub replicas_per_shard: u32,
+    /// The queues of the last live shard are moved away (#286): the shard may go.
+    pub lowering_moved: bool,
 }
 
 /// What one reconcile sets for all shards (#270).
@@ -138,8 +140,21 @@ pub async fn decide_shards_for_reconcile<A: MembershipActuator>(
         );
     }
     if d < n {
+        // One shard per step (#286): its queues moved first, so it goes now.
+        if input.lowering_moved {
+            let mut kept = settled;
+            kept.truncate((n - 1) as usize);
+            return ShardsDecision {
+                statefulset_replicas: (n - 1) * r,
+                settled_shards: kept,
+                message: None,
+            };
+        }
         return keep(
-            Some("lowering shardCount is not supported yet".into()),
+            Some(format!(
+                "lowering shardCount: the queues of shard {} move first",
+                n - 1
+            )),
             settled,
         );
     }
@@ -537,6 +552,7 @@ mod shard_tests {
             settled_shards: settled,
             desired_shards,
             replicas_per_shard,
+            lowering_moved: false,
         }
     }
 
@@ -626,6 +642,68 @@ mod shard_tests {
         assert_eq!(decision.settled_shards, vec![3, 3]);
         let message = decision.message.expect("lowering is held with a message");
         assert!(message.contains("lowering shardCount"), "got: {message}");
+        assert!(message.contains("shard 1"), "got: {message}");
+        assert!(actuator.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn shards_lowering_drops_one_shard_after_its_queues_moved() {
+        let actuator = FakeActuator::new();
+        let decision = decide_shards_for_reconcile(
+            |base| Shard {
+                inner: &actuator,
+                base,
+            },
+            ShardsInput {
+                lowering_moved: true,
+                ..input(9, 9, Some(vec![3, 3, 3]), 1, 3)
+            },
+            retry(),
+        )
+        .await;
+        // Negative check: without the drop the StatefulSet would stay at nine pods.
+        assert_eq!(decision.statefulset_replicas, 6);
+        assert_eq!(decision.settled_shards, vec![3, 3]);
+        assert_eq!(decision.message, None);
+        assert!(actuator.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn shards_lowering_never_drops_below_the_desired_count_in_one_step() {
+        // Desired 2 of 3 shards: one shard goes, and the count stops at 2.
+        let actuator = FakeActuator::new();
+        let decision = decide_shards_for_reconcile(
+            |base| Shard {
+                inner: &actuator,
+                base,
+            },
+            ShardsInput {
+                lowering_moved: true,
+                ..input(9, 9, Some(vec![3, 3, 3]), 2, 3)
+            },
+            retry(),
+        )
+        .await;
+        assert_eq!(decision.statefulset_replicas, 6);
+        assert_eq!(decision.settled_shards, vec![3, 3]);
+        assert!(actuator.calls().is_empty());
+
+        // Two shards and two desired: the equal-count path runs, nothing drops.
+        let actuator = FakeActuator::new();
+        let decision = decide_shards_for_reconcile(
+            |base| Shard {
+                inner: &actuator,
+                base,
+            },
+            ShardsInput {
+                lowering_moved: true,
+                ..input(6, 6, Some(vec![3, 3]), 2, 3)
+            },
+            retry(),
+        )
+        .await;
+        assert_eq!(decision.statefulset_replicas, 6);
+        assert_eq!(decision.settled_shards, vec![3, 3]);
         assert!(actuator.calls().is_empty());
     }
 

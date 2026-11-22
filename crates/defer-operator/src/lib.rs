@@ -29,9 +29,10 @@ pub use crd::{
 pub use membership_driver::{run_steps, ActuatorError, MembershipActuator, RetryPolicy};
 pub use membership_http::HttpMembershipActuator;
 pub use queue_move::{
-    drive_queue_move, plan_queue_move_step, plan_queue_moves, run_queue_moves, shard_map,
-    HttpQueueMoveActuator, MoveError, MoveReport, MoveStep, QueueLister, QueueMoveActuator,
-    QueueMoveDecision, QueueMoveInput, MOVE_DONE, MOVE_MOVING, MOVE_PENDING,
+    drive_queue_merge, drive_queue_move, lowering_move_done, plan_queue_move_step,
+    plan_queue_moves, run_queue_moves, shard_map, HttpQueueMoveActuator, MoveError, MoveReport,
+    MoveStep, QueueLister, QueueMoveActuator, QueueMoveDecision, QueueMoveInput, MOVE_DONE,
+    MOVE_MOVING, MOVE_PENDING,
 };
 pub use reconcile::run;
 pub use replica_controller::{
