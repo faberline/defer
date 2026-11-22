@@ -384,6 +384,7 @@ its direct contribution.
 | [Competitor feature matrix](benchmarks/competitor-feature-matrix.md) | The Cloud Tasks checklist and each row's product decision |
 | [Relay performance ceiling](benchmarks/relay-performance-ceiling.md) | The declared workload and the latest recorded ceiling run |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Defer edit rules and required verification commands |
+| [AGENTS.md](AGENTS.md) | Standing instructions for agents that work in this repository |
 
 Historical evidence and implementation planning do not define the current
 product contract. Use the capability gates and the published runtime
