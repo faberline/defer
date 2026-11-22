@@ -177,11 +177,11 @@ core outcome that does that work, and keep defer's own proof.
   the tasks of a bucket. Task identity and idempotency keys do not change
   shape when a queue moves between shards. Merging shards back into fewer and
   a queue-to-shard map in the custom resource are outside this outcome, and
-  shards never appear in the public API. The renderer keeps the `shardCount: 1` pin until live shard split lands ([#83](https://github.com/faberline/defer/issues/83)).
+  shards never appear in the public API.
 - Completion evidence: A cluster acceptance run splits one shard into two
   while clients keep creating and settling tasks, and proves every task
   created before the split reaches exactly one terminal state afterwards.
-- Tracking: Not assigned.
+- Tracking: [#272](https://github.com/faberline/defer/issues/272).
 
 ### Public API certificate rotation
 

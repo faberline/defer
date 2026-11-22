@@ -41,7 +41,7 @@ owns four outcomes.
   `operator`, and `instance render` emit every layer offline; the GKE
   `operator_recovery` suite proves pod replacement keeps the claim and the
   task state.
-- Limits today: `shardCount` is pinned to 1; the resource declares no
+- Limits today: `shardCount` is 1 to 8 and the live shard split has no paid run yet; the resource declares no
   queues; status carries no conditions; the GKE run is
   single-voter on a shared cluster. `tlsSecret` is file based with no
   rotation; the backup CronJob reaches the instance over `https` and must
