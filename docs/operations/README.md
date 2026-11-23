@@ -197,7 +197,7 @@ queue name. Probes and metrics are served on the serve port (`7141`).
   3. Watch `kubectl -n <ns> get defer` until it is `Ready` and `readyReplicas`
      equals `desiredReplicas`.
   4. Check `curl -sS http://<svc>:7141/healthz` on each pod.
-- **Next**: the upgrade policy is not written here.
+- **Next**: the upgrade policy is in [upgrades.md](upgrades.md). The drill that rolls a group between two images is described there; no paid run has happened.
 
 ### Not covered
 
