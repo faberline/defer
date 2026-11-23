@@ -504,5 +504,70 @@ mod queue_move {
             1
         );
     }
+
+    #[test]
+    fn import_queue_same_proposal_applied_twice_returns_the_same_ok_outcome() {
+        let export = export_of(&jobs_machine(), "jobs");
+        let sm = empty_machine();
+        let bytes = envelope(1, DeferCommand::ImportQueue { export });
+        sm.apply(Index::new(1), &bytes).unwrap();
+        sm.apply(Index::new(2), &bytes).unwrap();
+        assert!(matches!(
+            sm.claim_outcome(Index::new(1)),
+            Some(DeferOutcome::QueueImported(Ok(())))
+        ));
+        assert!(matches!(
+            sm.claim_outcome(Index::new(2)),
+            Some(DeferOutcome::QueueImported(Ok(())))
+        ));
+        assert_eq!(
+            sm.scheduler()
+                .lock()
+                .unwrap()
+                .queue_snapshot("jobs")
+                .unwrap()
+                .task_count,
+            1
+        );
+    }
+
+    #[test]
+    fn import_queue_same_proposal_after_snapshot_restore_returns_the_cached_ok() {
+        let export = export_of(&jobs_machine(), "jobs");
+        let bytes = envelope(1, DeferCommand::ImportQueue { export });
+        let a = empty_machine();
+        a.apply(Index::new(1), &bytes).unwrap();
+        let mut snap = Vec::new();
+        a.snapshot(&mut snap).unwrap();
+        let b = empty_machine();
+        b.restore(&mut snap.as_slice()).unwrap();
+        b.apply(Index::new(2), &bytes).unwrap();
+        assert!(matches!(
+            b.claim_outcome(Index::new(2)),
+            Some(DeferOutcome::QueueImported(Ok(())))
+        ));
+    }
+
+    #[test]
+    fn import_queue_replayed_index_is_skipped_when_skip_replayed_is_true() {
+        let export = export_of(&jobs_machine(), "jobs");
+        let bytes = envelope(1, DeferCommand::ImportQueue { export });
+        let sm = DeferStateMachine::new(Arc::new(Mutex::new(DeferScheduler::new())), true);
+        sm.apply(Index::new(1), &bytes).unwrap();
+        sm.apply(Index::new(1), &bytes).unwrap();
+        assert!(matches!(
+            sm.claim_outcome(Index::new(1)),
+            Some(DeferOutcome::QueueImported(Ok(())))
+        ));
+        assert_eq!(
+            sm.scheduler()
+                .lock()
+                .unwrap()
+                .queue_snapshot("jobs")
+                .unwrap()
+                .task_count,
+            1
+        );
+    }
 }
 // HANDWRITE-END

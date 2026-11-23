@@ -58,7 +58,25 @@ async fn queue_moves_between_two_raft_groups() {
         .unwrap();
 
     let export = source.raft(sl).export_queue("jobs").unwrap();
-    target.raft(tl).import_queue(export.clone()).await.unwrap();
+    if let Err(error) = target.raft(tl).import_queue(export.clone()).await {
+        let replicas = target
+            .live()
+            .map(|(id, node)| {
+                let held = node.raft.scheduler().lock().unwrap().queue_snapshot("jobs");
+                format!(
+                    "node={id} applied={:?} jobs={held:?}",
+                    node.raft.applied_index()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        panic!(
+            "first import_queue into an empty target group failed: {error}; \
+             leader={tl}; export_queue={:?}; target replicas=[{replicas}]; {}",
+            export.queue(),
+            target.diagnostics().await
+        );
+    }
     wait_scheduled_everywhere(&target, "one").await;
 
     assert!(matches!(
