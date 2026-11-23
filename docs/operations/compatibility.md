@@ -42,7 +42,7 @@ guarantee to every user. Each rule names how it is enforced, or says
   `crates/defer-replication/src/raft/tests.rs`. The fixtures are in
   `crates/defer-replication/src/raft/fixtures/`.
 - Not promised: a downgrade. Also not promised: two versions in one group at
-  the same time. The rolling-upgrade suite is tracked in #259 and #110. Until
+  the same time. The rolling-upgrade suite exists (crates/defer/tests/it/e2e/rolling_upgrade.rs) and no paid run has happened. Until
   it has run, a mixed-version group is not promised.
 
 ## How a break is announced

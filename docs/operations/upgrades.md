@@ -34,7 +34,7 @@ The policy for 0.x is in [compatibility.md](compatibility.md).
   - an older binary reading a log or snapshot written by a newer one;
   - two versions in one group at the same time.
 
-  No test proves these two. The rolling-upgrade suite is tracked in #259 and #110.
+  No test proves these two. The rolling-upgrade suite exists (crates/defer/tests/it/e2e/rolling_upgrade.rs) and no paid run has happened.
 
 ## Rolling upgrade order
 
@@ -62,6 +62,13 @@ The policy for 0.x is in [compatibility.md](compatibility.md).
 - The direct-install base (`k8s/base`) is a singleton with `maxUnavailable: 0`,
   asserted in `crates/defer/tests/it/direct_k8s_assets.rs`. An upgrade there
   restarts the one pod and is a short outage.
+
+## Rolling upgrade drill
+
+- What it does: starts a 3-replica group on the previous image, writes one queue and 200 tasks, changes `spec.image` to the image under test, and checks that at most one replica is unavailable and that the queue policy and every task are unchanged after the roll. It checks nothing about writes during the roll; that is not promised (see above).
+- How to dispatch (manual, paid; a person or the desk approves the run): `gh workflow run gke-test.yml -f suite=rolling_upgrade -f previous_image=ghcr.io/faberline/defer@sha256:<64 hex>`. The digest is the root digest of the previous release image, read with `docker buildx imagetools inspect ghcr.io/faberline/defer:<version>` (field `Digest`).
+- The image under test is built by `defer-test-image.yml` from the dispatched `main` commit (tag `sha-<git12>`, pinned by its root digest). The suite is not part of `suite=all`.
+- The code behind it: `crates/defer/tests/it/e2e/rolling_upgrade.rs`, `k8s/gke-test-job/rolling_upgrade/`, `.github/workflows/gke-test.yml`.
 
 ## Downgrade
 
