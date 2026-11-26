@@ -5,5 +5,6 @@ mod diagnostics;
 mod failover;
 mod lifecycle;
 mod move_queue;
+mod port_reservation;
 mod queue_limits;
 mod restart;

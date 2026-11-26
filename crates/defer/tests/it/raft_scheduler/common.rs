@@ -4,8 +4,22 @@ use chrono::Utc;
 use defer::{CreateTask, DeferRaft, DeferScheduler, Target, TaskStatus};
 use raft_runtime::{Membership, NodeId};
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+static NEXT_LOOPBACK: AtomicU32 = AtomicU32::new(0);
+
+// The whole 127.0.0.0/8 block is loopback on Linux; the other tests bind only 127.0.0.1.
+// Each cluster gets its own address, so a freed port of one cluster is never taken by another test.
+fn next_loopback() -> IpAddr {
+    let n = NEXT_LOOPBACK.fetch_add(1, Ordering::Relaxed);
+    let second = 2 + (std::process::id() % 200) as u8;
+    let third = ((n >> 8) & 0xff) as u8;
+    let fourth = (n & 0xff) as u8;
+    IpAddr::V4(Ipv4Addr::new(127, second, third, fourth))
+}
 
 pub(super) struct Node {
     pub(super) raft: Arc<DeferRaft>,
@@ -25,8 +39,9 @@ impl Cluster {
     pub(super) async fn new(size: usize) -> Self {
         let mut urls = HashMap::new();
         let mut listeners = Vec::new();
+        let ip = next_loopback();
         for id in 0..size {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let listener = tokio::net::TcpListener::bind((ip, 0)).await.unwrap();
             urls.insert(
                 id as u64,
                 format!("http://{}", listener.local_addr().unwrap()),
