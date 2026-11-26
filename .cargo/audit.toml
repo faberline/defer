@@ -15,4 +15,6 @@ ignore = [
     "RUSTSEC-2024-0449",
     # reason: chrono is unmaintained; it is locked by transitive dependencies and no safe upgrade exists; expires: 2027-02-12
     "RUSTSEC-2026-0543",
+    # reason: kube-client 0.98.0 openssl-tls connector trusts the OpenSSL default CA store; this workspace does not enable the `openssl-tls` feature (Cargo.lock has no openssl or hyper-openssl package), so the code is not built; the fix needs kube 4.2.1 or 5.2.0, which is a larger operator change; expires: 2027-02-26
+    "RUSTSEC-2026-0600",
 ]
