@@ -230,8 +230,9 @@ jobs:
   gke-test:
     name: GKE e2e (${{ matrix.suite }})
     needs: [resolve, test-client]
-    # One call at a time: the repository's concurrency group in aw keeps only
-    # one waiting run. fail-fast off runs the other suites when one fails.
+    # One call at a time: the aw workflow queues the runs of one repository
+    # with a Lease.
+    # fail-fast off runs the other suites when one fails.
     strategy:
       max-parallel: 1
       fail-fast: false
@@ -241,9 +242,9 @@ jobs:
       id-token: write
       contents: read
       packages: read
-    uses: faberline/aw/.github/workflows/gke-test.yml@6eb7ebcdf38343e0d4c77f8674b6bc30976d86bb
+    uses: faberline/aw/.github/workflows/gke-test.yml@df50599e6e52e6459d3b40450a02b4333cd5f50c
     with:
-      aw-ref: 6eb7ebcdf38343e0d4c77f8674b6bc30976d86bb
+      aw-ref: df50599e6e52e6459d3b40450a02b4333cd5f50c
       image: ${{ needs.resolve.outputs.image }}
       image-name: ghcr.io/faberline/defer
       namespace: defer
