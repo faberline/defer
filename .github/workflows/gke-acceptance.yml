@@ -157,10 +157,10 @@ jobs:
       # The aw checkout supplies the suite scripts. Its pin is the same as
       # the aw reusable workflow that gke-test.yml calls.
       - name: Check out faberline/aw scripts
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # pinned as in faberline/aw gke-test.yml@6eb7ebc (no version comment there)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # pinned as in faberline/aw gke-test.yml@df50599
         with:
           repository: faberline/aw
-          ref: 6eb7ebcdf38343e0d4c77f8674b6bc30976d86bb
+          ref: df50599e6e52e6459d3b40450a02b4333cd5f50c
           path: .gke-test-aw
           # run.sh reads pools.yaml to check which pools this repository owns.
           sparse-checkout: |
@@ -175,13 +175,13 @@ jobs:
 
       # Values from `terraform -chdir=infra/gke-test output` in faberline/aw.
       - name: Sign in to GCP (Workload Identity Federation)
-        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # pinned as in faberline/aw gke-test.yml@6eb7ebc (no version comment there)
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # pinned as in faberline/aw gke-test.yml@df50599
         with:
           workload_identity_provider: projects/406744653021/locations/global/workloadIdentityPools/faberline-github/providers/github-oidc
           service_account: gke-test-defer@axiom-502607.iam.gserviceaccount.com
 
       - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # pinned as in faberline/aw gke-test.yml@6eb7ebc (no version comment there)
+        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # pinned as in faberline/aw gke-test.yml@df50599
         with:
           install_components: gke-gcloud-auth-plugin
 
