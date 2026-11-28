@@ -2,7 +2,7 @@
 const BASELINE: &str = include_str!("../../../../benchmarks/baseline.json");
 const README: &str = include_str!("../../../../benchmarks/README.md");
 pub(crate) const MAX_REGRESSION: f64 = 0.20;
-pub(crate) const RUNS: usize = 5;
+pub(crate) const RUNS: usize = 9;
 
 pub(crate) struct Ratios {
     pub throughput_vs_relay: f64,
@@ -217,6 +217,16 @@ fn run(throughput: f64, p50: f64, p99: f64) -> Ratios {
 #[test]
 fn median_of_odd_count_is_the_middle_value() {
     assert_eq!(median(&mut [3.0, 1.0, 2.0, 5.0, 4.0]), 3.0);
+}
+
+#[test]
+#[allow(clippy::assertions_on_constants)] // RUNS is a const: the test pins its value on purpose.
+fn runs_is_odd_and_at_least_nine() {
+    assert_eq!(RUNS % 2, 1, "an odd RUNS makes the median one run's value");
+    assert!(
+        RUNS >= 9,
+        "RUNS is {RUNS}: fewer runs let one noisy runner fail the p99 gate"
+    );
 }
 
 #[test]
