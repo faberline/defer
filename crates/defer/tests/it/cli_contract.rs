@@ -531,7 +531,7 @@ fn offline_spec_and_typed_client_generation_use_one_contract() {
         "client.ts",
         &[
             "createDeferClient",
-            "adminBackup()",
+            "adminBackup(options?: CallOptions)",
             "queueGet(data",
             "queuePut(data",
             "queueControl(data",
