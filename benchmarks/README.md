@@ -9,6 +9,8 @@ run (`throughput_vs_relay`, `p50_vs_relay`, `p99_vs_relay`). The CI runner is no
 recorded the baseline, so absolute numbers differ between hosts. The absolute numbers are stored
 and published here, but only the three ratios are gated.
 
+The gate runs the workload 9 times, one after another, and compares the median of each ratio with the baseline. The p99 of one run is taken over 10 batches, so it is the slowest batch and a noisy runner moves it by a large factor; the median of 9 runs keeps one or two noisy runs from failing the gate.
+
 | Metric | Defer | Relay | Defer / Relay |
 |---|---|---|---|
 | Throughput (ops/s) | 16172.92 | 2950.52 | 5.4814 |
